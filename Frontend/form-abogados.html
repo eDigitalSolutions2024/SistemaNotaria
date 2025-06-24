@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Registrar Abogado</title>
+</head>
+<body>
+  <h1>Formulario para registrar abogado</h1>
+  <form id="formAbogado">
+    <label>Nombre del abogado:</label><br>
+    <input type="text" id="nombre" required><br><br>
+
+    <label>Orden de turno:</label><br>
+    <input type="number" id="orden" required><br><br>
+
+    <button type="submit">Registrar</button>
+  </form>
+
+  <p id="mensaje"></p>
+
+  <script>
+    document.getElementById('formAbogado').addEventListener('submit', async function(e) {
+      e.preventDefault(); // Evita que se recargue la página
+
+      const nombre = document.getElementById('nombre').value;
+      const orden = document.getElementById('orden').value;
+
+      try {
+        const response = await fetch('http://localhost:3001/abogados', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ nombre, orden })
+        });
+
+        const data = await response.json();
+
+        if (response.ok) {
+          document.getElementById('mensaje').innerText = '✅ Abogado registrado con éxito';
+        } else {
+          document.getElementById('mensaje').innerText = '❌ Error: ' + data.mensaje;
+        }
+      } catch (error) {
+        document.getElementById('mensaje').innerText = '⚠️ Error al conectar con el servidor';
+        console.error(error);
+      }
+    });
+  </script>
+</body>
+</html>
