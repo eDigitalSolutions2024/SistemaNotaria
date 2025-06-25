@@ -1,0 +1,6 @@
+# Node.js
+/Backend/node_modules/
+.envfit
+dist/
+build/
+*.log

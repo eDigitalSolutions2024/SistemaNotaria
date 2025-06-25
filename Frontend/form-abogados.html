@@ -1,6 +1,8 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
+  <link rel="stylesheet" href="css/estilos.css">
+
   <meta charset="UTF-8">
   <title>Registrar Abogado</title>
 </head>
@@ -35,12 +37,12 @@
         const data = await response.json();
 
         if (response.ok) {
-          document.getElementById('mensaje').innerText = '✅ Abogado registrado con éxito';
+          document.getElementById('mensaje').innerText = ' Abogado registrado con éxito';
         } else {
-          document.getElementById('mensaje').innerText = '❌ Error: ' + data.mensaje;
+          document.getElementById('mensaje').innerText = ' Error: ' + data.mensaje;
         }
       } catch (error) {
-        document.getElementById('mensaje').innerText = '⚠️ Error al conectar con el servidor';
+        document.getElementById('mensaje').innerText = ' Error al conectar con el servidor';
         console.error(error);
       }
     });

@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <link rel="stylesheet" href="css/estilos.css">
+
+    <!-- DataTables CSS -->
+<link rel="stylesheet" href="https://cdn.datatables.net/1.13.6/css/jquery.dataTables.min.css">
+
+<!-- jQuery (requerido por DataTables) -->
+<script src="https://code.jquery.com/jquery-3.7.0.min.js"></script>
+
+<!-- DataTables JS -->
+<script src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.min.js"></script>
+
+  <meta charset="UTF-8">
+  <title>Registrar Cliente</title>
+</head>
+<body>
+  <h1>Formulario para registrar cliente</h1>
+
+  <form id="formCliente">
+    <label>Nombre del cliente:</label><br>
+    <input type="text" id="nombre" required><br><br>
+    <button type="submit">Registrar cliente</button>
+  </form>
+
+  <p id="mensaje"></p>
+
+  <h2>Clientes registrados</h2>
+
+<table id="tablaClientes" class="display">
+  <thead>
+    <tr>
+      <th>ID</th>
+      <th>Cliente</th>
+      <th>Abogado asignado</th>
+      <th>Hora de llegada</th>
+      <th>Estado</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody></tbody>
+</table>
+
+
+  <script>
+    document.getElementById('formCliente').addEventListener('submit', async function(e) {
+      e.preventDefault();
+
+      const nombre = document.getElementById('nombre').value;
+
+      try {
+        const response = await fetch('http://localhost:3001/clientes', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ nombre })
+        });
+
+        const data = await response.json();
+
+        if (response.ok) {
+          const abogadoId = data.cliente.abogado_asignado;
+          const abogadoNombre = data.abogado.nombre;
+          const clienteId = data.cliente._id;
+          document.getElementById('mensaje').innerText =
+            ` Cliente registrado con ID ${clienteId} y asignado al abogado ${abogadoNombre} con ID ${abogadoId}`;
+        } else {
+          document.getElementById('mensaje').innerText =
+            ' Error: ' + data.mensaje;
+        }
+      } catch (error) {
+        document.getElementById('mensaje').innerText = '⚠️ Error al conectar con el servidor';
+        console.error(error);
+      }
+    });
+ //Script para crear la tabla de clientes(Droptable)
+  let tabla;
+
+async function cargarClientes() {
+  const response = await fetch('http://localhost:3001/clientes');
+  const data = await response.json();
+
+  const transformarCliente = (cliente) => {
+    const botonLiberar = cliente.estado.toLowerCase() === "asignado"
+      ? `<button class="btn-liberar" data-abogado-id="${cliente.abogado_id}">Liberar</button>`
+      : '';
+
+    const selectHtml = `
+      <select class="select-accion" data-id="${cliente.id}">
+        <option value="">-- Seleccionar --</option>
+        <option value="tramite">Iniciar trámite</option>
+        <option value="cita">Registro cita</option>
+        <option value="rechazo">No quiso trámite</option>
+      </select>
+      <div class="motivo-container" id="motivo-${cliente.id}" style="display:none; margin-top:5px;">
+        <textarea placeholder="Escribe los motivos..." rows="2" style="width: 100%; font-size:12px;"></textarea>
+      </div>
+    `;
+
+    return [
+      cliente.id,
+      cliente.nombre,
+      cliente.abogado,
+      new Date(cliente.hora_llegada).toLocaleString(),
+      cliente.estado,
+      botonLiberar + '<br>' + selectHtml
+    ];
+  };
+
+  if (tabla) {
+    tabla.clear();
+    tabla.rows.add(data.map(transformarCliente)).draw();
+  } else {
+    tabla = $('#tablaClientes').DataTable({
+      data: data.map(transformarCliente),
+      columns: [
+        { title: "ID" },
+        { title: "Cliente" },
+        { title: "Abogado asignado" },
+        { title: "Hora de llegada" },
+        { title: "Estado" },
+        { title: "Acción" }
+      ],
+      language: {
+        url: "//cdn.datatables.net/plug-ins/1.13.6/i18n/es-ES.json"
+      }
+    });
+  }
+}
+
+
+  /*document.getElementById('formCliente').addEventListener('submit', async function(e) {
+    e.preventDefault();
+
+    const nombre = document.getElementById('nombre').value;
+
+    try {
+      const response = await fetch('http://localhost:3001/clientes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ nombre })
+      });
+
+      const data = await response.json();
+
+      if (response.ok) {
+        document.getElementById('mensaje').innerText =
+          `✅ Cliente registrado y asignado al abogado: ${data.abogado.nombre}`;
+
+        document.getElementById('nombre').value = ''; // limpiar campo
+
+        await cargarClientes(); // actualiza la tabla
+      } else {
+        document.getElementById('mensaje').innerText = '❌ Error: ' + data.mensaje;
+      }
+    } catch (error) {
+      document.getElementById('mensaje').innerText = '⚠️ Error al conectar con el servidor';
+    }
+  });*/
+
+  // Cargar al abrir
+  cargarClientes();
+
+
+  // Escucha el click del botón "Liberar"
+  $('#tablaClientes').on('click', '.btn-liberar', function () {
+    const abogadoId = $(this).data('abogado-id');
+
+    fetch(`http://localhost:3001/abogados/liberar/${abogadoId}`, {
+      method: 'PUT'
+    })
+    .then(res => res.json())
+    .then(data => {
+      alert(data.mensaje);
+      cargarClientes(); // recarga la tabla
+    })
+    .catch(err => console.error('Error al liberar abogado:', err));
+  });
+
+  // Escucha el cambio en el select y muestra la caja de texto + cambia color
+  $('#tablaClientes').on('change', '.select-accion', function () {
+    const clienteId = $(this).data('id');
+    const opcion = $(this).val();
+    const fila = $(this).closest('tr');
+
+    // Mostrar/ocultar textarea
+    if (opcion) {
+      $(`#motivo-${clienteId}`).show();
+    } else {
+      $(`#motivo-${clienteId}`).hide();
+    }
+
+    // Limpiar color
+    fila.css('background-color', '');
+    if (opcion === 'tramite') fila.css('background-color', '#d4edda');       // Verde claro
+    else if (opcion === 'cita') fila.css('background-color', '#fff3cd');     // Amarillo
+    else if (opcion === 'rechazo') fila.css('background-color', '#f8d7da');  // Rojo claro
+  });
+
+
+
+</script>
+
+</body>
+</html>
