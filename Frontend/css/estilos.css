@@ -76,3 +76,127 @@ table.dataTable {
 #btnLiberar:hover {
   background-color: #218838;
 }
+/* Estilo para el botón de liberar */
+.btn-liberar {
+  background-color: #dc3545; /* rojo Bootstrap */
+  color: white;
+  border: none;
+  padding: 6px 12px;
+  font-size: 14px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background-color 0.3s ease;
+}
+
+.btn-liberar:hover {
+  background-color: #bd2130;
+}
+
+/* Estilo para el select box */
+.select-accion {
+  width: 100%;
+  padding: 5px;
+  border: 1px solid #ced4da;
+  border-radius: 4px;
+  font-size: 13px;
+  background-color: #f8f9fa;
+  transition: border-color 0.3s ease;
+}
+
+.select-accion:focus {
+  border-color: #80bdff;
+  outline: none;
+}
+
+/* Estilo para el textarea de motivos */
+.motivo-container textarea {
+  border: 1px solid #ced4da;
+  border-radius: 4px;
+  resize: vertical;
+  padding: 4px;
+  font-family: inherit;
+  font-size: 13px;
+  background-color: #fdfdfd;
+}
+.contenedor-flex {
+  display: flex;
+  gap: 40px;
+  align-items: flex-start;
+  padding: 20px;
+}
+
+.tabla-abogados {
+  width: 300px;
+  min-width: 280px;
+  background-color: #f3f3f3;
+  padding: 10px;
+  border-radius: 8px;
+  box-shadow: 0 0 8px rgba(0,0,0,0.1);
+}
+
+.tabla-abogados h2 {
+  text-align: center;
+  font-size: 16px;
+}
+
+.tabla-abogados table {
+  font-size: 12px;
+  width: 100%;
+}
+
+.contenido-derecha {
+  flex: 1;
+}
+.layout-general {
+  display: flex;
+  flex-direction: column;
+  padding: 20px;
+  gap: 30px;
+}
+
+/* Parte superior con tabla abogados + formulario */
+.zona-superior {
+  display: flex;
+  justify-content: space-between;
+  gap: 40px;
+  align-items: flex-start;
+}
+
+/* Abogados */
+.tabla-abogados {
+  background-color: #f8f9fa;
+  padding: 15px;
+  border-radius: 10px;
+  width: 300px;
+  min-width: 260px;
+  box-shadow: 0 0 10px rgba(0,0,0,0.05);
+}
+
+/* Formulario */
+.formulario-clientes {
+  flex: 1;
+  background-color: #fff;
+  padding: 20px;
+  border-radius: 10px;
+  box-shadow: 0 0 10px rgba(0,0,0,0.08);
+}
+
+/* Tabla de clientes abajo */
+.zona-tabla-clientes {
+  width: 100%;
+}
+
+.full-width {
+  width: 100% !important;
+}
+.tabla-abogados .dataTables_wrapper {
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+.tabla-abogados table {
+  width: 100% !important;
+  table-layout: fixed;
+  word-wrap: break-word;
+}
+

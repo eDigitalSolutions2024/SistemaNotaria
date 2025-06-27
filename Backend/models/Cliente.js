@@ -5,7 +5,10 @@ const clienteSchema = new mongoose.Schema({
   nombre: { type: String, required: true },
   hora_llegada: { type: Date, default: Date.now },
   abogado_asignado: { type: Number, ref: 'Abogado' },
-  estado: { type: String, default: 'Asignado' } // puede ser "pendiente", "asignado", etc.
+  estado: { type: String, default: 'Asignado' } ,// puede ser "pendiente", "asignado", etc.
+  en_espera:{type: Boolean, default: false},
+  motivo: {type: String, default: ''},
+  accion: {type: String, default: ''}
 },{_id: false});
 
 module.exports = mongoose.model('Cliente', clienteSchema);
