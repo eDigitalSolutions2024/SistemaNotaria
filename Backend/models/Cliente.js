@@ -8,7 +8,9 @@ const clienteSchema = new mongoose.Schema({
   estado: { type: String, default: 'Asignado' } ,// puede ser "pendiente", "asignado", etc.
   en_espera:{type: Boolean, default: false},
   motivo: {type: String, default: ''},
-  accion: {type: String, default: ''}
+  accion: {type: String, default: ''},
+  servicio:{ type: String, default: ''},
+  tieneCita: { type: Boolean, default: false}
 },{_id: false});
 
 module.exports = mongoose.model('Cliente', clienteSchema);
