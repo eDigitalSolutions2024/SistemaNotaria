@@ -1,17 +1,26 @@
-/* frontend/src/pages/MainPage.css */
+:root {
+  --sidebar-w: 250px; /* mismo ancho que tu sidebar */
+}
+
+html, body {
+  overflow-x: hidden; 
+  padding: 0 !important;/* evita scroll horizontal global */
+}
+
+/* ========== Layout base ========== */
 .main-layout {
   display: flex;
   height: 100vh;
   font-family: 'Segoe UI', sans-serif;
-  margin-left: 250px; /* mismo ancho que el sidebar */
-  padding: 20px;
+         /* el margen lo maneja .contenido */
+
 }
 
 .sidebar {
   position: fixed;
   top: 0;
   left: 0;
-  width: 250px;
+  width: var(--sidebar-w);
   height: 100vh;
   background-color: #2e343a;
   color: #fff;
@@ -42,13 +51,16 @@
   color: #2e343a;
 }
 
-
-
 .contenido {
+               /* deja espacio del sidebar */
   flex-grow: 1;
   padding: 0px;
   background: #f5f5f5;
+     /* nunca invadir el menú */
+  overflow-x: hidden;                             /* no permitir desborde bajo el menú */
 }
+
+/* Submenú (tus estilos actuales) */
 .submenu ul {
   margin-top: 5px;
   margin-left: 15px;
@@ -61,13 +73,41 @@
   margin-top: 6px;
   font-size: 15px;
   background-color: #2e343a;
-  color : white;
-}
-/* Elimina márgenes/padding por defecto */
-body {
-  
-  padding: 0  !important;
-  box-sizing: border-box;
+  color: white;
 }
 
+/* ===== Utilidad para tablas ===== */
+/* Encierra el scroll horizontal dentro del área de contenido */
+.table-scroll-x {
+  overflow-x: auto;
+  max-width: 100%;
+}
 
+/* Sidebar collapsed mantiene franja e íconos */
+.sidebar.collapsed .submenu ul {
+  display: none;
+}
+
+/* Pestaña/handle que sale del borde derecho del sidebar */
+.sidebar-handle {
+  position: absolute;
+  top: 50%;
+  right: -14px;            /* sobresale un poco fuera del sidebar */
+  transform: translateY(-50%);
+  width: 30px;
+  height: 44px;
+  border: none;
+  border-radius: 8px 8px 8px 8px;
+  background: #0d6efd;
+  color: #fff;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0,0,0,.25);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Hover */
+.sidebar-handle:hover {
+  filter: brightness(1.05);
+}

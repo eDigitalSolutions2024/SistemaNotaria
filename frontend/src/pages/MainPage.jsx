@@ -1,68 +1,139 @@
 // frontend/src/pages/MainPage.jsx
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import './MainPage.css';
-//import FormCliente from '../components/FormCliente';
 import FormAbogado from '../components/FormAbogado';
-//import TablaClientes from '../components/TablaClientes';
-//import TablaAbogados from '../components/AbogadosTable';
 import RegistrarCliente from '../pages/Home';
+import Protocolito from '../components/Protocolito';
 
-// ...
-
-
-
-
-const MainPage = () => {
-  const [seccion, setSeccion] = useState('registratr-cliente');
+export default function MainPage() {
+  const [seccion, setSeccion] = useState('registrar-cliente');
   const [mostrarSubmenu, setMostrarSubmenu] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
 
+  const isMobile = () => window.innerWidth < 992;
+
+  const go = (sec) => {
+    setSeccion(sec);
+    setMostrarSubmenu(false);
+    if (isMobile()) setSidebarOpen(false);
+  };
 
   const renderContenido = () => {
     switch (seccion) {
-      case 'registrar-cliente':
-        return <RegistrarCliente />;
-      case 'registrar-abogado':
-        return <FormAbogado />;
-      /*case 'tabla-clientes':
-        return <TablaClientes />;
-      case 'tabla-abogados':
-        return <TablaAbogados />;*/
-      default:
-        return <RegistrarCliente />;
+      case 'registrar-cliente': return <RegistrarCliente />;
+      case 'registrar-abogado': return <FormAbogado />;
+      case 'protocolito':       return <Protocolito />;
+      default:                  return <RegistrarCliente />;
     }
   };
 
+  
+
+  const sidebarStyle = useMemo(() => ({
+    background: '#1f2937',
+    color: '#fff',
+    width: sidebarOpen ? 250 : 60,        // franja con íconos
+    transition: 'width .25s ease',
+    overflow: 'hidden',
+    padding: sidebarOpen ? '16px 16px' : '16px 8px',
+    boxSizing: 'border-box',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 8,
+    position: 'relative',                 // ← para posicionar el handle
+  }), [sidebarOpen]);
+
+  const mainStyle = useMemo(() => ({
+    flex: 1,
+    padding: 10,
+    background: '#f6f7fb',
+  }), []);
+
+  const itemStyle = {
+    listStyle: 'none',
+    display: 'flex',
+    alignItems: 'center',
+    gap: 12,
+    padding: '10px 8px',
+    borderRadius: 8,
+    cursor: 'pointer'
+  };
+  const iconStyle = { width: 28, textAlign: 'center', fontSize: 18 };
+
   return (
-    <div className="main-layout">
-      <aside className="sidebar">
-        <div className="sidebar-title">⚖️ <strong>Notaría 17</strong></div>
-        <hr />
-        <ul>
-       
-          <li className="submenu" onClick={() => setMostrarSubmenu(!mostrarSubmenu)}>
-            Registrar ▾
-            {mostrarSubmenu && (
-                <ul>
-                <li onClick={() => setSeccion('registrar-cliente')}>Registrar Cliente</li>
-                <li onClick={() => setSeccion('registrar-abogado')}>Registrar Abogado</li>
-                </ul>
+    <div className="main-layout" >
+      {/* SIDEBAR */}
+      <aside
+        className={`sidebar ${sidebarOpen ? 'expanded' : 'collapsed'}`}
+        style={sidebarStyle}
+      >
+        {/* Handle/pestaña pegada al borde derecho del sidebar */}
+        <button
+          className="sidebar-handle"
+          onClick={() => setSidebarOpen(o => !o)}
+          aria-label={sidebarOpen ? 'Ocultar menú' : 'Mostrar menú'}
+          aria-expanded={sidebarOpen}
+          title={sidebarOpen ? 'Ocultar' : 'Mostrar'}
+        >
+          {sidebarOpen ? '❮' : '❯'}
+        </button>
+
+        {/* Encabezado */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 4px' }}>
+          <span style={iconStyle}>⚖️</span>
+          {sidebarOpen && <div className="sidebar-title" style={{ fontWeight: 700 }}>Notaría 17</div>}
+        </div>
+        <hr style={{ borderColor: '#374151', margin: '6px 0' }} />
+
+        {/* Menú */}
+        <div style={{ overflowY: 'auto', flex: 1 }}>
+          <ul style={{ padding: 0, margin: 0 }}>
+            {/* Registrar (submenu) */}
+            <li
+              style={itemStyle}
+              className="submenu"
+              title="Registrar"
+              onClick={() => {
+                if (!sidebarOpen) { setSidebarOpen(true); return; }
+                setMostrarSubmenu(v => !v);
+              }}
+            >
+              <span className="icon" style={iconStyle}>📋</span>
+              {sidebarOpen && <span>Registrar ▾</span>}
+            </li>
+
+            {sidebarOpen && mostrarSubmenu && (
+              <ul style={{ listStyle: 'none', paddingLeft: 40, marginTop: 4, marginBottom: 8 }}>
+                <li style={{ ...itemStyle, padding: '8px 6px' }} onClick={() => go('registrar-cliente')}>
+                  <span style={iconStyle}>👤</span><span>Registrar Cliente</span>
+                </li>
+                <li style={{ ...itemStyle, padding: '8px 6px' }} onClick={() => go('registrar-abogado')}>
+                  <span style={iconStyle}>👨‍⚖️</span><span>Registrar Abogado</span>
+                </li>
+              </ul>
             )}
-        </li>
-        {/*
-          <li onClick={() => setSeccion('tabla-clientes')}>Clientes</li>
-          <li onClick={() => setSeccion('tabla-abogados')}>Abogados</li>
-          */}
-          <li>Buscar Cliente</li>
-          <li>Trámites Pendientes</li>
-          <li>Asesorías Pendientes</li>
-        </ul>
+
+            {/* Items simples */}
+            <li title="Buscar Cliente" style={itemStyle} onClick={() => go('buscar')}>
+              <span style={iconStyle}>🔍</span>{sidebarOpen && <span>Buscar Cliente</span>}
+            </li>
+            <li title="Trámites Pendientes" style={itemStyle} onClick={() => go('tramites')}>
+              <span style={iconStyle}>📄</span>{sidebarOpen && <span>Trámites Pendientes</span>}
+            </li>
+            <li title="Asesorías Pendientes" style={itemStyle} onClick={() => go('asesorias')}>
+              <span style={iconStyle}>📘</span>{sidebarOpen && <span>Asesorías Pendientes</span>}
+            </li>
+            <li title="Protocolito" style={itemStyle} onClick={() => go('protocolito')}>
+              <span style={iconStyle}>📑</span>{sidebarOpen && <span>Protocolito</span>}
+            </li>
+          </ul>
+        </div>
       </aside>
 
-      <main className="contenido">
+      {/* CONTENIDO */}
+      <main className="contenido" style={mainStyle}>
         {renderContenido()}
       </main>
     </div>
   );
-};
-
-export default MainPage;
+}

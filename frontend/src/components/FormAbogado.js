@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-
+import API_URL from '../api'; 
 const FormAbogado = () => {
   const [nombre, setNombre] = useState('');
   const [turno, setTurno] = useState('');
@@ -10,7 +10,7 @@ const FormAbogado = () => {
 
     try {
       // Crear abogado
-const response = await fetch('http://192.168.1.90:3001/abogados', {
+const response = await fetch(`${API_URL}/abogados`, {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify({ nombre, orden: turno })

@@ -10,7 +10,9 @@ const clienteSchema = new mongoose.Schema({
   motivo: {type: String, default: ''},
   accion: {type: String, default: ''},
   servicio:{ type: String, default: ''},
-  tieneCita: { type: Boolean, default: false}
+  tieneCita: { type: Boolean, default: false},
+  abogado_preferido: { type: Number, default: null },  // ID numérico del abogado con el que tiene cita
+
 },{_id: false});
 
 module.exports = mongoose.model('Cliente', clienteSchema);

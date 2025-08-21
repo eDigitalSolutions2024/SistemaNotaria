@@ -132,10 +132,7 @@ table.dataTable {
   font-size: 16px;
 }
 
-.tabla-abogados table {
-  font-size: 12px;
-  width: 100%;
-}
+
 
 .contenido-derecha {
   flex: 1;
@@ -153,6 +150,7 @@ table.dataTable {
   justify-content: space-between;
   gap: 40px;
   align-items: flex-start;
+  
 }
 
 /* Abogados */
@@ -160,13 +158,13 @@ table.dataTable {
   background-color: #f8f9fa;
   padding: 15px;
   border-radius: 10px;
-  width: 300px;
-  min-width: 260px;
   box-shadow: 0 0 10px rgba(0,0,0,0.05);
+  font-size: 12px;
+  width: 100%;
 }
 
 .tabla-sala {
-  width: 300px;
+  width: 100%;
   min-width: 280px;
   background-color: #f3f3f3;
   padding: 10px;
@@ -206,11 +204,7 @@ table.dataTable {
   max-width: 100%;
 }
 
-.tabla-abogados table {
-  width: 100% !important;
-  table-layout: fixed;
-  word-wrap: break-word;
-}
+
 
 /* Contenedor principal del formulario */
 #formCliente {
@@ -328,3 +322,7 @@ input[type="checkbox"] {
   background-color: #0056b3;
 }
 
+.table-scroll-x {
+  overflow-x: auto;
+  max-width: 100%;
+}

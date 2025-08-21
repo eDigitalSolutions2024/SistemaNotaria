@@ -1,13 +1,13 @@
 import React, { useEffect, useState } from 'react';
 import DataTable from 'react-data-table-component';
 import '../css/estilos.css';
+import API_URL from '../api';
 
 const AbogadosTable = () => {
   const [abogados, setAbogados] = useState([]);
 
   useEffect(() => {
-  fetch('http://192.168.1.90:3001/abogados')
-    .then(res => res.json())
+  fetch(`${API_URL}/abogados`).then(res => res.json())
     .then(data => setAbogados(data))
     .catch(error => console.error('Error al cargar abogados:', error));
 }, []);

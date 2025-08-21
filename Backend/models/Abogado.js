@@ -6,7 +6,7 @@ const abogadoSchema = new mongoose.Schema({
   disponible: { type: Boolean, default: true },
   asignaciones: { type: Number, default: 0 },
   orden: { type: Number, required: true },
-  ubicacion: { type: String, default: '---' } // Nombre de la sala
+  ubicacion: { type: String, default: "sin sala" } // Nombre de la sala
 
 });// <- importante: desactiva el _id automático
 
