@@ -115,7 +115,7 @@ export default function MainPage() {
 
             {/* Items simples */}
             <li title="Buscar Cliente" style={itemStyle} onClick={() => go('buscar')}>
-              <span style={iconStyle}>🔍</span>{sidebarOpen && <span>Buscar Cliente</span>}
+              <span style={iconStyle}>🔍</span>{sidebarOpen && <span>Buscar Clientes</span>}
             </li>
             <li title="Trámites Pendientes" style={itemStyle} onClick={() => go('tramites')}>
               <span style={iconStyle}>📄</span>{sidebarOpen && <span>Trámites Pendientes</span>}

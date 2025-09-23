@@ -21,6 +21,24 @@ const TablaClientes = forwardRef((props, ref) => {
     }
   };
 
+  const ACTION = {
+  INICIAR: 'Iniciar trámite',
+  CITA: 'Registro cita',
+  NO_TRAMITE: 'No quiso trámite',
+};
+
+function fieldMetaByAction(accion) {
+  switch (accion) {
+    case ACTION.INICIAR:
+      return { as: 'input', type: 'text', placeholder: 'Tipo de trámite' };
+    case ACTION.CITA:
+      return { as: 'input', type: 'date', placeholder: 'Fecha' };
+    default:
+      return { as: 'textarea', type: 'text', placeholder: 'Motivo' };
+  }
+}
+
+
   // 🔑 Aquí exponemos el método para el padre
   useImperativeHandle(ref, () => ({
     recargarClientes: fetchClientes
@@ -30,21 +48,37 @@ const TablaClientes = forwardRef((props, ref) => {
   }, []);
 
   const liberarAbogado = async (clienteId) => {
-    const accion = accionesSeleccionadas[clienteId];
-    const motivo = motivos[clienteId];
+  const accion = accionesSeleccionadas[clienteId] || '';
+  const valor = motivos[clienteId] || '';
 
-    if (!motivo || !accion) {
-      alert('Debes seleccionar una acción y escribir un motivo.');
-      return;
-    }
+  if (!accion) {
+    alert('Selecciona una acción.');
+    return;
+  }
 
-    try {
-      await axios.put(`${API_URL}/abogados/liberar/${clienteId}`, { motivo, accion });
-      fetchClientes();
-    } catch (error) {
-      console.error('Error al liberar abogado:', error);
-    }
-  };
+  if (accion === ACTION.INICIAR && !valor) {
+    alert('Indica el Tipo de trámite.');
+    return;
+  }
+  if (accion === ACTION.CITA && !valor) {
+    alert('Indica la Fecha de la cita.');
+    return;
+  }
+  if (accion === ACTION.NO_TRAMITE && !valor) {
+    alert('Escribe un Motivo.');
+    return;
+  }
+
+  try {
+    await axios.put(`${API_URL}/abogados/liberar/${clienteId}`, {
+      accion,
+      motivo: valor,   // enviamos el mismo campo "motivo" con el valor dinámico
+    });
+    fetchClientes();
+  } catch (error) {
+    console.error('Error al liberar abogado:', error);
+  }
+};
 
   const sortedClientes = useMemo(() => {
   return [...clientes].sort((a, b) => {
@@ -92,39 +126,58 @@ const TablaClientes = forwardRef((props, ref) => {
       style: { minWidth: '140px' },
     },
     {
-      name: 'Acción',
-      cell: (row) => (
-        <div style={{ minWidth: 200 }}>
-          <select
-            value={accionesSeleccionadas[row.id] || ''}
-            onChange={(e) =>
-              setAccionesSeleccionadas({
-                ...accionesSeleccionadas,
-                [row.id]: e.target.value,
-              })
-            }
-            className="form-select form-select-sm mb-1"
-          >
-            <option value="">-- Selec --</option>
-            {acciones.map((accion, index) => (
-              <option key={index} value={accion}>
-                {accion}
-              </option>
-            ))}
-          </select>
+  name: 'Acción',
+  cell: (row) => {
+    const seleccion = accionesSeleccionadas[row.id] || '';
+    const meta = fieldMetaByAction(seleccion);
+
+    return (
+      <div style={{ minWidth: 220 }}>
+        <select
+          value={seleccion}
+          onChange={(e) => {
+            const val = e.target.value;
+            setAccionesSeleccionadas(prev => ({ ...prev, [row.id]: val }));
+            // al cambiar de acción, limpiamos o prellenamos el campo dinámico
+            setMotivos(prev => ({
+              ...prev,
+              [row.id]: val === ACTION.CITA
+                ? new Date().toISOString().slice(0, 10) // hoy para fecha
+                : '' // limpiar para las otras
+            }));
+          }}
+          className="form-select form-select-sm mb-1"
+        >
+          <option value="">-- Selec --</option>
+          {['Iniciar trámite','Registro cita','No quiso trámite'].map((accion, i) => (
+            <option key={i} value={accion}>{accion}</option>
+          ))}
+        </select>
+
+        {/* Campo dinámico */}
+        {meta.as === 'textarea' ? (
           <textarea
             className="form-control form-control-sm"
             rows="1"
-            placeholder="Motivo"
+            placeholder={meta.placeholder}
             value={motivos[row.id] || ''}
-            onChange={(e) =>
-              setMotivos({ ...motivos, [row.id]: e.target.value })
-            }
+            onChange={(e) => setMotivos(prev => ({ ...prev, [row.id]: e.target.value }))}
           />
-        </div>
-      ),
-      style: { minWidth: '220px' },
-    },
+        ) : (
+          <input
+            className="form-control form-control-sm"
+            type={meta.type}
+            placeholder={meta.placeholder}
+            value={motivos[row.id] || ''}
+            onChange={(e) => setMotivos(prev => ({ ...prev, [row.id]: e.target.value }))}
+          />
+        )}
+      </div>
+    );
+  },
+  style: { minWidth: '240px' },
+},
+
     {
       name: 'Liberar',
       cell: (row) =>

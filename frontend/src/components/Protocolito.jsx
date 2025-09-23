@@ -1,5 +1,11 @@
-import React, { useEffect, useMemo, useState } from 'react';
+// src/components/Protocolito.jsx
+import React, { useEffect, useRef, useState } from 'react';
 import axios from 'axios';
+import { DataGrid } from '@mui/x-data-grid';
+import {
+  Dialog, DialogTitle, DialogContent, DialogActions,
+  Button, TextField
+} from '@mui/material';
 
 const API = process.env.REACT_APP_API_URL || 'http://localhost:4000';
 
@@ -21,17 +27,134 @@ function formatDateInput(d) {
   return `${yyyy}-${mm}-${dd}`;
 }
 
+// normaliza texto (sin acentos, lowercase)
+const norm = (s) =>
+  String(s || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+
+// candidato a Protocolito: acción contiene “iniciar”
+const isEligible = (c) => norm(c?.accion).includes('iniciar');
+
+// timestamp util para ordenar por “más reciente”
+const timeOf = (r) => {
+  const v = r?.hora_llegada ?? r?.horaLlegada ?? r?.createdAt ?? r?.fecha;
+  const t = v ? new Date(v).getTime() : 0;
+  return Number.isFinite(t) ? t : 0;
+};
+
+// mapea datos de cliente a protocolo (para previsualizar)
+function applyClienteToProtocolito(cliente, prev) {
+  const fechaISO = cliente?.hora_llegada
+    ? formatDateInput(cliente.hora_llegada)
+    : formatDateInput(new Date());
+  return {
+    ...prev,
+    cliente: cliente?.nombre || prev.cliente,
+    tipoTramite: cliente?.servicio || cliente?.accion || prev.tipoTramite,
+    abogado: cliente?.abogado || prev.abogado,
+    fecha: prev.fecha || fechaISO,
+  };
+}
+
+// helper para soportar ambas firmas de valueGetter (params) o (value,row)
+const pickRowFromVG = (p, row) => (p && p.row) ? p.row : (row || p || {});
+
 export default function Protocolito() {
   const [rows, setRows] = useState([]);
-  const [editingId, setEditingId] = useState(null);   // _id de la fila en edición
-  const [drafts, setDrafts] = useState({});           // {id: { ...campos }}
-  const [adding, setAdding] = useState(false);        // modo agregar
+  const [editingId, setEditingId] = useState(null);
+  const [drafts, setDrafts] = useState({});
+  const [adding, setAdding] = useState(false);
   const [newRow, setNewRow] = useState(emptyRow);
+  const [selectedCliente, setSelectedCliente] = useState(null);
   const [q, setQ] = useState('');
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState(null);
-  const fileInputRef = React.useRef(null);
+  const fileInputRef = useRef(null);
   const [importing, setImporting] = useState(false);
+
+  // ---------- Selector de clientes (modal) ----------
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [pickerQ, setPickerQ] = useState('');
+  const [pickerLoading, setPickerLoading] = useState(false);
+  const [pickerRows, setPickerRows] = useState([]);
+  const [pickerTarget, setPickerTarget] = useState(null); // 'new' | id en edición
+  const pickerTimer = useRef(null);
+
+  const fetchPicker = async (query) => {
+    const qstr = norm(query);
+    setPickerLoading(true);
+    try {
+      let list = [];
+
+      // 1) intentar /clientes/search
+      try {
+        const { data } = await axios.get(`${API}/clientes/search`, {
+          params: { q: query, status: 'iniciar' }
+        });
+        if (Array.isArray(data) && data.length) list = data;
+      } catch {
+        // sigue al fallback
+      }
+
+      // 2) fallback a /clientes
+      if (!Array.isArray(list) || list.length === 0) {
+        const { data } = await axios.get(`${API}/clientes`);
+        list = Array.isArray(data) ? data : [];
+      }
+
+      // 3) filtrar a elegibles (iniciar trámite)
+      let elegibles = list.filter(isEligible);
+
+      // 4) filtro de texto (nombre/abogado)
+      if (qstr) {
+        elegibles = elegibles.filter(
+          (c) => norm(c?.nombre).includes(qstr) || norm(c?.abogado).includes(qstr)
+        );
+      }
+
+      // 5) ordenar por más reciente (hora_llegada/createdAt/fecha) DESC
+      elegibles = (Array.isArray(elegibles) ? elegibles : [])
+        .filter(Boolean)
+        .sort((a, b) => timeOf(b) - timeOf(a));
+
+      setPickerRows(elegibles);
+    } catch {
+      setPickerRows([]);
+    } finally {
+      setPickerLoading(false);
+    }
+  };
+
+  const openPickerFor = (target) => {
+    setPickerTarget(target); // 'new' o editingId
+    setPickerOpen(true);
+    setPickerQ('');
+    fetchPicker('');
+  };
+
+  const onChangePickerQ = (v) => {
+    setPickerQ(v);
+    clearTimeout(pickerTimer.current);
+    pickerTimer.current = setTimeout(() => fetchPicker(v), 250);
+  };
+
+  // seleccionar cliente del picker
+  const selectClienteFromPicker = (cliente) => {
+    if (!cliente) return;
+    if (pickerTarget === 'new') {
+      setSelectedCliente(cliente);
+      setNewRow((prev) => applyClienteToProtocolito(cliente, prev));
+    } else if (pickerTarget) {
+      setDrafts((prev) => ({
+        ...prev,
+        [pickerTarget]: applyClienteToProtocolito(cliente, prev[pickerTarget] || {})
+      }));
+    }
+    setPickerOpen(false);
+  };
+  // --------------------------------------------------
 
   const fetchData = async () => {
     setLoading(true);
@@ -39,7 +162,7 @@ export default function Protocolito() {
       const { data } = await axios.get(`${API}/Protocolito`, {
         params: q ? { q } : {}
       });
-      setRows(data);
+      setRows(Array.isArray(data) ? data : []); // defensivo
     } catch (err) {
       setMsg({ type: 'error', text: err.response?.data?.mensaje || 'Error cargando datos' });
     } finally {
@@ -47,23 +170,28 @@ export default function Protocolito() {
     }
   };
 
-  useEffect(() => { fetchData(); }, [q]); // busca cuando cambia q
+  useEffect(() => { fetchData(); }, [q]);
 
-  // Acciones
+  // ====== Acciones ======
   const onEdit = (row) => {
     setEditingId(row._id);
-    setDrafts(prev => ({ ...prev, [row._id]: {
-      numeroTramite: row.numeroTramite,
-      tipoTramite: row.tipoTramite,
-      cliente: row.cliente,
-      fecha: formatDateInput(row.fecha),
-      abogado: row.abogado
-    }}));
+    setDrafts(prev => ({
+      ...prev,
+      [row._id]: {
+        numeroTramite: row.numeroTramite,
+        tipoTramite: row.tipoTramite,
+        cliente: row.cliente,
+        fecha: formatDateInput(row.fecha),
+        abogado: row.abogado
+      }
+    }));
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const onCancel = (id) => {
     if (adding && id === 'new') {
       setNewRow(emptyRow);
+      setSelectedCliente(null);
       setAdding(false);
     }
     setEditingId(null);
@@ -82,35 +210,31 @@ export default function Protocolito() {
     }
   };
 
+  // Validación para EDITAR
   const validateRow = ({ numeroTramite, tipoTramite, cliente, fecha, abogado }) => {
     if (!numeroTramite || !tipoTramite || !cliente || !fecha || !abogado) {
       return 'Todos los campos son obligatorios';
     }
     if (isNaN(Number(numeroTramite))) return 'El número de trámite debe ser numérico';
     return null;
-    };
+  };
 
+  // Guardar NUEVO: solo con clienteId, backend completa y genera el número
   const onSaveNew = async () => {
-    const err = validateRow(newRow);
-    if (err) return setMsg({ type: 'warn', text: err });
-
+    const cid = selectedCliente?._id || selectedCliente?.id;
+    if (!cid) {
+      return setMsg({ type: 'warn', text: 'Selecciona un cliente primero' });
+    }
     try {
-      const payload = {
-        numeroTramite: Number(newRow.numeroTramite),
-        tipoTramite: newRow.tipoTramite.trim(),
-        cliente: newRow.cliente.trim(),
-        fecha: newRow.fecha,
-        abogado: newRow.abogado.trim()
-      };
+      const payload = { clienteId: cid };
       const { data } = await axios.post(`${API}/Protocolito`, payload);
-      setRows(prev => [data, ...prev]);
+      await fetchData();
       setNewRow(emptyRow);
+      setSelectedCliente(null);
       setAdding(false);
-      setMsg({ type: 'ok', text: 'Registro creado' });
-    } catch (err) {
-      const t = err.response?.status === 409
-        ? 'El número de trámite ya existe'
-        : (err.response?.data?.mensaje || 'Error al crear');
+      setMsg({ type: 'ok', text: `Trámite ${data?.numeroTramite ?? ''} creado` });
+    } catch (err2) {
+      const t = err2.response?.data?.mensaje || 'Error al crear';
       setMsg({ type: 'error', text: t });
     }
   };
@@ -125,17 +249,17 @@ export default function Protocolito() {
         numeroTramite: Number(draft.numeroTramite),
         tipoTramite: draft.tipoTramite.trim(),
         cliente: draft.cliente.trim(),
-        fecha: draft.fecha,
+        fecha: draft.fecha, // YYYY-MM-DD
         abogado: draft.abogado.trim()
       };
-      const { data } = await axios.put(`${API}/Protocolito/${id}`, payload);
-      setRows(prev => prev.map(r => r._id === id ? data : r));
+      await axios.put(`${API}/Protocolito/${id}`, payload);
+      await fetchData();
       onCancel(id);
       setMsg({ type: 'ok', text: 'Registro actualizado' });
-    } catch (err) {
-      const t = err.response?.status === 409
+    } catch (err2) {
+      const t = err2.response?.status === 409
         ? 'El número de trámite ya existe'
-        : (err.response?.data?.mensaje || 'Error al actualizar');
+        : (err2.response?.data?.mensaje || 'Error al actualizar');
       setMsg({ type: 'error', text: t });
     }
   };
@@ -144,115 +268,150 @@ export default function Protocolito() {
     if (!window.confirm('¿Eliminar este registro?')) return;
     try {
       await axios.delete(`${API}/Protocolito/${id}`);
-      setRows(prev => prev.filter(r => r._id !== id));
+      await fetchData();
       setMsg({ type: 'ok', text: 'Registro eliminado' });
-    } catch (err) {
-      setMsg({ type: 'error', text: err.response?.data?.mensaje || 'Error al eliminar' });
+    } catch (err2) {
+      setMsg({ type: 'error', text: err2.response?.data?.mensaje || 'Error al eliminar' });
     }
   };
 
   const startAdd = () => {
     setAdding(true);
     setNewRow(emptyRow);
+    setSelectedCliente(null);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  const RowView = ({ row }) => {
-    const isEditing = editingId === row._id;
-    const d = drafts[row._id] || {};
-    return (
-      <tr>
-        <td style={{ width: 140 }}>
-          {isEditing ? (
-            <input
-              type="number"
-              value={d.numeroTramite ?? ''}
-              onChange={e => onChangeDraft(row._id, 'numeroTramite', e.target.value)}
-            />
-          ) : row.numeroTramite}
-        </td>
-        <td style={{ width: 200 }}>
-          {isEditing ? (
-            <input
-              type="text"
-              value={d.tipoTramite ?? ''}
-              onChange={e => onChangeDraft(row._id, 'tipoTramite', e.target.value)}
-              placeholder="Tipo de trámite"
-            />
-          ) : row.tipoTramite}
-        </td>
-        <td style={{ width: 240 }}>
-          {isEditing ? (
-            <input
-              type="text"
-              value={d.cliente ?? ''}
-              onChange={e => onChangeDraft(row._id, 'cliente', e.target.value)}
-              placeholder="Nombre del cliente"
-            />
-          ) : row.cliente}
-        </td>
-        <td style={{ width: 180 }}>
-          {isEditing ? (
-            <input
-              type="date"
-              value={d.fecha ?? ''}
-              onChange={e => onChangeDraft(row._id, 'fecha', e.target.value)}
-            />
-          ) : formatDateInput(row.fecha)}
-        </td>
-        <td style={{ width: 220 }}>
-          {isEditing ? (
-            <input
-              type="text"
-              value={d.abogado ?? ''}
-              onChange={e => onChangeDraft(row._id, 'abogado', e.target.value)}
-              placeholder="Abogado responsable"
-            />
-          ) : row.abogado}
-        </td>
-        <td style={{ whiteSpace: 'nowrap' }}>
-          {isEditing ? (
-            <>
-              <button onClick={() => onSaveEdit(row._id)}>Guardar</button>
-              <button onClick={() => onCancel(row._id)}>Cancelar</button>
-            </>
-          ) : (
-            <>
-              <button onClick={() => onEdit(row)}>Editar</button>
-              <button onClick={() => onDelete(row._id)}>Eliminar</button>
-            </>
-          )}
-        </td>
-      </tr>
-    );
+  const handleSelectFile = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setImporting(true);
+    setMsg(null);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const { data } = await axios.post(`${API}/protocolito/import`, fd, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      });
+      await fetchData();
+      setMsg({
+        type: 'ok',
+        text: `Importado: recibidas=${data.recibidas}, procesadas=${data.procesadas}, insertadas=${data.insertadas}, actualizadas=${data.actualizadas}` +
+              (data.errores?.length ? `, con ${data.errores.length} fila(s) con error` : '')
+      });
+    } catch (err2) {
+      const t = err2.response?.data?.mensaje || 'Error al importar';
+      setMsg({ type: 'error', text: t });
+    } finally {
+      setImporting(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
   };
 
-const handleSelectFile = async (e) => {
-  const file = e.target.files?.[0];
-  if (!file) return;
-  setImporting(true);
-  setMsg(null);
-  try {
-    const fd = new FormData();
-    fd.append('file', file);
-    const { data } = await axios.post(`${API}/protocolitos/import`, fd, {
-      headers: { 'Content-Type': 'multipart/form-data' }
-    });
-    // refresca la tabla
-    await fetchData();
-    // muestra resumen
-    setMsg({
-      type: 'ok',
-      text: `Importado: recibidas=${data.recibidas}, procesadas=${data.procesadas}, insertadas=${data.insertadas}, actualizadas=${data.actualizadas}` +
-            (data.errores?.length ? `, con ${data.errores.length} fila(s) con error` : '')
-    });
-  } catch (err) {
-    const t = err.response?.data?.mensaje || 'Error al importar';
-    setMsg({ type: 'error', text: t });
-  } finally {
-    setImporting(false);
-    if (fileInputRef.current) fileInputRef.current.value = '';
-  }
+
+  // Muestra solo la fecha (dd/mm/aaaa) desde lo que venga del backend
+const onlyDate = (raw) => {
+  if (!raw) return '—';
+  // 1) Si parsea como Date (ISO, Date, timestamp), úsalo
+  const d = raw instanceof Date ? raw : new Date(raw);
+  if (!Number.isNaN(d.getTime())) return d.toLocaleDateString('es-MX');
+
+  // 2) Fallback: si trae 'YYYY-MM-DD', úsalo tal cual
+  const m = String(raw).match(/\d{4}-\d{2}-\d{2}/);
+  if (m) return m[0];
+
+  // 3) Último recurso: intenta cortar antes de la "T"
+  const i = String(raw).indexOf('T');
+  return i > 0 ? String(raw).slice(0, i) : String(raw);
 };
+  // ====== Columnas de la tabla principal ======
+  const columns = [
+    { field: 'numeroTramite', headerName: '# Trámite', width: 130, type: 'number' },
+    { field: 'tipoTramite',   headerName: 'Tipo de trámite', flex: 1, minWidth: 160 },
+    { field: 'cliente',       headerName: 'Cliente',         flex: 1.2, minWidth: 200 },
+    {
+  field: 'fecha',
+  headerName: 'Fecha',
+  width: 140,
+  // Solo mostramos texto formateado
+  renderCell: (params) => onlyDate(params?.row?.fecha),
+
+  // Ordenar por la fecha cruda del row (no por el texto renderizado)
+  sortComparator: (_v1, _v2, cellParams1, cellParams2) => {
+    const ra = cellParams1?.row?.fecha;
+    const rb = cellParams2?.row?.fecha;
+    const ta = Date.parse(ra);
+    const tb = Date.parse(rb);
+    return (Number.isNaN(ta) ? 0 : ta) - (Number.isNaN(tb) ? 0 : tb);
+  },
+}
+,
+    {
+      field: 'abogado',
+      headerName: 'Abogado',
+      width: 180,
+    },
+    {
+      field: 'acciones',
+      headerName: 'Acciones',
+      sortable: false,
+      filterable: false,
+      width: 200,
+      renderCell: (params) => (
+        <>
+          <button onClick={() => onEdit(params.row)}>Editar</button>
+          <button onClick={() => onDelete(params.row._id)} style={{ marginLeft: 8 }}>Eliminar</button>
+        </>
+      )
+    }
+  ];
+
+  // ====== Columnas del selector de clientes ======
+  const pickerCols = [
+    {
+      field: 'id',
+      headerName: 'ID',
+      width: 90,
+      valueGetter: (p, row) => {
+        const r = pickRowFromVG(p, row);
+        return r?.id ?? r?._id ?? '';
+      }
+    },
+    { field: 'nombre', headerName: 'Cliente', flex: 1, minWidth: 220 },
+    {
+      field: 'abogado',
+      headerName: 'Abogado',
+      width: 180,
+      valueGetter: (p, row) => pickRowFromVG(p, row)?.abogado || '—'
+    },
+    {
+      field: 'servicio',
+      headerName: 'Servicio/Acción',
+      width: 180,
+      valueGetter: (p, row) => {
+        const r = pickRowFromVG(p, row);
+        return r?.servicio || r?.accion || '—';
+      }
+    },
+    {
+      field: 'hora_llegada',
+      headerName: 'Llegada',
+      width: 180,
+      valueGetter: (p, row) => {
+        const v = pickRowFromVG(p, row)?.hora_llegada;
+        return v ? new Date(v).toLocaleString() : '—';
+      }
+    },
+    {
+      field: 'pick',
+      headerName: 'Seleccionar',
+      width: 150,
+      sortable: false,
+      renderCell: (p) => (
+        <button onClick={() => selectClienteFromPicker(p.row)}>Usar</button>
+      )
+    }
+  ];
 
   return (
     <div style={{ padding: 16 }}>
@@ -264,28 +423,28 @@ const handleSelectFile = async (e) => {
 
         {/* Importar Excel */}
         <input
-            ref={fileInputRef}
-            type="file"
-            accept=".xlsx,.xls,.csv"
-            style={{ display: 'none' }}
-            onChange={handleSelectFile}
+          ref={fileInputRef}
+          type="file"
+          accept=".xlsx,.xls,.csv"
+          style={{ display: 'none' }}
+          onChange={handleSelectFile}
         />
         <button onClick={() => fileInputRef.current?.click()} disabled={importing}>
-            {importing ? 'Importando…' : 'Importar Excel'}
+          {importing ? 'Importando…' : 'Importar Excel'}
         </button>
         <a href={`${API}/protocolito/template`} target="_blank" rel="noreferrer">
-            Descargar plantilla
+          Descargar plantilla
         </a>
 
         <input
-            type="text"
-            placeholder="Buscar por número, cliente, tipo o abogado"
-            value={q}
-            onChange={e => setQ(e.target.value)}
-            style={{ flex: 1, minWidth: 260, maxWidth: 480 }}
+          type="text"
+          placeholder="Buscar por número, cliente, tipo o abogado"
+          value={q}
+          onChange={e => setQ(e.target.value)}
+          style={{ flex: 1, minWidth: 260, maxWidth: 480 }}
         />
         <button onClick={fetchData}>Actualizar</button>
-        </div>
+      </div>
 
       {/* Mensajes */}
       {msg && (
@@ -303,80 +462,160 @@ const handleSelectFile = async (e) => {
         </div>
       )}
 
-      {/* Tabla */}
-      <div style={{ overflowX: 'auto' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-          <thead>
-            <tr style={{ background: '#f5f5f5' }}>
-              <th style={th}># Trámite</th>
-              <th style={th}>Tipo de trámite</th>
-              <th style={th}>Cliente</th>
-              <th style={th}>Fecha</th>
-              <th style={th}>Abogado</th>
-              <th style={th}>Acciones</th>
-            </tr>
-          </thead>
-          <tbody>
-            {adding && (
-              <tr>
-                <td>
-                  <input
-                    type="number"
-                    value={newRow.numeroTramite}
-                    onChange={e => onChangeDraft('new', 'numeroTramite', e.target.value)}
-                  />
-                </td>
-                <td>
-                  <input
-                    type="text"
-                    value={newRow.tipoTramite}
-                    onChange={e => onChangeDraft('new', 'tipoTramite', e.target.value)}
-                  />
-                </td>
-                <td>
-                  <input
-                    type="text"
-                    value={newRow.cliente}
-                    onChange={e => onChangeDraft('new', 'cliente', e.target.value)}
-                  />
-                </td>
-                <td>
-                  <input
-                    type="date"
-                    value={newRow.fecha}
-                    onChange={e => onChangeDraft('new', 'fecha', e.target.value)}
-                  />
-                </td>
-                <td>
-                  <input
-                    type="text"
-                    value={newRow.abogado}
-                    onChange={e => onChangeDraft('new', 'abogado', e.target.value)}
-                  />
-                </td>
-                <td style={{ whiteSpace: 'nowrap' }}>
-                  <button onClick={onSaveNew}>Guardar</button>
-                  <button onClick={() => onCancel('new')}>Cancelar</button>
-                </td>
-              </tr>
-            )}
+      {/* Panel de agregar (preview) */}
+      {adding && (
+        <div style={{ display: 'grid', gridTemplateColumns: '140px 1fr 1.2fr 180px 220px auto', gap: 8, marginBottom: 12 }}>
+          <Button variant="outlined" onClick={() => openPickerFor('new')}>
+            SELECCIONAR CLIENTE
+          </Button>
 
-            {loading ? (
-              <tr><td colSpan={6} style={{ textAlign: 'center', padding: 16 }}>Cargando…</td></tr>
-            ) : rows.length === 0 ? (
-              <tr><td colSpan={6} style={{ textAlign: 'center', padding: 16 }}>Sin resultados</td></tr>
-            ) : (
-              rows.map(r => <RowView key={r._id} row={r} />)
-            )}
-          </tbody>
-        </table>
+          <input
+            type="text"
+            value={newRow.numeroTramite ? String(newRow.numeroTramite) : 'Autogenerado'}
+            readOnly
+            disabled
+            placeholder="# Trámite"
+          />
+
+          <input
+            type="text"
+            value={newRow.tipoTramite}
+            readOnly
+            disabled
+            placeholder="Tipo de trámite"
+          />
+
+          <input
+            type="text"
+            value={newRow.cliente}
+            readOnly
+            disabled
+            placeholder="Nombre del cliente"
+          />
+
+          <input
+            type="text"
+            value={newRow.fecha}
+            readOnly
+            disabled
+            placeholder="Fecha"
+          />
+
+          <input
+            type="text"
+            value={newRow.abogado}
+            readOnly
+            disabled
+            placeholder="Abogado responsable"
+          />
+
+          <div style={{ whiteSpace: 'nowrap' }}>
+            <button onClick={onSaveNew} disabled={!selectedCliente}>Guardar</button>
+            <button onClick={() => onCancel('new')} style={{ marginLeft: 8 }}>Cancelar</button>
+          </div>
+        </div>
+      )}
+
+      {/* Panel de edición */}
+      {editingId && (
+        <div style={{ display: 'grid', gridTemplateColumns: '140px 1fr 1.2fr 180px 220px auto', gap: 8, marginBottom: 12, background: '#f9fafb', padding: 8, borderRadius: 8 }}>
+          <input
+            type="number"
+            value={drafts[editingId]?.numeroTramite ?? ''}
+            onChange={e => onChangeDraft(editingId, 'numeroTramite', e.target.value)}
+            placeholder="# Trámite"
+          />
+          <input
+            type="text"
+            value={drafts[editingId]?.tipoTramite ?? ''}
+            onChange={e => onChangeDraft(editingId, 'tipoTramite', e.target.value)}
+            placeholder="Tipo de trámite"
+          />
+          <div style={{ display: 'flex', gap: 8 }}>
+            <input
+              type="text"
+              value={drafts[editingId]?.cliente ?? ''}
+              onChange={e => onChangeDraft(editingId, 'cliente', e.target.value)}
+              placeholder="Nombre del cliente"
+              style={{ flex: 1 }}
+            />
+            <Button variant="outlined" onClick={() => openPickerFor(editingId)}>
+              Seleccionar cliente
+            </Button>
+          </div>
+          <input
+            type="date"
+            value={drafts[editingId]?.fecha ?? ''}
+            onChange={e => onChangeDraft(editingId, 'fecha', e.target.value)}
+          />
+          <input
+            type="text"
+            value={drafts[editingId]?.abogado ?? ''}
+            onChange={e => onChangeDraft(editingId, 'abogado', e.target.value)}
+            placeholder="Abogado responsable"
+          />
+          <div style={{ whiteSpace: 'nowrap' }}>
+            <button onClick={() => onSaveEdit(editingId)}>Guardar</button>
+            <button onClick={() => onCancel(editingId)} style={{ marginLeft: 8 }}>Cancelar</button>
+          </div>
+        </div>
+      )}
+
+      {/* Tabla principal */}
+      <div style={{ width: '100%' }}>
+        <DataGrid
+          rows={rows}
+          getRowId={(row) =>
+            row?._id ?? row?.id ?? row?.numeroTramite ?? `${row?.cliente}-${row?.fecha}`
+          }
+          columns={columns}
+          loading={loading}
+          autoHeight
+          pageSizeOptions={[10, 25, 50, 100]}
+          initialState={{
+            pagination: { paginationModel: { pageSize: 25, page: 0 } },
+            sorting: { sortModel: [{ field: 'fecha', sort: 'desc' }] } // más reciente primero
+          }}
+          disableRowSelectionOnClick
+          sx={{
+            border: '1px solid #eee',
+            '& .MuiDataGrid-columnHeaders': { backgroundColor: '#f5f5f5' }
+          }}
+        />
       </div>
+
+      {/* Modal selector de clientes */}
+      <Dialog open={pickerOpen} onClose={() => setPickerOpen(false)} fullWidth maxWidth="md">
+        <DialogTitle>Seleccionar cliente (estatus: Iniciar trámite)</DialogTitle>
+        <DialogContent dividers>
+          <TextField
+            fullWidth
+            size="small"
+            placeholder="Buscar cliente…"
+            value={pickerQ}
+            onChange={(e) => onChangePickerQ(e.target.value)}
+            sx={{ mb: 2 }}
+          />
+          <div style={{ width: '100%' }}>
+            <DataGrid
+              rows={pickerRows}
+              getRowId={(r) =>
+                r?._id ?? r?.id ?? r?.ID ?? r?.folio ?? `${r?.nombre}-${r?.hora_llegada}-${Math.random()}`
+              }
+              columns={pickerCols}
+              loading={pickerLoading}
+              autoHeight
+              pageSizeOptions={[5, 10, 25]}
+              initialState={{ pagination: { paginationModel: { pageSize: 10, page: 0 } } }}
+              disableRowSelectionOnClick
+              onRowDoubleClick={(params) => selectClienteFromPicker(params.row)}
+            />
+          </div>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setPickerOpen(false)}>Cerrar</Button>
+        </DialogActions>
+      </Dialog>
     </div>
   );
 }
-
-const th = {
-  textAlign: 'left',
-  padding: '10px 8px',
-  borderBottom: '1px solid #ddd'
-};
