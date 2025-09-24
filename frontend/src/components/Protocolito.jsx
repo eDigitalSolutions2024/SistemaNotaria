@@ -366,7 +366,7 @@ export default function Protocolito() {
     renderCell: (params) => (
       <>
         <button className="btn btn-primary btn-editar" onClick={() => onEdit(params.row)}>Editar</button>
-        <button className="btn btn-primary btn-rliminar" onClick={() => onDelete(params.row._id)} style={{ marginLeft: 8 }}>Eliminar</button>
+        <button className="btn btn-primary btn-eliminar" onClick={() => onDelete(params.row._id)} style={{ marginLeft: 8 }}>Eliminar</button>
       </>
     )
   };
