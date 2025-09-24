@@ -1,0 +1,93 @@
+/* variables y tema solo dentro de rn17 */
+.rn17{
+  --bg:#f7f8fc; --ink:#1c2240; --mut:#6b7390;
+  --card:#ffffff; --line:#e3e7f1; --pri:#2f68ff;
+  color: var(--ink);
+  font-family: Inter, system-ui, Segoe UI, Roboto, Arial;
+}
+
+/* contenedor de la página */
+.rn17 .recibo-wrap{
+  max-width: 100%;          /* antes 920px */
+  height: 500px;          /* más respiro */
+  padding: 0 16px;
+}
+.rn17 h1{
+  font-size: 38px;     /* antes 44 */
+  margin: 10px 0 16px; 
+}
+
+/* tarjeta y grid */
+.rn17 .card{
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 18px;        /* esquinas más suaves */
+  padding: 20px;              /* antes 16px */
+  box-shadow: 0 10px 30px rgba(0,0,0,.06);
+}
+.rn17 .grid-2{
+  display:grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;                  /* antes 12px */
+}
+@media (max-width: 900px){ .rn17 .grid-2{ grid-template-columns:1fr } }
+
+/* campos */
+.rn17 .field{ display:flex; flex-direction:column; gap:8px }
+.rn17 .field label{
+  color: var(--mut);
+  font-size: 1rem;            /* antes .9rem */
+  font-weight: 700;
+}
+.rn17 .field input,
+.rn17 .field select{
+  padding: 14px 16px;         /* antes 10px 12px */
+  font-size: 1rem;            /* subir tamaño de texto */
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  outline: none;
+  background: #fff;
+}
+.rn17 .field input:focus,
+.rn17 .field select:focus{
+  border-color:#b9c8ff;
+  box-shadow:0 0 0 4px #e7eeff; /* ring más visible */
+}
+.rn17 .field.err input{ border-color:#ff6b6b }
+.rn17 .field small{ color:#ff6b6b; font-size:.95rem }
+
+/* acciones / botones SOLO de esta página */
+.rn17 .actions{ display:flex; justify-content:flex-end; margin-top: 20px; }
+.rn17 .btn{
+  border:1px solid var(--line);
+  background:#fff;
+  padding: 12px 18px;         /* botón más grande */
+  border-radius:12px;
+  cursor:pointer;
+  font-size: 1rem;
+  font-weight: 600;
+}
+.rn17 .btn.primary{
+  background: var(--pri);
+  color:#fff;
+  border:none;
+  font-weight: 800;
+}
+
+/* modal/preview */
+.rn17 .modal-backdrop{position:fixed; inset:0; background:rgba(0,0,0,.5); display:flex; align-items:center; justify-content:center; padding:16px; z-index:50}
+.rn17 .sheet{background:#fff; color:#000; padding:16px; width:min(900px,100%); border-radius:12px}
+.rn17 .recibo{border:1px solid #cfd6ea; padding:12px; border-radius:10px; margin-bottom:12px}
+.rn17 .recibo header{display:flex; justify-content:space-between; align-items:center; border-bottom:1px dashed #cfd6ea; padding-bottom:6px; margin-bottom:6px}
+.rn17 .recibo .row{display:flex; gap:8px; padding:4px 0}
+.rn17 .recibo .row b{min-width:180px; display:inline-block}
+.rn17 .firmas{display:flex; gap:24px; margin-top:18px}
+.rn17 .firmas .line{height:1px; background:#000; width:220px; margin-top:24px}
+.rn17 .no-print{display:flex; gap:8px; justify-content:flex-end; margin-top:8px}
+
+/* impresión */
+@media print{
+  .rn17 .modal-backdrop{position:static; inset:auto; background:transparent}
+  .rn17 .no-print{display:none}
+  .rn17 .sheet{border:none; padding:0}
+}
