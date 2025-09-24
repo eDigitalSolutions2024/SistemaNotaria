@@ -4,6 +4,7 @@ import './MainPage.css';
 import FormAbogado from '../components/FormAbogado';
 import RegistrarCliente from '../pages/Home';
 import Protocolito from '../components/Protocolito';
+import Recibo from '../components/ReciboNotaria17';
 
 import { useAuth } from '../auth/AuthContext';
 import Login from '../components/Login';
@@ -35,6 +36,7 @@ function AuthedApp() {
       case 'registrar-cliente': return <RegistrarCliente />;
       case 'registrar-abogado': return <FormAbogado />;
       case 'protocolito':       return <Protocolito />;
+      case 'recibo':       return <Recibo/>;
       default:                  return <RegistrarCliente />;
     }
   };
@@ -130,14 +132,14 @@ function AuthedApp() {
 
             {/* Items simples */}
             <li title="Buscar Cliente" style={itemStyle} onClick={() => go('buscar')}>
-              <span style={iconStyle}>🔍</span>{sidebarOpen && <span>Buscar Clientes</span>}
+              <span style={iconStyle}>🔍</span>{sidebarOpen && <span>Escrituras</span>}
             </li>
-            <li title="Trámites Pendientes" style={itemStyle} onClick={() => go('tramites')}>
-              <span style={iconStyle}>📄</span>{sidebarOpen && <span>Trámites Pendientes</span>}
+            <li title="Recibos" style={itemStyle} onClick={() => go('recibo')}>
+              <span style={iconStyle}>📄</span>{sidebarOpen && <span>Recibos</span>}
             </li>
-            <li title="Asesorías Pendientes" style={itemStyle} onClick={() => go('asesorias')}>
+             {/*<li title="Asesorías Pendientes" style={itemStyle} onClick={() => go('asesorias')}>
               <span style={iconStyle}>📘</span>{sidebarOpen && <span>Asesorías Pendientes</span>}
-            </li>
+            </li>*/}
             <li title="Protocolito" style={itemStyle} onClick={() => go('protocolito')}>
               <span style={iconStyle}>📑</span>{sidebarOpen && <span>Protocolito</span>}
             </li>
