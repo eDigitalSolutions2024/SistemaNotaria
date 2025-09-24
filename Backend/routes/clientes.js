@@ -163,4 +163,24 @@ router.put('/api/clientes/accion/:id', async (req, res) => {
   }
 });
 
+
+
+// GET /api/clientes/search?q=alberto
+router.get('/search', async (req, res) => {
+  const q = String(req.query.q || '').trim();
+  if (!q) return res.json([]);
+
+  // Regex seguro (escape de caracteres especiales)
+  const safe = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp(safe, 'i');
+
+  const items = await Cliente.find({ nombre: re })
+    .select('id nombre abogado servicio tieneCita hora_llegada accion motivo')
+    .limit(10)
+    .lean();
+
+  res.json(items);
+});
+
+
 module.exports = router;

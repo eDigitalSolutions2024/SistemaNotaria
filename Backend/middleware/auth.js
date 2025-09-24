@@ -1,28 +1,16 @@
 // Backend/middleware/auth.js
 const jwt = require('jsonwebtoken');
 
-function getTokenFromHeader(req) {
-  const h = req.headers.authorization || '';
-  const m = h.match(/^Bearer\s+(.+)$/i);
-  return m ? m[1] : null;
-}
-
-exports.requireAuth = (req, res, next) => {
-  const token = getTokenFromHeader(req);
+module.exports = (req, res, next) => {
+  const auth = req.headers.authorization || '';
+  const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
   if (!token) return res.status(401).json({ mensaje: 'Token requerido' });
+
   try {
-    const payload = jwt.verify(token, process.env.JWT_SECRET);
-    req.user = payload; // { id, nombre, role }
+    const payload = jwt.verify(token, process.env.JWT_SECRET || 'dev_secret');
+    req.user = payload;
     next();
-  } catch (e) {
+  } catch (err) {
     return res.status(401).json({ mensaje: 'Token inválido' });
   }
-};
-
-exports.requireRole = (...roles) => (req, res, next) => {
-  if (!req.user) return res.status(401).json({ mensaje: 'No autenticado' });
-  if (!roles.includes(req.user.role)) {
-    return res.status(403).json({ mensaje: 'No autorizado' });
-  }
-  next();
 };

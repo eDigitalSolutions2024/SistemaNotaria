@@ -5,7 +5,19 @@ import FormAbogado from '../components/FormAbogado';
 import RegistrarCliente from '../pages/Home';
 import Protocolito from '../components/Protocolito';
 
+import { useAuth } from '../auth/AuthContext';
+import Login from '../components/Login';
+
+/** Conmutador: si no hay sesión -> Login; si hay sesión -> app */
 export default function MainPage() {
+  const { isAuthenticated } = useAuth();
+  return isAuthenticated ? <AuthedApp /> : <Login />;
+}
+
+/** Todo el layout con hooks va aquí (sin condicionales alrededor) */
+function AuthedApp() {
+  const { user, logout } = useAuth(); // ← user: { id/_id, role }, logout()
+
   const [seccion, setSeccion] = useState('registrar-cliente');
   const [mostrarSubmenu, setMostrarSubmenu] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -27,12 +39,10 @@ export default function MainPage() {
     }
   };
 
-  
-
   const sidebarStyle = useMemo(() => ({
     background: '#1f2937',
     color: '#fff',
-    width: sidebarOpen ? 250 : 60,        // franja con íconos
+    width: sidebarOpen ? 250 : 60,
     transition: 'width .25s ease',
     overflow: 'hidden',
     padding: sidebarOpen ? '16px 16px' : '16px 8px',
@@ -40,7 +50,8 @@ export default function MainPage() {
     display: 'flex',
     flexDirection: 'column',
     gap: 8,
-    position: 'relative',                 // ← para posicionar el handle
+    position: 'relative',
+    minHeight: '100vh'
   }), [sidebarOpen]);
 
   const mainStyle = useMemo(() => ({
@@ -61,13 +72,13 @@ export default function MainPage() {
   const iconStyle = { width: 28, textAlign: 'center', fontSize: 18 };
 
   return (
-    <div className="main-layout" >
+    <div className="main-layout">
       {/* SIDEBAR */}
       <aside
         className={`sidebar ${sidebarOpen ? 'expanded' : 'collapsed'}`}
         style={sidebarStyle}
       >
-        {/* Handle/pestaña pegada al borde derecho del sidebar */}
+        {/* Handle */}
         <button
           className="sidebar-handle"
           onClick={() => setSidebarOpen(o => !o)}
@@ -86,7 +97,7 @@ export default function MainPage() {
         <hr style={{ borderColor: '#374151', margin: '6px 0' }} />
 
         {/* Menú */}
-        <div style={{ overflowY: 'auto', flex: 1 }}>
+        <div style={{ overflowY: 'auto' }}>
           <ul style={{ padding: 0, margin: 0 }}>
             {/* Registrar (submenu) */}
             <li
@@ -107,9 +118,13 @@ export default function MainPage() {
                 <li style={{ ...itemStyle, padding: '8px 6px' }} onClick={() => go('registrar-cliente')}>
                   <span style={iconStyle}>👤</span><span>Registrar Cliente</span>
                 </li>
-                <li style={{ ...itemStyle, padding: '8px 6px' }} onClick={() => go('registrar-abogado')}>
-                  <span style={iconStyle}>👨‍⚖️</span><span>Registrar Abogado</span>
-                </li>
+
+                {/* Solo ADMIN ve "Registrar Abogado" */}
+                {user?.role === 'admin' && (
+                  <li style={{ ...itemStyle, padding: '8px 6px' }} onClick={() => go('registrar-abogado')}>
+                    <span style={iconStyle}>👨‍⚖️</span><span>Registrar Abogado</span>
+                  </li>
+                )}
               </ul>
             )}
 
@@ -127,6 +142,55 @@ export default function MainPage() {
               <span style={iconStyle}>📑</span>{sidebarOpen && <span>Protocolito</span>}
             </li>
           </ul>
+        </div>
+
+        {/* FOOTER DEL SIDEBAR (usuario + logout) */}
+        <div
+          style={{
+            marginTop: 'auto',
+            borderTop: '1px solid #374151',
+            paddingTop: 10,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 6
+          }}
+        >
+          {sidebarOpen ? (
+            <>
+              <div style={{ fontSize: 12, opacity: 0.85 }}>
+                <div><b>ID</b> {user?._id || user?.id || '-'}</div>
+                <div><b>Rol</b> {user?.role || '-'}</div>
+              </div>
+              <button
+                onClick={logout}
+                style={{
+                  background: '#ef4444',
+                  color: '#fff',
+                  border: 'none',
+                  padding: '8px 10px',
+                  borderRadius: 8,
+                  cursor: 'pointer'
+                }}
+              >
+                Cerrar sesión
+              </button>
+            </>
+          ) : (
+            <button
+              onClick={logout}
+              title="Cerrar sesión"
+              style={{
+                background: '#ef4444',
+                color: '#fff',
+                border: 'none',
+                padding: 8,
+                borderRadius: 8,
+                cursor: 'pointer'
+              }}
+            >
+              ⎋
+            </button>
+          )}
         </div>
       </aside>
 

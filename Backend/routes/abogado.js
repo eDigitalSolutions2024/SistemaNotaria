@@ -181,4 +181,76 @@ router.get('/', async (req, res) => {
 });
 
 
+
+// === EDITAR DATOS DEL ABOGADO ===
+// PUT /abogados/:id
+router.put('/:id', async (req, res) => {
+  try {
+    const id = req.params.id; // tu _id es numérico (p.ej. 1001), pero mongoose acepta string numérico
+    const { nombre, orden, disponible, ubicacion, role } = req.body;
+
+    // Validar existencia
+    const abogado = await Abogado.findById(id);
+    if (!abogado) return res.status(404).json({ mensaje: 'Abogado no encontrado' });
+
+    // Si cambia el nombre, verificar duplicado (case-insensitive) ignorando su propio _id
+    if (typeof nombre === 'string' && nombre.trim()) {
+      const dup = await Abogado.findOne({
+        _id: { $ne: abogado._id },
+        nombre: new RegExp(`^${nombre.trim()}$`, 'i'),
+      });
+      if (dup) return res.status(400).json({ mensaje: 'Ya existe un abogado con ese nombre' });
+      abogado.nombre = nombre.trim();
+    }
+
+    if (orden !== undefined) {
+      const n = Number(orden);
+      if (!Number.isFinite(n)) return res.status(400).json({ mensaje: 'El orden debe ser numérico' });
+      abogado.orden = n;
+    }
+
+    if (typeof disponible === 'boolean') {
+      abogado.disponible = disponible;
+    }
+
+    if (typeof ubicacion === 'string') {
+      abogado.ubicacion = ubicacion.trim() || '---';
+    }
+
+    if (role === 'admin' || role === 'user') {
+      abogado.role = role;
+    }
+
+    await abogado.save();
+    return res.json({ mensaje: 'Abogado actualizado', abogado });
+  } catch (err) {
+    console.error('UPDATE ABOGADO ERROR:', err);
+    return res.status(500).json({ mensaje: 'Error al actualizar abogado', error: err.message });
+  }
+});
+
+// === ACTUALIZAR CONTRASEÑA ===
+// PUT /abogados/:id/password
+router.put('/:id/password', async (req, res) => {
+  try {
+    const id = req.params.id;
+    const { password } = req.body;
+
+    if (!password || String(password).length < 4) {
+      return res.status(400).json({ mensaje: 'La contraseña es obligatoria (mínimo 4 caracteres)' });
+    }
+
+    const abogado = await Abogado.findById(id);
+    if (!abogado) return res.status(404).json({ mensaje: 'Abogado no encontrado' });
+
+    await abogado.setPassword(password);
+    await abogado.save();
+
+    return res.json({ mensaje: 'Contraseña actualizada' });
+  } catch (err) {
+    console.error('UPDATE PASSWORD ERROR:', err);
+    return res.status(500).json({ mensaje: 'Error al actualizar contraseña', error: err.message });
+  }
+});
+
 module.exports = router;

@@ -1,81 +1,55 @@
+// Backend/routes/auth.js
 const express = require('express');
 const router = express.Router();
 const jwt = require('jsonwebtoken');
-const bcrypt = require('bcryptjs');
-
 const Abogado = require('../models/Abogado');
-const { requireAuth } = require('../middleware/auth');
 
-function signToken(abogado) {
-  const payload = { id: abogado._id, nombre: abogado.nombre, role: abogado.role || 'user' };
-  const opts = { expiresIn: process.env.JWT_EXPIRES_IN || '7d' };
-  return jwt.sign(payload, process.env.JWT_SECRET, opts);
-}
-
-// POST /auth/login  { usuario, password }
+// POST /api/auth/login
 router.post('/login', async (req, res) => {
   try {
-    const { usuario, password } = req.body;
-    if (!usuario || !password) {
-      return res.status(400).json({ mensaje: 'Usuario y contraseña requeridos' });
+    const { user, password } = req.body || {};
+    if (!user || !password) {
+      return res.status(400).json({ mensaje: 'Usuario y contraseña son obligatorios' });
     }
 
-    // Busca por usuario o por algunos alias que ya usas (ajusta a tu gusto)
-    const user = await Abogado.findOne({
-      $or: [
-        { usuario },
-        { nombre: usuario },
-        { iniciales: usuario },
-        { codigo: usuario },
-        { clave: usuario },
-      ],
-    }).select('+passwordHash'); // incluir passwordHash
+    let abogado = null;
 
-    if (!user) return res.status(401).json({ mensaje: 'Credenciales inválidas' });
+    // Si el user son solo dígitos, lo tratamos como _id numérico
+    if (/^\d+$/.test(String(user))) {
+      abogado = await Abogado.findById(Number(user)).select('+passwordHash');
+    }
 
-    const ok = await bcrypt.compare(String(password), user.passwordHash || '');
+    // Como respaldo, intenta por nombre exacto
+    if (!abogado) {
+      abogado = await Abogado.findOne({ nombre: user }).select('+passwordHash');
+    }
+
+    if (!abogado) {
+      return res.status(404).json({ mensaje: 'Usuario no encontrado' });
+    }
+
+    const ok = await abogado.validatePassword(password);
     if (!ok) return res.status(401).json({ mensaje: 'Credenciales inválidas' });
 
-    const token = signToken(user);
-    return res.json({
-      token,
-      user: { id: user._id, nombre: user.nombre, usuario: user.usuario, role: user.role || 'user' },
-    });
+    const payload = { id: abogado._id, role: abogado.role, nombre: abogado.nombre };
+    const token = jwt.sign(
+      payload,
+      process.env.JWT_SECRET || 'dev_secret',
+      { expiresIn: process.env.JWT_EXPIRES || '1d' }
+    );
+
+    return res.json({ token, user: payload });
   } catch (err) {
-    console.error('LOGIN ERROR:', err);
-    res.status(500).json({ mensaje: 'Error en login' });
+    return res.status(500).json({ mensaje: 'Error en login', error: err.message });
   }
 });
 
-// GET /auth/me  -> datos del usuario autenticado
+// GET /api/auth/me (protegida)
+const requireAuth = require('../middleware/auth');
 router.get('/me', requireAuth, async (req, res) => {
-  const me = await Abogado.findById(req.user.id).lean();
-  if (!me) return res.status(404).json({ mensaje: 'No encontrado' });
-  res.json({ id: me._id, nombre: me.nombre, usuario: me.usuario, role: me.role || 'user' });
-});
-
-// ⚠️ Solo desarrollo: setear/actualizar contraseña y usuario de un abogado existente
-router.post('/dev/set-password', async (req, res) => {
-  try {
-    if (process.env.NODE_ENV !== 'development') {
-      return res.status(403).json({ mensaje: 'Solo disponible en development' });
-    }
-    const { id, usuario, password } = req.body;
-    if (!id || !password) return res.status(400).json({ mensaje: 'id y password requeridos' });
-
-    const ab = await Abogado.findById(id).select('+passwordHash');
-    if (!ab) return res.status(404).json({ mensaje: 'Abogado no encontrado' });
-
-    if (usuario) ab.usuario = usuario;
-    const rounds = Number(process.env.BCRYPT_ROUNDS) || 10;
-    ab.passwordHash = await bcrypt.hash(String(password), rounds);
-    await ab.save();
-
-    res.json({ ok: true });
-  } catch (err) {
-    console.error('SET PASSWORD ERROR:', err);
-    res.status(500).json({ mensaje: 'No se pudo actualizar password' });
-  }
+  const a = await Abogado.findById(req.user.id).lean();
+  if (!a) return res.status(404).json({ mensaje: 'Usuario no encontrado' });
+  res.json({ id: a._id, nombre: a.nombre, role: a.role });
 });
 
 module.exports = router;

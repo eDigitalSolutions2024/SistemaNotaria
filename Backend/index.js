@@ -4,6 +4,8 @@ const cors = require('cors');
 const http = require('http');
 const path = require('path');
 const dotenv = require('dotenv');
+const authRoutes = require('./routes/auth');
+
 
 const socketIo = require('socket.io');
 const app = express();
@@ -47,7 +49,7 @@ mongoose.connect(process.env.MONGO_URI, {
 app.use(express.json());
 app.use(cors());
 
-
+app.use('/api/auth', authRoutes);
 
 // Usar rutas
 app.use('/api/abogados', require('./routes/abogado'));

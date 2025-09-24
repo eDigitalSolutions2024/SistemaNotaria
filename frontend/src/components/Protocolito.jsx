@@ -6,6 +6,7 @@ import {
   Dialog, DialogTitle, DialogContent, DialogActions,
   Button, TextField
 } from '@mui/material';
+import { useAuth } from '../auth/AuthContext'; // ⬅️ para saber si es admin
 
 const API = process.env.REACT_APP_API_URL || 'http://localhost:4000';
 
@@ -62,6 +63,9 @@ function applyClienteToProtocolito(cliente, prev) {
 const pickRowFromVG = (p, row) => (p && p.row) ? p.row : (row || p || {});
 
 export default function Protocolito() {
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'admin';
+
   const [rows, setRows] = useState([]);
   const [editingId, setEditingId] = useState(null);
   const [drafts, setDrafts] = useState({});
@@ -308,63 +312,65 @@ export default function Protocolito() {
     }
   };
 
-
   // Muestra solo la fecha (dd/mm/aaaa) desde lo que venga del backend
-const onlyDate = (raw) => {
-  if (!raw) return '—';
-  // 1) Si parsea como Date (ISO, Date, timestamp), úsalo
-  const d = raw instanceof Date ? raw : new Date(raw);
-  if (!Number.isNaN(d.getTime())) return d.toLocaleDateString('es-MX');
+  const onlyDate = (raw) => {
+    if (!raw) return '—';
+    // 1) Si parsea como Date (ISO, Date, timestamp), úsalo
+    const d = raw instanceof Date ? raw : new Date(raw);
+    if (!Number.isNaN(d.getTime())) return d.toLocaleDateString('es-MX');
 
-  // 2) Fallback: si trae 'YYYY-MM-DD', úsalo tal cual
-  const m = String(raw).match(/\d{4}-\d{2}-\d{2}/);
-  if (m) return m[0];
+    // 2) Fallback: si trae 'YYYY-MM-DD', úsalo tal cual
+    const m = String(raw).match(/\d{4}-\d{2}-\d{2}/);
+    if (m) return m[0];
 
-  // 3) Último recurso: intenta cortar antes de la "T"
-  const i = String(raw).indexOf('T');
-  return i > 0 ? String(raw).slice(0, i) : String(raw);
-};
+    // 3) Último recurso: intenta cortar antes de la "T"
+    const i = String(raw).indexOf('T');
+    return i > 0 ? String(raw).slice(0, i) : String(raw);
+  };
+
   // ====== Columnas de la tabla principal ======
-  const columns = [
+  const baseColumns = [
     { field: 'numeroTramite', headerName: '# Trámite', width: 130, type: 'number' },
     { field: 'tipoTramite',   headerName: 'Tipo de trámite', flex: 1, minWidth: 160 },
     { field: 'cliente',       headerName: 'Cliente',         flex: 1.2, minWidth: 200 },
     {
-  field: 'fecha',
-  headerName: 'Fecha',
-  width: 140,
-  // Solo mostramos texto formateado
-  renderCell: (params) => onlyDate(params?.row?.fecha),
-
-  // Ordenar por la fecha cruda del row (no por el texto renderizado)
-  sortComparator: (_v1, _v2, cellParams1, cellParams2) => {
-    const ra = cellParams1?.row?.fecha;
-    const rb = cellParams2?.row?.fecha;
-    const ta = Date.parse(ra);
-    const tb = Date.parse(rb);
-    return (Number.isNaN(ta) ? 0 : ta) - (Number.isNaN(tb) ? 0 : tb);
-  },
-}
-,
+      field: 'fecha',
+      headerName: 'Fecha',
+      width: 140,
+      // Solo mostramos texto formateado
+      renderCell: (params) => onlyDate(params?.row?.fecha),
+      // Ordenar por la fecha cruda del row (no por el texto renderizado)
+      sortComparator: (_v1, _v2, cellParams1, cellParams2) => {
+        const ra = cellParams1?.row?.fecha;
+        const rb = cellParams2?.row?.fecha;
+        const ta = Date.parse(ra);
+        const tb = Date.parse(rb);
+        return (Number.isNaN(ta) ? 0 : ta) - (Number.isNaN(tb) ? 0 : tb);
+      },
+    },
     {
       field: 'abogado',
       headerName: 'Abogado',
       width: 180,
     },
-    {
-      field: 'acciones',
-      headerName: 'Acciones',
-      sortable: false,
-      filterable: false,
-      width: 200,
-      renderCell: (params) => (
-        <>
-          <button onClick={() => onEdit(params.row)}>Editar</button>
-          <button onClick={() => onDelete(params.row._id)} style={{ marginLeft: 8 }}>Eliminar</button>
-        </>
-      )
-    }
   ];
+
+  // Columna de acciones SOLO si es admin
+  const actionsColumn = {
+    field: 'acciones',
+    headerName: 'Acciones',
+    sortable: false,
+    filterable: false,
+    width: 200,
+    renderCell: (params) => (
+      <>
+        <button onClick={() => onEdit(params.row)}>Editar</button>
+        <button onClick={() => onDelete(params.row._id)} style={{ marginLeft: 8 }}>Eliminar</button>
+      </>
+    )
+  };
+
+  const columns = isAdmin ? [...baseColumns, actionsColumn] : baseColumns;
 
   // ====== Columnas del selector de clientes ======
   const pickerCols = [

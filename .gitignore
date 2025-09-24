@@ -1,6 +1,103 @@
-# Node.js
-/Backend/node_modules/
-.envfit
-dist/
-build/
+# =========================
+# General (raíz)
+# =========================
+# SO / sistema
+.DS_Store
+Thumbs.db
 *.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+.cache/
+tmp/
+temp/
+
+# IDE
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+!.vscode/tasks.json
+.idea/
+*.iml
+
+# Cobertura
+coverage/
+.nyc_output/
+
+# =========================
+# Backend (Node/Express)
+# =========================
+Backend/node_modules/
+Backend/dist/
+Backend/build/
+Backend/.cache/
+Backend/.eslintcache
+Backend/*.tsbuildinfo
+
+# Env/credenciales (deja solo el ejemplo)
+Backend/.env
+Backend/.env.*
+!Backend/.env.example
+
+# Subidas / artefactos (ajusta si usas otras rutas)
+Backend/uploads/
+Backend/public/uploads/
+Backend/pdfs/
+Backend/pdf_output/
+Backend/screenshots/
+Backend/.puppeteer/
+
+# Dumps/DB locales
+Backend/dump/
+Backend/backups/
+Backend/*.mongodb
+Backend/*.bson
+Backend/*.wt
+
+# Llaves/credenciales
+Backend/keys/
+Backend/certs/
+Backend/*.pem
+Backend/*.key
+Backend/*.crt
+Backend/*.p12
+Backend/*service-account*.json
+Backend/*credentials*.json
+
+# =========================
+# Frontend (React)
+# =========================
+frontend/node_modules/
+frontend/build/
+frontend/dist/
+frontend/.cache/
+frontend/.eslintcache
+frontend/*.tsbuildinfo
+frontend/.vite/
+frontend/.parcel-cache/
+frontend/.next/
+frontend/out/
+frontend/.turbo/
+
+# Env (deja solo el ejemplo)
+frontend/.env
+frontend/.env.*
+!frontend/.env.example
+
+# Mapas/artefactos
+frontend/*.map
+frontend/.sass-cache/
+
+# =========================
+# Docker / CI (opcional)
+# =========================
+docker/*.env
+docker/*.log
+
+# =========================
+# Parches/merges
+# =========================
+*.orig
+*.patch
+*.rej
