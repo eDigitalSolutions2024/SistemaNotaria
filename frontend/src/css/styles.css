@@ -1,0 +1,36 @@
+.btn-excel{
+  --bs-btn-bg: #198754;                /* fondo */
+  --bs-btn-border-color: #198754;      /* borde */
+  --bs-btn-hover-bg: #157347;          /* hover */
+  --bs-btn-hover-border-color: #146c43;
+  --bs-btn-active-bg: #146c43;         /* active */
+  --bs-btn-active-border-color: #13653f;
+  --bs-btn-disabled-bg: #198754;       /* disabled */
+  --bs-btn-disabled-border-color: #198754;
+}
+
+/* Botón de editar (naranja / warning) */
+.btn-editar {
+  --bs-btn-bg: #fd7e14;                /* naranja */
+  --bs-btn-border-color: #fd7e14;
+  --bs-btn-hover-bg: #e96b0c;          /* hover */
+  --bs-btn-hover-border-color: #cf5f0b;
+  --bs-btn-active-bg: #cf5f0b;         /* active */
+  --bs-btn-active-border-color: #b9550a;
+  --bs-btn-disabled-bg: #fd7e14;       /* disabled */
+  --bs-btn-disabled-border-color: #fd7e14;
+  color: #fff;
+}
+
+/* Botón de eliminar (rojo / danger) */
+.btn-eliminar {
+  --bs-btn-bg: #dc3545;                /* rojo */
+  --bs-btn-border-color: #dc3545;
+  --bs-btn-hover-bg: #bb2d3b;          /* hover */
+  --bs-btn-hover-border-color: #b02a37;
+  --bs-btn-active-bg: #b02a37;         /* active */
+  --bs-btn-active-border-color: #a52834;
+  --bs-btn-disabled-bg: #dc3545;       /* disabled */
+  --bs-btn-disabled-border-color: #dc3545;
+  color: #fff;
+}

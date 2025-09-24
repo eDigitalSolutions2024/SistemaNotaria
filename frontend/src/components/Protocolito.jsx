@@ -7,6 +7,7 @@ import {
   Button, TextField
 } from '@mui/material';
 import { useAuth } from '../auth/AuthContext'; // ⬅️ para saber si es admin
+import '../css/styles.css';
 
 const API = process.env.REACT_APP_API_URL || 'http://localhost:4000';
 
@@ -364,8 +365,8 @@ export default function Protocolito() {
     width: 200,
     renderCell: (params) => (
       <>
-        <button onClick={() => onEdit(params.row)}>Editar</button>
-        <button onClick={() => onDelete(params.row._id)} style={{ marginLeft: 8 }}>Eliminar</button>
+        <button className="btn btn-primary btn-editar" onClick={() => onEdit(params.row)}>Editar</button>
+        <button className="btn btn-primary btn-rliminar" onClick={() => onDelete(params.row._id)} style={{ marginLeft: 8 }}>Eliminar</button>
       </>
     )
   };
@@ -425,7 +426,7 @@ export default function Protocolito() {
 
       {/* Barra de acciones */}
       <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
-        <button onClick={startAdd} disabled={adding || editingId}>+ Agregar trámite</button>
+        <button className="btn btn-primary" onClick={startAdd} disabled={adding || editingId}>+ Agregar trámite</button>
 
         {/* Importar Excel */}
         <input
@@ -435,7 +436,7 @@ export default function Protocolito() {
           style={{ display: 'none' }}
           onChange={handleSelectFile}
         />
-        <button onClick={() => fileInputRef.current?.click()} disabled={importing}>
+        <button className="btn btn-primary btn-excel" onClick={() => fileInputRef.current?.click()} disabled={importing}>
           {importing ? 'Importando…' : 'Importar Excel'}
         </button>
         <a href={`${API}/protocolito/template`} target="_blank" rel="noreferrer">
@@ -449,7 +450,7 @@ export default function Protocolito() {
           onChange={e => setQ(e.target.value)}
           style={{ flex: 1, minWidth: 260, maxWidth: 480 }}
         />
-        <button onClick={fetchData}>Actualizar</button>
+        <button className='btn btn-primary' onClick={fetchData}>Actualizar</button>
       </div>
 
       {/* Mensajes */}
