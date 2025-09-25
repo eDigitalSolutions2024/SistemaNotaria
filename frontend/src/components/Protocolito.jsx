@@ -6,11 +6,12 @@ import {
   Dialog, DialogTitle, DialogContent, DialogActions,
   Button, TextField
 } from '@mui/material';
-import { useAuth } from '../auth/AuthContext'; // ⬅️ para saber si es admin
+import { useAuth } from '../auth/AuthContext';
 import '../css/styles.css';
 
 const API = process.env.REACT_APP_API_URL || 'http://localhost:4000';
 
+// ----- utils -----
 const emptyRow = {
   _id: null,
   numeroTramite: '',
@@ -28,25 +29,21 @@ function formatDateInput(d) {
   const dd = String(date.getDate()).padStart(2, '0');
   return `${yyyy}-${mm}-${dd}`;
 }
-
-// normaliza texto (sin acentos, lowercase)
 const norm = (s) =>
   String(s || '')
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase();
 
-// candidato a Protocolito: acción contiene “iniciar”
 const isEligible = (c) => norm(c?.accion).includes('iniciar');
 
-// timestamp util para ordenar por “más reciente”
 const timeOf = (r) => {
   const v = r?.hora_llegada ?? r?.horaLlegada ?? r?.createdAt ?? r?.fecha;
   const t = v ? new Date(v).getTime() : 0;
   return Number.isFinite(t) ? t : 0;
 };
 
-// mapea datos de cliente a protocolo (para previsualizar)
+// >>> PRIORIZA MOTIVO PARA TIPO DE TRÁMITE <<<
 function applyClienteToProtocolito(cliente, prev) {
   const fechaISO = cliente?.hora_llegada
     ? formatDateInput(cliente.hora_llegada)
@@ -54,15 +51,20 @@ function applyClienteToProtocolito(cliente, prev) {
   return {
     ...prev,
     cliente: cliente?.nombre || prev.cliente,
-    tipoTramite: cliente?.servicio || cliente?.accion || prev.tipoTramite,
+    tipoTramite:
+      cliente?.motivo ||
+      cliente?.tipoTramite ||
+      cliente?.servicio ||
+      cliente?.accion ||
+      prev.tipoTramite,
     abogado: cliente?.abogado || prev.abogado,
     fecha: prev.fecha || fechaISO,
   };
 }
 
-// helper para soportar ambas firmas de valueGetter (params) o (value,row)
 const pickRowFromVG = (p, row) => (p && p.row) ? p.row : (row || p || {});
 
+// ----- componente -----
 export default function Protocolito() {
   const { user } = useAuth();
   const isAdmin = user?.role === 'admin';
@@ -79,51 +81,41 @@ export default function Protocolito() {
   const fileInputRef = useRef(null);
   const [importing, setImporting] = useState(false);
 
-  // ---------- Selector de clientes (modal) ----------
+  // Picker clientes
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pickerQ, setPickerQ] = useState('');
   const [pickerLoading, setPickerLoading] = useState(false);
   const [pickerRows, setPickerRows] = useState([]);
-  const [pickerTarget, setPickerTarget] = useState(null); // 'new' | id en edición
+  const [pickerTarget, setPickerTarget] = useState(null); // 'new' | id
   const pickerTimer = useRef(null);
 
   const fetchPicker = async (query) => {
-    const qstr = norm(query);
     setPickerLoading(true);
     try {
       let list = [];
-
-      // 1) intentar /clientes/search
       try {
         const { data } = await axios.get(`${API}/clientes/search`, {
           params: { q: query, status: 'iniciar' }
         });
         if (Array.isArray(data) && data.length) list = data;
-      } catch {
-        // sigue al fallback
-      }
+      } catch { /* fallback */ }
 
-      // 2) fallback a /clientes
       if (!Array.isArray(list) || list.length === 0) {
         const { data } = await axios.get(`${API}/clientes`);
         list = Array.isArray(data) ? data : [];
       }
 
-      // 3) filtrar a elegibles (iniciar trámite)
+      const qstr = norm(query);
       let elegibles = list.filter(isEligible);
-
-      // 4) filtro de texto (nombre/abogado)
       if (qstr) {
         elegibles = elegibles.filter(
-          (c) => norm(c?.nombre).includes(qstr) || norm(c?.abogado).includes(qstr)
+          (c) =>
+            norm(c?.nombre).includes(qstr) ||
+            norm(c?.abogado).includes(qstr) ||
+            norm(c?.motivo).includes(qstr) // incluir motivo en búsqueda local
         );
       }
-
-      // 5) ordenar por más reciente (hora_llegada/createdAt/fecha) DESC
-      elegibles = (Array.isArray(elegibles) ? elegibles : [])
-        .filter(Boolean)
-        .sort((a, b) => timeOf(b) - timeOf(a));
-
+      elegibles = elegibles.filter(Boolean).sort((a, b) => timeOf(b) - timeOf(a));
       setPickerRows(elegibles);
     } catch {
       setPickerRows([]);
@@ -133,19 +125,16 @@ export default function Protocolito() {
   };
 
   const openPickerFor = (target) => {
-    setPickerTarget(target); // 'new' o editingId
+    setPickerTarget(target);
     setPickerOpen(true);
     setPickerQ('');
     fetchPicker('');
   };
-
   const onChangePickerQ = (v) => {
     setPickerQ(v);
     clearTimeout(pickerTimer.current);
     pickerTimer.current = setTimeout(() => fetchPicker(v), 250);
   };
-
-  // seleccionar cliente del picker
   const selectClienteFromPicker = (cliente) => {
     if (!cliente) return;
     if (pickerTarget === 'new') {
@@ -159,7 +148,6 @@ export default function Protocolito() {
     }
     setPickerOpen(false);
   };
-  // --------------------------------------------------
 
   const fetchData = async () => {
     setLoading(true);
@@ -167,24 +155,24 @@ export default function Protocolito() {
       const { data } = await axios.get(`${API}/Protocolito`, {
         params: q ? { q } : {}
       });
-      setRows(Array.isArray(data) ? data : []); // defensivo
+      setRows(Array.isArray(data) ? data : []);
     } catch (err) {
       setMsg({ type: 'error', text: err.response?.data?.mensaje || 'Error cargando datos' });
     } finally {
       setLoading(false);
     }
   };
-
   useEffect(() => { fetchData(); }, [q]);
 
-  // ====== Acciones ======
+  // acciones
   const onEdit = (row) => {
     setEditingId(row._id);
     setDrafts(prev => ({
       ...prev,
       [row._id]: {
         numeroTramite: row.numeroTramite,
-        tipoTramite: row.tipoTramite,
+        // preferimos lo que ya venga guardado en BD
+        tipoTramite: row.tipoTramite || row.motivo || row.servicio || row.accion || '',
         cliente: row.cliente,
         fecha: formatDateInput(row.fecha),
         abogado: row.abogado
@@ -208,14 +196,10 @@ export default function Protocolito() {
   };
 
   const onChangeDraft = (id, field, value) => {
-    if (id === 'new') {
-      setNewRow(prev => ({ ...prev, [field]: value }));
-    } else {
-      setDrafts(prev => ({ ...prev, [id]: { ...prev[id], [field]: value } }));
-    }
+    if (id === 'new') setNewRow(prev => ({ ...prev, [field]: value }));
+    else setDrafts(prev => ({ ...prev, [id]: { ...prev[id], [field]: value } }));
   };
 
-  // Validación para EDITAR
   const validateRow = ({ numeroTramite, tipoTramite, cliente, fecha, abogado }) => {
     if (!numeroTramite || !tipoTramite || !cliente || !fecha || !abogado) {
       return 'Todos los campos son obligatorios';
@@ -224,12 +208,10 @@ export default function Protocolito() {
     return null;
   };
 
-  // Guardar NUEVO: solo con clienteId, backend completa y genera el número
+  // crear (autogenera número en backend)
   const onSaveNew = async () => {
     const cid = selectedCliente?._id || selectedCliente?.id;
-    if (!cid) {
-      return setMsg({ type: 'warn', text: 'Selecciona un cliente primero' });
-    }
+    if (!cid) return setMsg({ type: 'warn', text: 'Selecciona un cliente primero' });
     try {
       const payload = { clienteId: cid };
       const { data } = await axios.post(`${API}/Protocolito`, payload);
@@ -252,9 +234,9 @@ export default function Protocolito() {
     try {
       const payload = {
         numeroTramite: Number(draft.numeroTramite),
-        tipoTramite: draft.tipoTramite.trim(),
+        tipoTramite: draft.tipoTramite.trim(), // ya es “motivo” en flujo nuevo
         cliente: draft.cliente.trim(),
-        fecha: draft.fecha, // YYYY-MM-DD
+        fecha: draft.fecha,
         abogado: draft.abogado.trim()
       };
       await axios.put(`${API}/Protocolito/${id}`, payload);
@@ -301,8 +283,9 @@ export default function Protocolito() {
       await fetchData();
       setMsg({
         type: 'ok',
-        text: `Importado: recibidas=${data.recibidas}, procesadas=${data.procesadas}, insertadas=${data.insertadas}, actualizadas=${data.actualizadas}` +
-              (data.errores?.length ? `, con ${data.errores.length} fila(s) con error` : '')
+        text:
+          `Importado: recibidas=${data.recibidas}, procesadas=${data.procesadas}, insertadas=${data.insertadas}, actualizadas=${data.actualizadas}` +
+          (data.errores?.length ? `, con ${data.errores.length} fila(s) con error` : '')
       });
     } catch (err2) {
       const t = err2.response?.data?.mensaje || 'Error al importar';
@@ -313,34 +296,34 @@ export default function Protocolito() {
     }
   };
 
-  // Muestra solo la fecha (dd/mm/aaaa) desde lo que venga del backend
   const onlyDate = (raw) => {
     if (!raw) return '—';
-    // 1) Si parsea como Date (ISO, Date, timestamp), úsalo
     const d = raw instanceof Date ? raw : new Date(raw);
     if (!Number.isNaN(d.getTime())) return d.toLocaleDateString('es-MX');
-
-    // 2) Fallback: si trae 'YYYY-MM-DD', úsalo tal cual
     const m = String(raw).match(/\d{4}-\d{2}-\d{2}/);
     if (m) return m[0];
-
-    // 3) Último recurso: intenta cortar antes de la "T"
     const i = String(raw).indexOf('T');
     return i > 0 ? String(raw).slice(0, i) : String(raw);
   };
 
-  // ====== Columnas de la tabla principal ======
+  // columnas tabla principal
   const baseColumns = [
     { field: 'numeroTramite', headerName: '# Trámite', width: 130, type: 'number' },
-    { field: 'tipoTramite',   headerName: 'Tipo de trámite', flex: 1, minWidth: 160 },
-    { field: 'cliente',       headerName: 'Cliente',         flex: 1.2, minWidth: 200 },
+    {
+      field: 'tipoTramite',
+      headerName: 'Tipo de trámite',
+      flex: 1, minWidth: 160,
+      valueGetter: (p, row) => {
+        const r = p?.row ?? row ?? {};
+        return r.tipoTramite || r.motivo || r.servicio || r.accion || '—';
+      }
+    },
+    { field: 'cliente', headerName: 'Cliente', flex: 1.2, minWidth: 200 },
     {
       field: 'fecha',
       headerName: 'Fecha',
       width: 140,
-      // Solo mostramos texto formateado
       renderCell: (params) => onlyDate(params?.row?.fecha),
-      // Ordenar por la fecha cruda del row (no por el texto renderizado)
       sortComparator: (_v1, _v2, cellParams1, cellParams2) => {
         const ra = cellParams1?.row?.fecha;
         const rb = cellParams2?.row?.fecha;
@@ -349,31 +332,29 @@ export default function Protocolito() {
         return (Number.isNaN(ta) ? 0 : ta) - (Number.isNaN(tb) ? 0 : tb);
       },
     },
-    {
-      field: 'abogado',
-      headerName: 'Abogado',
-      width: 180,
-    },
+    { field: 'abogado', headerName: 'Abogado', width: 180 },
   ];
 
-  // Columna de acciones SOLO si es admin
   const actionsColumn = {
     field: 'acciones',
     headerName: 'Acciones',
     sortable: false,
     filterable: false,
-    width: 200,
+    width: 290,
     renderCell: (params) => (
       <>
         <button className="btn btn-primary btn-editar" onClick={() => onEdit(params.row)}>Editar</button>
+        
         <button className="btn btn-primary btn-eliminar" onClick={() => onDelete(params.row._id)} style={{ marginLeft: 8 }}>Eliminar</button>
+        
+        <button className="btn btn-primary btn-editar"  >Recibo</button>
       </>
     )
   };
 
   const columns = isAdmin ? [...baseColumns, actionsColumn] : baseColumns;
 
-  // ====== Columnas del selector de clientes ======
+  // columnas picker
   const pickerCols = [
     {
       field: 'id',
@@ -392,12 +373,12 @@ export default function Protocolito() {
       valueGetter: (p, row) => pickRowFromVG(p, row)?.abogado || '—'
     },
     {
-      field: 'servicio',
-      headerName: 'Servicio/Acción',
-      width: 180,
+      field: 'motivo',
+      headerName: 'Motivo / Servicio',
+      width: 200,
       valueGetter: (p, row) => {
         const r = pickRowFromVG(p, row);
-        return r?.servicio || r?.accion || '—';
+        return r?.motivo || r?.servicio || r?.accion || r?.tipoTramite || '—';
       }
     },
     {
@@ -469,7 +450,7 @@ export default function Protocolito() {
         </div>
       )}
 
-      {/* Panel de agregar (preview) */}
+      {/* Panel de agregar */}
       {adding && (
         <div style={{ display: 'grid', gridTemplateColumns: '140px 1fr 1.2fr 180px 220px auto', gap: 8, marginBottom: 12 }}>
           <Button variant="outlined" onClick={() => openPickerFor('new')}>
@@ -581,7 +562,7 @@ export default function Protocolito() {
           pageSizeOptions={[10, 25, 50, 100]}
           initialState={{
             pagination: { paginationModel: { pageSize: 25, page: 0 } },
-            sorting: { sortModel: [{ field: 'fecha', sort: 'desc' }] } // más reciente primero
+            sorting: { sortModel: [{ field: 'fecha', sort: 'desc' }] }
           }}
           disableRowSelectionOnClick
           sx={{

@@ -214,7 +214,7 @@ router.get('/', async (req, res) => {
 router.post('/', async (req, res) => {
   try {
     const { clienteId } = req.body;
-    let { tipoTramite, cliente, fecha, abogado } = req.body;
+    let { tipoTramite, cliente, fecha, abogado, motivo } = req.body;
 
     // --- Completar desde Cliente (si se manda clienteId) ---
     if (clienteId) {
@@ -225,7 +225,7 @@ router.post('/', async (req, res) => {
       if (!c) return res.status(404).json({ mensaje: 'Cliente no encontrado' });
 
       const tipoFromC =
-        c.servicio || c.tipoTramite || c.accion;
+        c.motivo || c.tipoTramite || c.servicio || c.accion;
 
       // toma primero nombre si ya viene poblado, si no el _id, o cualquier otro campo
       let abogadoFromC =
@@ -296,7 +296,7 @@ router.post('/', async (req, res) => {
     const abogadoNombre = (await resolveNombreAbogado(abogado)) || '—';
 
     const payload = {
-      tipoTramite: String(tipoTramite).trim(),
+      tipoTramite: String(tipoTramite || motivo).trim(),
       cliente:     String(cliente).trim(),
       fecha:       fechaOk,
       abogado:     String(abogadoNombre).trim(), // <-- se guarda NOMBRE

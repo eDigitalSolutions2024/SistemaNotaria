@@ -2,11 +2,14 @@
 import React, { useState } from 'react';
 import axios from 'axios';
 import { useAuth } from '../auth/AuthContext';
+ 
+// ⬇️ Si en cambio el logo está en public/logo.png, comenta la línea de arriba y usa esta:
+const logo = '/logo.png';
 
-const API = process.env.REACT_APP_API_URL || 'http://localhost:8020';
+const API = process.env.REACT_APP_API_URL || 'http://localhost:8010';
 
 export default function Login() {
-  const { login } = useAuth(); // del AuthContext: guarda token+user y marca autenticado
+  const { login } = useAuth();
   const [user, setUser] = useState('');
   const [password, setPassword] = useState('');
   const [showPwd, setShowPwd] = useState(false);
@@ -16,7 +19,6 @@ export default function Login() {
   const onSubmit = async (e) => {
     e.preventDefault();
     setMsg(null);
-
     if (!user.trim() || !password) {
       setMsg({ type: 'warn', text: 'Ingresa usuario y contraseña.' });
       return;
@@ -25,19 +27,12 @@ export default function Login() {
     setLoading(true);
     try {
       const { data } = await axios.post(`${API}/auth/login`, {
-        user: user.trim(),           // puede ser _id, código, nombre, etc.
+        user: user.trim(),
         password,
       });
 
-      // data: { token, user: {...} }
-      if (!data?.token || !data?.user) {
-        throw new Error('Respuesta inválida del servidor');
-      }
-
-      // Persiste sesión en el contexto (y localStorage dentro del contexto)
+      if (!data?.token || !data?.user) throw new Error('Respuesta inválida del servidor');
       login({ token: data.token, user: data.user });
-
-      // No hacemos redirect aquí; App/Router mostrará la MainPage al estar logueado
     } catch (err) {
       const t =
         err.response?.data?.mensaje ||
@@ -53,7 +48,12 @@ export default function Login() {
   return (
     <div style={styles.wrap}>
       <form onSubmit={onSubmit} style={styles.card}>
-        <h2 style={{ margin: 0, marginBottom: 16 }}>Iniciar sesión</h2>
+        {/* Logo */}
+        <div style={styles.logoWrap}>
+          <img src={logo} alt="Logo" style={styles.logo} />
+        </div>
+
+        <h2 style={{ margin: 0, marginBottom: 16, textAlign: 'center' }}>Iniciar sesión</h2>
 
         <input
           autoFocus
@@ -76,7 +76,7 @@ export default function Login() {
           />
           <button
             type="button"
-            onClick={() => setShowPwd(s => !s)}
+            onClick={() => setShowPwd((s) => !s)}
             style={styles.eyeBtn}
             tabIndex={-1}
           >
@@ -134,6 +134,15 @@ const styles = {
     display: 'flex',
     flexDirection: 'column',
     gap: 10,
+  },
+  logoWrap: {
+    display: 'flex',
+    justifyContent: 'center',
+    marginBottom: 10,
+  },
+  logo: {
+    height: 64,            // ajusta a tu gusto
+    objectFit: 'contain',
   },
   input: {
     width: '100%',

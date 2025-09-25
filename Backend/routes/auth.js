@@ -28,6 +28,20 @@ router.post('/login', async (req, res) => {
       return res.status(404).json({ mensaje: 'Usuario no encontrado' });
     }
 
+    // justo antes de validatePassword
+console.log('[LOGIN] body:', { user, hasPwd: !!password, len: password?.length, env: process.env.NODE_ENV });
+
+if (/^\d+$/.test(String(user))) {
+  console.log('[LOGIN] intento por _id numérico:', user);
+}
+
+if (!abogado) console.log('[LOGIN] fallback por nombre:', user);
+if (abogado) console.log('[LOGIN] candidato:', {
+  _id: String(abogado._id),
+  nombre: abogado.nombre,
+  usuario: abogado.usuario,
+  numero: abogado.numero,
+});
     const ok = await abogado.validatePassword(password);
     if (!ok) return res.status(401).json({ mensaje: 'Credenciales inválidas' });
 
