@@ -1,5 +1,5 @@
 .btn-excel{
-  --bs-btn-bg: #198754;                /* fondo */
+  --bs-btn-bg: #198754 !important;                /* fondo */
   --bs-btn-border-color: #198754;      /* borde */
   --bs-btn-hover-bg: #157347;          /* hover */
   --bs-btn-hover-border-color: #146c43;
@@ -11,7 +11,7 @@
 
 /* Botón de editar (naranja / warning) */
 .btn-editar {
-  --bs-btn-bg: #fd7e14;                /* naranja */
+  --bs-btn-bg: #fd7e14 !important;                /* naranja */
   --bs-btn-border-color: #fd7e14;
   --bs-btn-hover-bg: #e96b0c;          /* hover */
   --bs-btn-hover-border-color: #cf5f0b;
@@ -24,7 +24,7 @@
 
 /* Botón de eliminar (rojo / danger) */
 .btn-eliminar {
-  --bs-btn-bg: #dc3545;                /* rojo */
+  --bs-btn-bg: #dc3545 !important;                /* rojo */
   --bs-btn-border-color: #dc3545;
   --bs-btn-hover-bg: #bb2d3b;          /* hover */
   --bs-btn-hover-border-color: #b02a37;

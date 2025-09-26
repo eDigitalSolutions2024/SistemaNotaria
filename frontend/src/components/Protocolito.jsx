@@ -4,7 +4,7 @@ import axios from 'axios';
 import { DataGrid } from '@mui/x-data-grid';
 import {
   Dialog, DialogTitle, DialogContent, DialogActions,
-  Button, TextField
+  Button, TextField, Menu, MenuItem
 } from '@mui/material';
 import { useAuth } from '../auth/AuthContext';
 import '../css/styles.css';
@@ -42,6 +42,11 @@ const timeOf = (r) => {
   const t = v ? new Date(v).getTime() : 0;
   return Number.isFinite(t) ? t : 0;
 };
+
+// helpers para filtrado por tipo
+const tipoFromRow = (r) =>
+  (r?.tipoTramite || r?.motivo || r?.servicio || r?.accion || '').trim();
+const incluye = (txt, needle) => norm(txt).includes(norm(needle));
 
 // >>> PRIORIZA MOTIVO PARA TIPO DE TRÁMITE <<<
 function applyClienteToProtocolito(cliente, prev) {
@@ -89,6 +94,44 @@ export default function Protocolito() {
   const [pickerTarget, setPickerTarget] = useState(null); // 'new' | id
   const pickerTimer = useRef(null);
 
+  // plantillas .docx
+  const [plantillas, setPlantillas] = useState([]);
+  const [tplAnchorEl, setTplAnchorEl] = useState(null); // ancla del menú
+  const [tplRow, setTplRow] = useState(null);           // fila objetivo del menú
+  const [tplOptions, setTplOptions] = useState([]);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const { data } = await axios.get(`${API}/plantillas`);
+        setPlantillas(Array.isArray(data) ? data : []);
+      } catch {
+        setPlantillas([]);
+      }
+    })();
+  }, []);
+
+  // Abre menú y filtra opciones por tipo de trámite (de momento solo "Poder")
+  const openTplMenu = (evt, row) => {
+    setTplAnchorEl(evt.currentTarget);
+    setTplRow(row);
+
+    const tipo = tipoFromRow(row);
+    const opciones = incluye(tipo, 'poder')
+      ? plantillas.filter(p => incluye(p.label, 'poder'))
+      : [];
+
+    setTplOptions(opciones);
+  };
+
+  const closeTplMenu = () => { setTplAnchorEl(null); setTplRow(null); setTplOptions([]); };
+
+  // descarga directa
+  const descargarPlantilla = (key) => {
+    window.location.href = `${API}/plantillas/${key}/download`;
+    closeTplMenu();
+  };
+
   const fetchPicker = async (query) => {
     setPickerLoading(true);
     try {
@@ -112,7 +155,7 @@ export default function Protocolito() {
           (c) =>
             norm(c?.nombre).includes(qstr) ||
             norm(c?.abogado).includes(qstr) ||
-            norm(c?.motivo).includes(qstr) // incluir motivo en búsqueda local
+            norm(c?.motivo).includes(qstr)
         );
       }
       elegibles = elegibles.filter(Boolean).sort((a, b) => timeOf(b) - timeOf(a));
@@ -306,23 +349,23 @@ export default function Protocolito() {
     return i > 0 ? String(raw).slice(0, i) : String(raw);
   };
 
-  // columnas tabla principal
+  // columnas tabla principal (compactas y fluidas)
   const baseColumns = [
-    { field: 'numeroTramite', headerName: '# Trámite', width: 130, type: 'number' },
+    { field: 'numeroTramite', headerName: '# Trámite', width: 110, minWidth: 100, type: 'number' },
     {
       field: 'tipoTramite',
       headerName: 'Tipo de trámite',
-      flex: 1, minWidth: 160,
+      flex: 0.9, minWidth: 160,
       valueGetter: (p, row) => {
         const r = p?.row ?? row ?? {};
         return r.tipoTramite || r.motivo || r.servicio || r.accion || '—';
       }
     },
-    { field: 'cliente', headerName: 'Cliente', flex: 1.2, minWidth: 200 },
+    { field: 'cliente', headerName: 'Cliente', flex: 1.4, minWidth: 240 },
     {
       field: 'fecha',
       headerName: 'Fecha',
-      width: 140,
+      width: 120, minWidth: 110,
       renderCell: (params) => onlyDate(params?.row?.fecha),
       sortComparator: (_v1, _v2, cellParams1, cellParams2) => {
         const ra = cellParams1?.row?.fecha;
@@ -332,27 +375,59 @@ export default function Protocolito() {
         return (Number.isNaN(ta) ? 0 : ta) - (Number.isNaN(tb) ? 0 : tb);
       },
     },
-    { field: 'abogado', headerName: 'Abogado', width: 180 },
+    { field: 'abogado', headerName: 'Abogado', width: 140, minWidth: 130 },
   ];
+
+  const plantillasColumn = {
+    field: 'plantillas',
+    headerName: 'Plantillas',
+    width: 150, minWidth: 140,
+    sortable: false,
+    filterable: false,
+    renderCell: (params) => (
+      <button
+        className="btn btn-editar"
+        style={{ padding: '6px 10px', fontSize: 13 }}
+        onClick={(e) => openTplMenu(e, params.row)}
+      >
+        {incluye(tipoFromRow(params.row), 'poder') ? 'Descargar (Poder)' : 'Descargar'}
+      </button>
+    )
+  };
 
   const actionsColumn = {
     field: 'acciones',
     headerName: 'Acciones',
+    width: 230, minWidth: 210,
     sortable: false,
     filterable: false,
-    width: 290,
     renderCell: (params) => (
-      <>
-        <button className="btn btn-primary btn-editar" onClick={() => onEdit(params.row)}>Editar</button>
-        
-        <button className="btn btn-primary btn-eliminar" onClick={() => onDelete(params.row._id)} style={{ marginLeft: 8 }}>Eliminar</button>
-        
-        <button className="btn btn-primary btn-editar"  >Recibo</button>
-      </>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <button
+          className="btn btn-editar"
+          style={{ padding: '6px 10px', fontSize: 13 }}
+          onClick={() => onEdit(params.row)}
+        >
+          Editar
+        </button>
+        <button
+          className="btn btn-danger"
+          style={{ padding: '6px 10px', fontSize: 13 }}
+          onClick={() => onDelete(params.row._id)}
+        >
+          Eliminar
+        </button>
+        <button
+          className="btn btn-primary"
+          style={{ padding: '6px 10px', fontSize: 13 }}
+        >
+          Recibo
+        </button>
+      </div>
     )
   };
 
-  const columns = isAdmin ? [...baseColumns, actionsColumn] : baseColumns;
+  const columns = isAdmin ? [...baseColumns, plantillasColumn, actionsColumn] : [...baseColumns, plantillasColumn];
 
   // columnas picker
   const pickerCols = [
@@ -429,7 +504,7 @@ export default function Protocolito() {
           placeholder="Buscar por número, cliente, tipo o abogado"
           value={q}
           onChange={e => setQ(e.target.value)}
-          style={{ flex: 1, minWidth: 260, maxWidth: 480 }}
+          style={{ flex: 1, minWidth: 260, maxWidth: 520 }}
         />
         <button className='btn btn-primary' onClick={fetchData}>Actualizar</button>
       </div>
@@ -550,7 +625,7 @@ export default function Protocolito() {
       )}
 
       {/* Tabla principal */}
-      <div style={{ width: '100%' }}>
+      <div style={{ width: '100%', overflowX: 'auto' }}>
         <DataGrid
           rows={rows}
           getRowId={(row) =>
@@ -558,7 +633,8 @@ export default function Protocolito() {
           }
           columns={columns}
           loading={loading}
-          autoHeight
+          rowHeight={50}
+          density="standard"
           pageSizeOptions={[10, 25, 50, 100]}
           initialState={{
             pagination: { paginationModel: { pageSize: 25, page: 0 } },
@@ -567,9 +643,29 @@ export default function Protocolito() {
           disableRowSelectionOnClick
           sx={{
             border: '1px solid #eee',
-            '& .MuiDataGrid-columnHeaders': { backgroundColor: '#f5f5f5' }
+            '& .MuiDataGrid-columnHeaders': { backgroundColor: '#f5f5f5' },
+            '& .MuiDataGrid-cell': { py: 0.5 },
+            '& .MuiDataGrid-row': { maxHeight: 44 },
+            '& .MuiDataGrid-cellContent': { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }
           }}
         />
+
+        <Menu
+          anchorEl={tplAnchorEl}
+          open={Boolean(tplAnchorEl)}
+          onClose={closeTplMenu}
+        >
+          {tplOptions.length > 0
+            ? tplOptions.map(p => (
+                <MenuItem key={p.key} onClick={() => descargarPlantilla(p.key)}>
+                  {p.label}
+                </MenuItem>
+              ))
+            : <MenuItem disabled>
+                No hay plantillas para “{tplRow ? tipoFromRow(tplRow) : '—'}”
+              </MenuItem>}
+        </Menu>
+
       </div>
 
       {/* Modal selector de clientes */}

@@ -322,7 +322,3 @@ input[type="checkbox"] {
   background-color: #0056b3;
 }
 
-.table-scroll-x {
-  overflow-x: auto;
-  max-width: 100%;
-}

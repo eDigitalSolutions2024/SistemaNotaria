@@ -5,7 +5,7 @@ const router = express.Router();
 const Recibo = require('../models/Recibo');          // modelo de recibos
 const Protocolito = require('../models/Protocolito'); // modelo de protocolitos
 
-/ GET /api/recibos/protocolitos/numeros
+// GET /api/recibos/protocolitos/numeros
 // Devuelve [{ numeroTramite, cliente, abogado, fecha }, ...] para llenar el <select>
 router.get('recibos/protocolitos/numeros', async (_req, res) => {
   try {

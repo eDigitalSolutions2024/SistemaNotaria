@@ -5,7 +5,7 @@ const http = require('http');
 const path = require('path');
 const dotenv = require('dotenv');
 const authRoutes = require('./routes/auth');
-
+const recibosRouter = require('./routes/recibos');
 
 const socketIo = require('socket.io');
 const app = express();
@@ -56,7 +56,10 @@ app.use('/api/abogados', require('./routes/abogado'));
 app.use('/api/clientes', require('./routes/clientes'));
 app.use('/api/salas', require('./routes/salas'));
 app.use('/api/Protocolito', require('./routes/Protocolito'));
+app.use('/api/recibos', recibosRouter);
 
+console.log('✅ Montando /api/plantillas');
+app.use('/api/plantillas', require('./routes/plantillas'));
 
 app.get('/', (req, res) => {
   res.send('🚀 Servidor de Notaría corriendo correctamente');
