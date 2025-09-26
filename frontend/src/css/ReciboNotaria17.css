@@ -8,12 +8,15 @@
 
 /* contenedor de la página */
 .rn17 .recibo-wrap{
-  max-width: 100%;          /* antes 920px */
-  height: 500px;          /* más respiro */
-  padding: 0 16px;
+  max-width: 1200px;       /* más ancho */
+  width: 100%;
+  margin: 0 auto;
+  padding: 0 20px;
+  /* 🔧 Importante: NO altura fija para que el morado no se recorte */
+  /* height: 500px;  <-- elimina cualquier altura fija */
 }
 .rn17 h1{
-  font-size: 38px;     /* antes 44 */
+  font-size: 38px;
   margin: 10px 0 16px; 
 }
 
@@ -21,37 +24,43 @@
 .rn17 .card{
   background: var(--card);
   border: 1px solid var(--line);
-  border-radius: 18px;        /* esquinas más suaves */
-  padding: 20px;              /* antes 16px */
+  border-radius: 18px;
+  padding: 20px;
   box-shadow: 0 10px 30px rgba(0,0,0,.06);
+  width: 100% !important;       /* ocupar todo el ancho del wrap */
+  max-width: none !important;    /* por si Bootstrap/otra hoja limita */
+  display: flex;
+  flex-direction: column;
 }
 .rn17 .grid-2{
   display:grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 18px;                  /* antes 12px */
+  gap: 18px;
 }
+.rn17 .span-2{ grid-column: 1 / -1 }
 @media (max-width: 900px){ .rn17 .grid-2{ grid-template-columns:1fr } }
 
 /* campos */
 .rn17 .field{ display:flex; flex-direction:column; gap:8px }
 .rn17 .field label{
   color: var(--mut);
-  font-size: 1rem;            /* antes .9rem */
+  font-size: 1rem;
   font-weight: 700;
 }
 .rn17 .field input,
 .rn17 .field select{
-  padding: 14px 16px;         /* antes 10px 12px */
-  font-size: 1rem;            /* subir tamaño de texto */
+  padding: 14px 16px;
+  font-size: 1rem;
   border: 1px solid var(--line);
   border-radius: 12px;
   outline: none;
   background: #fff;
+  min-width: 0; /* evita desbordes en grid */
 }
 .rn17 .field input:focus,
 .rn17 .field select:focus{
   border-color:#b9c8ff;
-  box-shadow:0 0 0 4px #e7eeff; /* ring más visible */
+  box-shadow:0 0 0 4px #e7eeff;
 }
 .rn17 .field.err input{ border-color:#ff6b6b }
 .rn17 .field small{ color:#ff6b6b; font-size:.95rem }
@@ -61,7 +70,7 @@
 .rn17 .btn{
   border:1px solid var(--line);
   background:#fff;
-  padding: 12px 18px;         /* botón más grande */
+  padding: 12px 18px;
   border-radius:12px;
   cursor:pointer;
   font-size: 1rem;

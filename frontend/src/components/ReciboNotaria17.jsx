@@ -1,7 +1,9 @@
+// frontend/src/components/ReciboNotaria17.jsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import axios from "axios";
-import API_URL from "../api";
 import "../css/ReciboNotaria17.css";
+
+const API = process.env.REACT_APP_API_URL || "http://localhost:4000";
 
 export default function ReciboNotaria17() {
   const hoy = useMemo(() => new Date().toISOString().slice(0, 10), []);
@@ -29,35 +31,35 @@ export default function ReciboNotaria17() {
   const [numeroSel, setNumeroSel] = useState("");
   const loadedOnce = useRef(false);
 
-  // Cargar TODOS los números cuando el tipo sea Protocolito (una sola vez)
+  // Cargar números una sola vez cuando el tipo sea "Protocolito"
   useEffect(() => {
     if (f.tipoTramite !== "Protocolito") return;
     if (loadedOnce.current) return;
 
     setNumsLoading(true);
     setNumsError("");
+
+    const url = `${API}/recibos/protocolitos/numeros`;
     axios
-      .get(`http://localhost:8020/api/recibos/protocolitos/numeros`)
+      .get(url)
       .then(({ data }) => {
-        setProtocolitos(data?.data || []);
+        setProtocolitos(Array.isArray(data?.data) ? data.data : []);
         loadedOnce.current = true;
       })
-      .catch((e) =>
-        setNumsError(
-          e.response?.data?.msg || e.message || "Error cargando números"
-        )
-      )
+      .catch((e) => {
+        const msg = e.response?.data?.msg || e.message || "Network Error";
+        setNumsError(msg);
+      })
       .finally(() => setNumsLoading(false));
   }, [f.tipoTramite]);
 
-  // Al cambiar el número, traemos el detalle y autorrellenamos
+  // Al elegir # de protocolito, autorrellena campos
   async function handleSelectNumero(value) {
     setNumeroSel(value);
     if (!value) return;
+
     try {
-      const { data } = await axios.get(
-        `${API_URL}/recibos/protocolitos/${value}`
-      );
+      const { data } = await axios.get(`${API}/recibos/protocolitos/${encodeURIComponent(value)}`);
       const d = data?.data || {};
       setF((prev) => ({
         ...prev,
@@ -68,11 +70,11 @@ export default function ReciboNotaria17() {
         concepto:
           prev.concepto ||
           (d.numeroTramite
-            ? `Pago de trámite Protocolito #${d.numeroTramite}`
+            ? `Pago de Protocolito #${d.numeroTramite}`
             : "Pago de trámite Protocolito"),
       }));
     } catch (e) {
-      alert(e.response?.data?.msg || e.message);
+      alert(e.response?.data?.msg || e.message || "Error");
     }
   }
 
@@ -134,9 +136,7 @@ export default function ReciboNotaria17() {
                     </option>
                   ))}
                 </select>
-                {numsError && (
-                  <small style={{ color: "#ff6b6b" }}>{numsError}</small>
-                )}
+                {numsError && <small style={{ color: "#ff6b6b" }}>{numsError}</small>}
               </Field>
             )}
 
@@ -148,15 +148,10 @@ export default function ReciboNotaria17() {
             </Field>
 
             <Field label="Abogado Responsable">
-              <select
+              <input
                 value={f.abogado}
                 onChange={(e) => setF({ ...f, abogado: e.target.value })}
-              >
-                <option value="">Selecciona… (demo)</option>
-                <option>Lic. A</option>
-                <option>Lic. B</option>
-                <option>Lic. C</option>
-              </select>
+              />
             </Field>
 
             <Field label="Concepto" className="span-2">
@@ -267,7 +262,8 @@ function MoneyInput({ value, onChange, readOnly }) {
 
 function Preview({ onClose, data }) {
   const bloques = [false, true];
-  const monto = (n) => `$${Number(n || 0).toLocaleString("es-MX", { minimumFractionDigits: 2 })}`;
+  const monto = (n) =>
+    `$${Number(n || 0).toLocaleString("es-MX", { minimumFractionDigits: 2 })}`;
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
