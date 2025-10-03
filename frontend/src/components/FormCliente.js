@@ -4,10 +4,11 @@ import API_URL from '../api';
 
 export default function FormCliente({ onCreado }) {
   const [nombre, setNombre] = useState('');
+  const [telefono, setTelefono] = useState('');              // ← se enviará como numero_telefono
   const [tipoServicio, setTipoServicio] = useState('');
   const [tieneCita, setTieneCita] = useState(null);
   const [mensaje, setMensaje] = useState('');
-  const [abogadoPreferido, setAbogadoPreferido] = useState('');
+  const [abogadoPreferido, setAbogadoPreferido] = useState(''); // guardamos string del <select>, convertimos a Number al enviar
   const [abogados, setAbogados] = useState([]);
 
   useEffect(() => {
@@ -27,19 +28,27 @@ export default function FormCliente({ onCreado }) {
     e.preventDefault();
     setMensaje('');
 
+    // validación mínima del teléfono (requerido por el modelo)
+    const tel = telefono.trim();
+    if (!tel) {
+      setMensaje('Por favor ingresa el número de teléfono.');
+      return;
+    }
+
     try {
-      let abogadoAsignado = null;
+      let abogadoAsignadoNum = null;
 
       if (tieneCita) {
-        // 👈 IDs de Mongo son string; no uses parseInt
-        abogadoAsignado = abogadoPreferido || null;
+        // viene del select como string -> convertir a Number si no es vacío
+        abogadoAsignadoNum = abogadoPreferido !== '' ? Number(abogadoPreferido) : null;
       } else {
+        // Toma el primero de la lista (ajusta tu criterio si necesitas “disponible”)
         try {
           const resAbogado = await fetch(`${API_URL}/abogados`);
           const dataAbogado = await resAbogado.json();
           const lista = Array.isArray(dataAbogado) ? dataAbogado : [];
           if (resAbogado.ok && lista.length > 0) {
-            abogadoAsignado = lista[0]._id; // el primero disponible (ajusta tu criterio)
+            abogadoAsignadoNum = Number(lista[0]._id); // IDs numéricos
           } else {
             setMensaje('⚠️ No hay abogados disponibles. El cliente se registrará sin asignar.');
           }
@@ -48,38 +57,40 @@ export default function FormCliente({ onCreado }) {
         }
       }
 
-      // Crear cliente (envío ambos por si tu backend espera uno u otro)
+      const payload = {
+        nombre,
+        numero_telefono: tel,                 // ← nombre EXACTO del modelo
+        servicio: tipoServicio || '',         // tu modelo tiene `servicio`, además de `motivo/accion`
+        tieneCita: Boolean(tieneCita),
+        abogado_preferido: abogadoAsignadoNum, // ← Number (puede ser null)
+        abogado_asignado: abogadoAsignadoNum,  // ← Number (puede ser null)
+      };
+
       const response = await fetch(`${API_URL}/clientes`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          nombre,
-          tipoServicio,
-          tieneCita,
-          abogadoPreferido: abogadoAsignado,
-          abogado: abogadoAsignado
-        })
+        body: JSON.stringify(payload),
       });
 
       const data = await response.json();
 
       if (response.ok) {
         setMensaje(
-          data.abogado
-            ? `Cliente registrado con ID ${data.cliente._id} y asignado al abogado ${data.abogado.nombre}`
-            : `Cliente registrado en lista de espera con ID ${data.cliente._id}`
+          data?.abogado
+            ? `Cliente registrado con ID ${data.cliente?._id} y asignado al abogado ${data.abogado?.nombre || ''}`
+            : `Cliente registrado con ID ${data.cliente?._id}`
         );
 
-        // 🔔 Notifica al padre para refrescar la tabla
         onCreado && onCreado(data.cliente);
 
         // Reset
         setNombre('');
+        setTelefono('');
         setTipoServicio('');
         setTieneCita(null);
         setAbogadoPreferido('');
       } else {
-        setMensaje('Error: ' + (data.mensaje || 'No se pudo registrar'));
+        setMensaje('Error: ' + (data?.mensaje || 'No se pudo registrar'));
       }
     } catch (error) {
       setMensaje('⚠️ Error al conectar con el servidor');
@@ -97,6 +108,23 @@ export default function FormCliente({ onCreado }) {
             className="form-control"
             value={nombre}
             onChange={(e) => setNombre(e.target.value)}
+            required
+          />
+        </div>
+
+        {/* Teléfono (requerido por el modelo) */}
+        <div className="mb-3">
+          <label>Número de teléfono:</label>
+          <input
+            type="tel"
+            className="form-control"
+            placeholder="Ej. 6560000000"
+            value={telefono}
+            onChange={(e) => {
+              // permitimos dígitos y + para internacionales
+              const v = e.target.value.replace(/[^\d+]/g, '').slice(0, 15);
+              setTelefono(v);
+            }}
             required
           />
         </div>
@@ -142,22 +170,27 @@ export default function FormCliente({ onCreado }) {
           </div>
 
           {tieneCita && (
-            <div className="form-group mt-2">
-              <label>Abogado con el que tiene cita:</label>
-              <select
-                className="form-control"
-                value={abogadoPreferido}
-                onChange={(e) => setAbogadoPreferido(e.target.value)}
-              >
-                <option value="">-- Selecciona un abogado --</option>
-                {abogados.map((abogado) => (
-                  <option key={abogado._id} value={abogado._id}>
-                    {abogado.nombre}
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
+  <div className="form-group mt-2">
+    <label>Abogado con el que tiene cita:</label>
+    <select
+      className="form-control"
+      value={abogadoPreferido}
+      onChange={(e) => setAbogadoPreferido(e.target.value)}
+    >
+      <option value="">-- Selecciona un abogado --</option>
+      {(abogados || [])
+        .filter(a => {
+          const r = String(a.role || '').toLowerCase();
+          return r === 'abogado' || r === 'asistente'  ;
+        })
+        .map((abogado) => (
+          <option key={abogado._id} value={abogado._id}>
+            {abogado.nombre}
+          </option>
+        ))}
+    </select>
+  </div>
+)}
         </div>
 
         <button type="submit" className="btn btn-primary">Registrar cliente</button>

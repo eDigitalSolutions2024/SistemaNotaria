@@ -6,6 +6,7 @@ import {
   Dialog, DialogTitle, DialogContent, DialogActions,
   Button, TextField, Menu, MenuItem
 } from '@mui/material';
+
 import { useAuth } from '../auth/AuthContext';
 import '../css/styles.css';
 
@@ -35,7 +36,11 @@ const norm = (s) =>
     .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase();
 
-const isEligible = (c) => norm(c?.accion).includes('iniciar');
+// Muestra en el picker tanto "Iniciar trámite" como "Finalizar trámite"
+const isEligible = (c) => {
+  const a = norm(c?.accion);
+  return a.includes('iniciar') || a.includes('finalizar');
+};
 
 const timeOf = (r) => {
   const v = r?.hora_llegada ?? r?.horaLlegada ?? r?.createdAt ?? r?.fecha;
@@ -47,6 +52,24 @@ const timeOf = (r) => {
 const tipoFromRow = (r) =>
   (r?.tipoTramite || r?.motivo || r?.servicio || r?.accion || '').trim();
 const incluye = (txt, needle) => norm(txt).includes(norm(needle));
+
+// --- Subtipos extensibles por tipo de trámite ---
+const SUBTIPOS_BY_TIPO = {
+  poder: ['Revocable', 'Irrevocable'],
+  // después puedes agregar más: escritura: [...], contrato: [...]
+};
+const getSubtipoFromTipo = (tipo) => {
+  const t = norm(tipo);
+  if (!t) return '';
+  if (t.includes('irrevocable')) return 'Irrevocable';
+  if (t.includes('revocable')) return 'Revocable';
+  return '';
+};
+const stripSubtipo = (tipo) =>
+  String(tipo || '')
+    .replace(/\b(ir)?revocable\b/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim();
 
 // >>> PRIORIZA MOTIVO PARA TIPO DE TRÁMITE <<<
 function applyClienteToProtocolito(cliente, prev) {
@@ -73,12 +96,19 @@ const pickRowFromVG = (p, row) => (p && p.row) ? p.row : (row || p || {});
 export default function Protocolito() {
   const { user } = useAuth();
   const isAdmin = user?.role === 'admin';
+  const canExport = ['ADMIN', 'PROTOCOLITO', 'RECEPCION', 'admin', 'protocolito', 'recepcion'].includes(user?.role);
+  const canDeliver = ['ADMIN', 'RECEPCION', 'admin', 'recepcion'].includes(user?.role);
+  const canSeeAll = ['ADMIN','RECEPCION','admin','recepcion'].includes(user?.role);
+  // Tomamos el nombre del abogado de la sesión (campo "nombre")
+  const currentUserName =
+    user?.nombre || user?.name || user?.fullName || user?.username || '';
 
   const [rows, setRows] = useState([]);
   const [editingId, setEditingId] = useState(null);
   const [drafts, setDrafts] = useState({});
   const [adding, setAdding] = useState(false);
   const [newRow, setNewRow] = useState(emptyRow);
+  const [newSubtipo, setNewSubtipo] = useState(''); // subtipo para "Poder"
   const [selectedCliente, setSelectedCliente] = useState(null);
   const [q, setQ] = useState('');
   const [loading, setLoading] = useState(false);
@@ -96,9 +126,104 @@ export default function Protocolito() {
 
   // plantillas .docx
   const [plantillas, setPlantillas] = useState([]);
-  const [tplAnchorEl, setTplAnchorEl] = useState(null); // ancla del menú
-  const [tplRow, setTplRow] = useState(null);           // fila objetivo del menú
+  const [tplAnchorEl, setTplAnchorEl] = useState(null);
+  const [tplRow, setTplRow] = useState(null);
   const [tplOptions, setTplOptions] = useState([]);
+
+  // --- Export ---
+  const [exportOpen, setExportOpen] = useState(false);
+  const [filtroFrom, setFiltroFrom] = useState('');
+  const [filtroTo, setFiltroTo] = useState('');
+  const [filtroCliente, setFiltroCliente] = useState('');
+  const [filtroAbogado, setFiltroAbogado] = useState('');
+
+  // --- Entregar ---
+  const [deliverOpen, setDeliverOpen] = useState(false);
+  const [deliverRow, setDeliverRow] = useState(null);
+  const [deliverPhone, setDeliverPhone] = useState('—');
+  const [deliverNotes, setDeliverNotes] = useState('');
+  const [deliverLoading, setDeliverLoading] = useState(false);
+
+
+// --- opciones de abogados para el modal de exportar (desde el CATÁLOGO del sistema) ---
+const [abogadosOpts, setAbogadosOpts] = useState([]);
+const [abogadosLoading, setAbogadosLoading] = useState(false);
+
+// Helper: nombre y rol
+const getUserName = (u) =>
+  (u?.nombre || u?.name || u?.fullName || u?.username || '').trim();
+
+const getUserRoles = (u) => {
+  const roles = [];
+  if (Array.isArray(u?.roles)) roles.push(...u.roles);
+  if (u?.role) roles.push(u.role);
+  if (u?.rol) roles.push(u.rol);
+  return roles.map((r) => String(r).toLocaleUpperCase('es-MX'));
+};
+
+// Carga desde endpoints comunes de usuarios; toma solo quienes tengan rol ABOGADO
+const loadAbogadosFromRegistry = async () => {
+  setAbogadosLoading(true);
+  try {
+    const attempt = async (url, params) => {
+      try {
+        const { data } = await axios.get(url, params ? { params } : undefined);
+        return data;
+      } catch {
+        return null;
+      }
+    };
+
+    // Intenta endpoints típicos de catálogo de usuarios (ajusta el que tengas en tu backend)
+    let raw =
+      (await attempt(`${API}/abogados`)) ||
+      (await attempt(`${API}/usuarios`, { rol: 'ABOGADO' })) ||
+      (await attempt(`${API}/users`, { role: 'ABOGADO' })) ||
+      (await attempt(`${API}/usuarios`)) ||
+      (await attempt(`${API}/users`));
+
+    let arr = Array.isArray(raw?.data) ? raw.data : (Array.isArray(raw) ? raw : []);
+    if (!Array.isArray(arr)) arr = [];
+
+    // Filtra solo ABOGADOS si el endpoint devuelve todos los usuarios
+    const soloAbogados = arr.filter((u) => {
+      const roles = getUserRoles(u);
+      // Ajusta si usas otro nombre para el rol
+      return roles.some((r) => /(ABOGADO|ASISTENTE)/i.test(r));
+    });
+
+    const uniq = new Set();
+    for (const u of soloAbogados) {
+      const name = getUserName(u);
+      if (name) uniq.add(name.toLocaleUpperCase('es-MX'));
+    }
+
+    setAbogadosOpts(Array.from(uniq).sort((a, b) => a.localeCompare(b, 'es')));
+  } finally {
+    setAbogadosLoading(false);
+  }
+};
+
+// Cargar listado cuando el modal se abre
+useEffect(() => {
+  if (exportOpen) loadAbogadosFromRegistry();
+}, [exportOpen]);
+
+
+  const buildExportUrl = (format) => {
+    const url = new URL(`${API}/protocolito/export`);
+    url.searchParams.set('format', format);
+    if (filtroFrom) url.searchParams.set('from', filtroFrom);
+    if (filtroTo) url.searchParams.set('to', filtroTo);
+    if (filtroCliente) url.searchParams.set('cliente', filtroCliente);
+    if (filtroAbogado) url.searchParams.set('abogado', filtroAbogado);
+    return url.toString();
+  };
+
+  const handleExport = (format) => {
+    const href = buildExportUrl(format);
+    window.open(href, '_blank');
+  };
 
   useEffect(() => {
     (async () => {
@@ -118,7 +243,7 @@ export default function Protocolito() {
 
     const tipo = tipoFromRow(row);
     const opciones = incluye(tipo, 'poder')
-      ? plantillas.filter(p => incluye(p.label, 'poder'))
+      ? plantillas.filter(p => incluye(p.label, 'PPCAAAD'))
       : [];
 
     setTplOptions(opciones);
@@ -138,7 +263,7 @@ export default function Protocolito() {
       let list = [];
       try {
         const { data } = await axios.get(`${API}/clientes/search`, {
-          params: { q: query, status: 'iniciar' }
+          params: { q: query}
         });
         if (Array.isArray(data) && data.length) list = data;
       } catch { /* fallback */ }
@@ -178,11 +303,15 @@ export default function Protocolito() {
     clearTimeout(pickerTimer.current);
     pickerTimer.current = setTimeout(() => fetchPicker(v), 250);
   };
+
   const selectClienteFromPicker = (cliente) => {
     if (!cliente) return;
     if (pickerTarget === 'new') {
       setSelectedCliente(cliente);
       setNewRow((prev) => applyClienteToProtocolito(cliente, prev));
+      const baseTipo =
+        cliente?.motivo || cliente?.tipoTramite || cliente?.servicio || cliente?.accion || '';
+      setNewSubtipo(getSubtipoFromTipo(baseTipo));
     } else if (pickerTarget) {
       setDrafts((prev) => ({
         ...prev,
@@ -195,7 +324,7 @@ export default function Protocolito() {
   const fetchData = async () => {
     setLoading(true);
     try {
-      const { data } = await axios.get(`${API}/Protocolito`, {
+      const { data } = await axios.get(`${API}/protocolito`, {
         params: q ? { q } : {}
       });
       setRows(Array.isArray(data) ? data : []);
@@ -229,6 +358,7 @@ export default function Protocolito() {
       setNewRow(emptyRow);
       setSelectedCliente(null);
       setAdding(false);
+      setNewSubtipo('');
     }
     setEditingId(null);
     setDrafts(prev => {
@@ -252,22 +382,71 @@ export default function Protocolito() {
   };
 
   // crear (autogenera número en backend)
-  const onSaveNew = async () => {
-    const cid = selectedCliente?._id || selectedCliente?.id;
-    if (!cid) return setMsg({ type: 'warn', text: 'Selecciona un cliente primero' });
-    try {
-      const payload = { clienteId: cid };
-      const { data } = await axios.post(`${API}/Protocolito`, payload);
-      await fetchData();
-      setNewRow(emptyRow);
-      setSelectedCliente(null);
-      setAdding(false);
-      setMsg({ type: 'ok', text: `Trámite ${data?.numeroTramite ?? ''} creado` });
-    } catch (err2) {
-      const t = err2.response?.data?.mensaje || 'Error al crear';
-      setMsg({ type: 'error', text: t });
+  // crear (autogenera número en backend) + guardar tipo con subtipo (Poder Revocable/Irrevocable)
+const onSaveNew = async () => {
+  const cid = selectedCliente?._id || selectedCliente?.id;
+  if (!cid) return setMsg({ type: 'warn', text: 'Selecciona un cliente primero' });
+
+  try {
+    // El tipo final ya incluye el subtipo porque lo actualizamos al cambiar el <select>
+    const finalTipo = String(newRow.tipoTramite || '').trim();
+
+    // 1) Crear (autogenera numeroTramite)
+    const { data: resp } = await axios.post(`${API}/protocolito`, { clienteId: cid });
+
+    // Intentamos obtener id y numeroTramite de la respuesta (según tu backend)
+    let createdId =
+      resp?.id || resp?._id || resp?.data?._id || null;
+    let createdNumero =
+      resp?.numeroTramite || resp?.data?.numeroTramite || null;
+
+    // 2) Si no tenemos id pero sí el número, buscamos el registro para obtener el _id
+    if (!createdId && createdNumero != null) {
+      try {
+        const { data: list } = await axios.get(`${API}/protocolito`, {
+          params: { q: String(createdNumero) }
+        });
+        const arr = Array.isArray(list) ? list : [];
+        const found = arr.find(
+          (r) => Number(r?.numeroTramite) === Number(createdNumero)
+        );
+        if (found?._id) {
+          createdId = found._id;
+          // por si el backend no regresó el número en el POST
+          createdNumero = createdNumero ?? found.numeroTramite;
+        }
+      } catch {
+        /* no pasa nada, continuamos */
+      }
     }
-  };
+
+    // 3) Si tenemos id, actualizamos para guardar el tipo con subtipo
+    //    (El PUT de edición exige: numeroTramite, tipoTramite, cliente, fecha, abogado)
+    if (createdId && finalTipo) {
+      // Aseguramos tener todos los campos requeridos por tu PUT
+      const payloadPut = {
+        numeroTramite: Number(createdNumero || 0),
+        tipoTramite: finalTipo,
+        cliente: String(newRow.cliente || ''),
+        fecha: newRow.fecha,            // ya viene en formato yyyy-mm-dd
+        abogado: String(newRow.abogado || ''),
+      };
+      await axios.put(`${API}/protocolito/${createdId}`, payloadPut);
+    }
+
+    // 4) Refrescamos y limpiamos UI
+    await fetchData();
+    setNewRow(emptyRow);
+    setSelectedCliente(null);
+    setAdding(false);
+    setNewSubtipo('');
+    setMsg({ type: 'ok', text: `Trámite ${createdNumero ?? ''} creado` });
+  } catch (err2) {
+    const t = err2.response?.data?.mensaje || 'Error al crear';
+    setMsg({ type: 'error', text: t });
+  }
+};
+
 
   const onSaveEdit = async (id) => {
     const draft = drafts[id];
@@ -277,12 +456,12 @@ export default function Protocolito() {
     try {
       const payload = {
         numeroTramite: Number(draft.numeroTramite),
-        tipoTramite: draft.tipoTramite.trim(), // ya es “motivo” en flujo nuevo
+        tipoTramite: draft.tipoTramite.trim(),
         cliente: draft.cliente.trim(),
         fecha: draft.fecha,
         abogado: draft.abogado.trim()
       };
-      await axios.put(`${API}/Protocolito/${id}`, payload);
+      await axios.put(`${API}/protocolito/${id}`, payload);
       await fetchData();
       onCancel(id);
       setMsg({ type: 'ok', text: 'Registro actualizado' });
@@ -297,7 +476,7 @@ export default function Protocolito() {
   const onDelete = async (id) => {
     if (!window.confirm('¿Eliminar este registro?')) return;
     try {
-      await axios.delete(`${API}/Protocolito/${id}`);
+      await axios.delete(`${API}/protocolito/${id}`);
       await fetchData();
       setMsg({ type: 'ok', text: 'Registro eliminado' });
     } catch (err2) {
@@ -309,6 +488,7 @@ export default function Protocolito() {
     setAdding(true);
     setNewRow(emptyRow);
     setSelectedCliente(null);
+    setNewSubtipo('');
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
@@ -349,7 +529,127 @@ export default function Protocolito() {
     return i > 0 ? String(raw).slice(0, i) : String(raw);
   };
 
-  // columnas tabla principal (compactas y fluidas)
+  // ======= NUEVO: flujo de Entregar =======
+  const openDeliver = async (row) => {
+    try {
+      setDeliverRow(row);
+      setDeliverPhone('—');
+      setDeliverNotes('');
+      setDeliverOpen(true);
+
+      const { data } = await axios.get(`${API}/protocolito/${row._id}/entrega-info`);
+      setDeliverPhone(data?.telefono || '—');
+    } catch {
+      setDeliverPhone('—');
+    }
+  };
+
+  const closeDeliver = () => {
+    setDeliverOpen(false);
+    setDeliverRow(null);
+    setDeliverPhone('—');
+    setDeliverNotes('');
+    setDeliverLoading(false);
+  };
+
+  const confirmDeliver = async () => {
+    if (!deliverRow?._id) return;
+    setDeliverLoading(true);
+    try {
+      await axios.post(`${API}/protocolito/${deliverRow._id}/entregar`, {
+        telefono: deliverPhone && deliverPhone !== '—' ? String(deliverPhone) : undefined,
+        notas: deliverNotes || undefined
+      });
+      setMsg({ type: 'ok', text: 'Trámite marcado como entregado' });
+      closeDeliver();
+      fetchData();
+    } catch (err) {
+      setMsg({ type: 'error', text: err.response?.data?.mensaje || 'No se pudo marcar como entregado' });
+      setDeliverLoading(false);
+    }
+  };
+  // ======= FIN NUEVO =======
+
+  // Abre/descarga el PDF del recibo más reciente cuyo "control" = numeroTramite
+  const openReciboPdf = async (row) => {
+    try {
+      const numero = row?.numeroTramite;
+      if (!numero) {
+        setMsg({ type: 'warn', text: 'Este registro no tiene # de trámite.' });
+        return;
+      }
+
+      // 1) Busca el último recibo guardado para este #Trámite (control)
+      const { data } = await axios.get(
+        `${API}/recibos/by-control/${encodeURIComponent(numero)}/latest`
+      );
+
+      // 2) Abre el PDF en una pestaña nueva
+      const pdfUrl = `${API}/recibos/${data.id}/pdf`;
+      window.open(pdfUrl, '_blank');
+    } catch (e) {
+      const msg =
+        e?.response?.data?.msg ||
+        (e?.response?.status === 404
+          ? 'No existe un recibo guardado para este trámite.'
+          : 'No se pudo abrir el PDF del recibo.');
+      setMsg({ type: 'warn', text: msg });
+    }
+  };
+
+  // Muestra el botón "Recibo" si existe; si no, un label gris "No tiene recibo"
+  const ReciboIndicator = ({ row }) => {
+    const numero = row?.numeroTramite;
+    const [estado, setEstado] = React.useState('loading'); // 'loading' | 'si' | 'no'
+
+    React.useEffect(() => {
+      let alive = true;
+      if (!numero) { setEstado('no'); return; }
+
+      (async () => {
+        try {
+          await axios.get(`${API}/recibos/by-control/${encodeURIComponent(numero)}/latest`);
+          if (alive) setEstado('si');
+        } catch {
+          if (alive) setEstado('no');
+        }
+      })();
+
+      return () => { alive = false; };
+    }, [numero]);
+
+    if (estado === 'si') {
+      return (
+        <button
+          className="btn btn-primary"
+          style={{ padding: '6px 10px', fontSize: 13 }}
+          onClick={() => openReciboPdf(row)}
+        >
+          Recibo
+        </button>
+      );
+    }
+
+    // label cuando no hay recibo
+    return (
+      <span
+        style={{
+          padding: '6px 10px',
+          fontSize: 13,
+          background: '#e9ecef',
+          border: '1px solid #dcdcdc',
+          borderRadius: 6,
+          lineHeight: 1.2,
+          cursor: 'default'
+        }}
+        title="No existe un recibo guardado para este trámite"
+      >
+        No tiene recibo
+      </span>
+    );
+  };
+
+  // columnas tabla principal
   const baseColumns = [
     { field: 'numeroTramite', headerName: '# Trámite', width: 110, minWidth: 100, type: 'number' },
     {
@@ -398,36 +698,55 @@ export default function Protocolito() {
   const actionsColumn = {
     field: 'acciones',
     headerName: 'Acciones',
-    width: 230, minWidth: 210,
+    width: 360, minWidth: 300,
     sortable: false,
     filterable: false,
-    renderCell: (params) => (
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-        <button
-          className="btn btn-editar"
-          style={{ padding: '6px 10px', fontSize: 13 }}
-          onClick={() => onEdit(params.row)}
-        >
-          Editar
-        </button>
-        <button
-          className="btn btn-danger"
-          style={{ padding: '6px 10px', fontSize: 13 }}
-          onClick={() => onDelete(params.row._id)}
-        >
-          Eliminar
-        </button>
-        <button
-          className="btn btn-primary"
-          style={{ padding: '6px 10px', fontSize: 13 }}
-        >
-          Recibo
-        </button>
-      </div>
-    )
+    renderCell: (params) => {
+      const r = params.row || {};
+      const entregado = r?.estatus_entrega === 'Entregado';
+      return (
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          {/* SOLO ADMIN */}
+          {isAdmin && (
+            <>
+              <button
+                className="btn btn-editar"
+                style={{ padding: '6px 10px', fontSize: 13 }}
+                onClick={() => onEdit(r)}
+              >
+                Editar
+              </button>
+              <button
+                className="btn btn-danger"
+                style={{ padding: '6px 10px', fontSize: 13 }}
+                onClick={() => onDelete(r._id)}
+              >
+                Eliminar
+              </button>
+            </>
+          )}
+          {canDeliver && <ReciboIndicator row={r} />}
+
+          {canDeliver && (
+            <button
+              className="btn btn-editar"
+              style={{ padding: '6px 10px', fontSize: 13, background: entregado ? '#e8e8e8' : undefined }}
+              disabled={entregado}
+              onClick={() => openDeliver(r)}
+              title={entregado ? 'Ya entregado' : 'Marcar como entregado'}
+            >
+              {entregado ? 'Entregado' : 'Entregar'}
+            </button>
+          )}
+        </div>
+      );
+    }
   };
 
-  const columns = isAdmin ? [...baseColumns, plantillasColumn, actionsColumn] : [...baseColumns, plantillasColumn];
+  const showActionsColumn = isAdmin || canDeliver;
+  const columns = showActionsColumn
+    ? [...baseColumns, plantillasColumn, actionsColumn]
+    : [...baseColumns, plantillasColumn];
 
   // columnas picker
   const pickerCols = [
@@ -476,6 +795,15 @@ export default function Protocolito() {
     }
   ];
 
+  // --- NUEVO: filas visibles según el rol ---
+  // Admin/Recepción ven todo. Los abogados ven solo sus propios trámites (coincidencia por nombre).
+  const visibleRows = React.useMemo(() => {
+    if (canSeeAll) return rows;          // admin/recepción
+    const me = norm(currentUserName);    // ej: "alexa lopez"
+    if (!me) return [];
+    return rows.filter(r => norm(r?.abogado).includes(me));
+  }, [rows, canSeeAll, currentUserName]);
+
   return (
     <div style={{ padding: 16 }}>
       <h2>Protocolito</h2>
@@ -495,9 +823,13 @@ export default function Protocolito() {
         <button className="btn btn-primary btn-excel" onClick={() => fileInputRef.current?.click()} disabled={importing}>
           {importing ? 'Importando…' : 'Importar Excel'}
         </button>
-        <a href={`${API}/protocolito/template`} target="_blank" rel="noreferrer">
-          Descargar plantilla
-        </a>
+
+        {/* Exportar */}
+        {canExport && (
+          <Button variant="text" onClick={() => setExportOpen(true)}>
+            Exportar protocolito
+          </Button>
+        )}
 
         <input
           type="text"
@@ -532,12 +864,11 @@ export default function Protocolito() {
             SELECCIONAR CLIENTE
           </Button>
 
+          {/* Oculto: número autogenerado */}
           <input
-            type="text"
-            value={newRow.numeroTramite ? String(newRow.numeroTramite) : 'Autogenerado'}
+            type="hidden"
+            value={newRow.numeroTramite ? String(newRow.numeroTramite) : ''}
             readOnly
-            disabled
-            placeholder="# Trámite"
           />
 
           <input
@@ -547,6 +878,26 @@ export default function Protocolito() {
             disabled
             placeholder="Tipo de trámite"
           />
+
+          {/* Subtipo visible si es PODER */}
+          {incluye(newRow.tipoTramite, 'poder') && (
+            <select
+              value={newSubtipo}
+              onChange={(e) => {
+                const v = e.target.value;
+                setNewSubtipo(v);
+                setNewRow((prev) => {
+                  const base = stripSubtipo(prev.tipoTramite || 'Poder');
+                  return { ...prev, tipoTramite: v ? `${base} ${v}` : base };
+                });
+              }}
+            >
+              <option value="">— Tipo de poder —</option>
+              {SUBTIPOS_BY_TIPO.poder.map((s) => (
+                <option key={s} value={s}>{s}</option>
+              ))}
+            </select>
+          )}
 
           <input
             type="text"
@@ -594,6 +945,27 @@ export default function Protocolito() {
             onChange={e => onChangeDraft(editingId, 'tipoTramite', e.target.value)}
             placeholder="Tipo de trámite"
           />
+
+          {/* Subtipo visible si es PODER */}
+          {incluye(drafts[editingId]?.tipoTramite || '', 'poder') && (
+            <select
+              value={getSubtipoFromTipo(drafts[editingId]?.tipoTramite || '')}
+              onChange={(e) => {
+                const v = e.target.value;
+                setDrafts((prev) => {
+                  const cur = prev[editingId] || {};
+                  const base = stripSubtipo(cur.tipoTramite || 'Poder');
+                  return { ...prev, [editingId]: { ...cur, tipoTramite: v ? `${base} ${v}` : base } };
+                });
+              }}
+            >
+              <option value="">— Tipo de poder —</option>
+              {SUBTIPOS_BY_TIPO.poder.map((s) => (
+                <option key={s} value={s}>{s}</option>
+              ))}
+            </select>
+          )}
+
           <div style={{ display: 'flex', gap: 8 }}>
             <input
               type="text"
@@ -627,7 +999,7 @@ export default function Protocolito() {
       {/* Tabla principal */}
       <div style={{ width: '100%', overflowX: 'auto' }}>
         <DataGrid
-          rows={rows}
+          rows={visibleRows}
           getRowId={(row) =>
             row?._id ?? row?.id ?? row?.numeroTramite ?? `${row?.cliente}-${row?.fecha}`
           }
@@ -698,6 +1070,125 @@ export default function Protocolito() {
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setPickerOpen(false)}>Cerrar</Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Modal Exportar protocolito */}
+      <Dialog open={exportOpen} onClose={() => setExportOpen(false)} fullWidth maxWidth="sm">
+        <DialogTitle>Exportar protocolito</DialogTitle>
+        <DialogContent dividers>
+          <div style={{ display: 'grid', gap: 12 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+              <TextField
+                label="Desde"
+                type="date"
+                size="small"
+                InputLabelProps={{ shrink: true }}
+                value={filtroFrom}
+                onChange={(e) => setFiltroFrom(e.target.value)}
+              />
+              <TextField
+                label="Hasta"
+                type="date"
+                size="small"
+                InputLabelProps={{ shrink: true }}
+                value={filtroTo}
+                onChange={(e) => setFiltroTo(e.target.value)}
+              />
+            </div>
+
+            <TextField
+              label="Cliente (contiene)"
+              placeholder="Ej. Juan Pérez"
+              size="small"
+              value={filtroCliente}
+              onChange={(e) => setFiltroCliente(e.target.value)}
+            />
+
+
+
+            <TextField
+              select
+              label="Abogado"
+              size="small"
+              value={filtroAbogado}
+              onChange={(e) => setFiltroAbogado(e.target.value)}
+              helperText="Selecciona un abogado para filtrar"
+            >
+              <MenuItem value="">(Todos)</MenuItem>
+              {abogadosLoading ? (
+                <MenuItem disabled>Cargando…</MenuItem>
+              ) : (
+                abogadosOpts.map((nombre) => (
+                  <MenuItem key={nombre} value={nombre}>
+                    {nombre}
+                  </MenuItem>
+                ))
+              )}
+            </TextField>
+
+
+
+
+
+          </div>
+        </DialogContent>
+        <DialogActions style={{ justifyContent: 'space-between' }}>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <Button variant="contained" onClick={() => handleExport('excel')}>
+              Exportar Excel
+            </Button>
+            <Button variant="outlined" onClick={() => handleExport('pdf')}>
+              Exportar PDF
+            </Button>
+          </div>
+          <Button onClick={() => setExportOpen(false)}>Cerrar</Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* NUEVO: Modal de Entregar */}
+      <Dialog open={deliverOpen} onClose={closeDeliver} fullWidth maxWidth="sm">
+        <DialogTitle>Entregar trámite</DialogTitle>
+        <DialogContent dividers>
+          <div style={{ display: 'grid', gap: 12 }}>
+            <TextField
+              label="Cliente"
+              size="small"
+              value={deliverRow?.cliente || '—'}
+              InputProps={{ readOnly: true }}
+            />
+            <TextField
+              label="Número de trámite"
+              size="small"
+              value={deliverRow?.numeroTramite ?? '—'}
+              InputProps={{ readOnly: true }}
+            />
+            <TextField
+              label="Teléfono"
+              size="small"
+              value={deliverPhone}
+              onChange={(e) => setDeliverPhone(e.target.value)}
+              helperText="Para contactar al cliente al momento de entrega"
+            />
+            <TextField
+              label="Notas"
+              size="small"
+              multiline
+              minRows={2}
+              value={deliverNotes}
+              onChange={(e) => setDeliverNotes(e.target.value)}
+            />
+          </div>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={closeDeliver}>Cancelar</Button>
+          <Button
+            variant="contained"
+            onClick={confirmDeliver}
+            disabled={deliverLoading}
+          >
+            {deliverLoading ? 'Entregando…' : 'Entregar'}
+          </Button>
         </DialogActions>
       </Dialog>
     </div>

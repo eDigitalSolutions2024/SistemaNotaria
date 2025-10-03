@@ -4,6 +4,7 @@ import axios from "axios";
 import "../css/ReciboNotaria17.css";
 
 const API = process.env.REACT_APP_API_URL || "http://localhost:4000";
+const SAVE_URL = `${API}/recibos`; // ← ajusta si tu backend usa otra ruta
 
 export default function ReciboNotaria17() {
   const hoy = useMemo(() => new Date().toISOString().slice(0, 10), []);
@@ -15,14 +16,18 @@ export default function ReciboNotaria17() {
     recibiDe: "",
     abogado: "",
     concepto: "",
-    control: "",
+    control: "",           // ← para Protocolito será “# Trámite”
     totalTramite: "",
     totalPagado: "",
+    // campos “del sistema” (ocultos en Protocolito)
     totalImpuestos: "",
     valorAvaluo: "",
     totalGastosExtra: "",
     totalHonorarios: "",
   });
+
+  // Para NO sobreescribir el concepto si el usuario ya lo modificó
+  const [conceptoTouched, setConceptoTouched] = useState(false);
 
   // lista y selección de protocolitos
   const [numsLoading, setNumsLoading] = useState(false);
@@ -31,11 +36,15 @@ export default function ReciboNotaria17() {
   const [numeroSel, setNumeroSel] = useState("");
   const loadedOnce = useRef(false);
 
+  // estado de guardado
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState("");
+  const [savedId, setSavedId] = useState(""); // folio/ID devuelto por el backend
+
   // Cargar números una sola vez cuando el tipo sea "Protocolito"
   useEffect(() => {
     if (f.tipoTramite !== "Protocolito") return;
     if (loadedOnce.current) return;
-
     setNumsLoading(true);
     setNumsError("");
 
@@ -53,46 +62,134 @@ export default function ReciboNotaria17() {
       .finally(() => setNumsLoading(false));
   }, [f.tipoTramite]);
 
-  // Al elegir # de protocolito, autorrellena campos
-  async function handleSelectNumero(value) {
-    setNumeroSel(value);
-    if (!value) return;
+  // Plantilla base editable en "Concepto" al cambiar tipo (sin pisar al usuario)
+  useEffect(() => {
+  if (conceptoTouched) return; // respetar lo que haya escrito el usuario
+  const yaTiene = String(f.concepto || "").trim().length > 0;
+  if (yaTiene) return;
 
-    try {
-      const { data } = await axios.get(`${API}/recibos/protocolitos/${encodeURIComponent(value)}`);
-      const d = data?.data || {};
-      setF((prev) => ({
+  // Para Protocolito: no autollenar; el motivo llega al seleccionar el # de protocolito
+  if (f.tipoTramite === "Protocolito") return;
+
+  // Para otros tipos, conserva la plantilla
+  const base = f.tipoTramite ? `Pago de ${f.tipoTramite} con numero de Protocolito #${f.numeroTramite} ` : "";
+  if (base) setF((prev) => ({ ...prev, concepto: base }));
+}, [f.tipoTramite, conceptoTouched]);
+  // Al elegir # de protocolito, autorrellena campos y plantilla de concepto (sin pisar al usuario)
+async function handleSelectNumero(value) {
+  setNumeroSel(value);
+  if (!value) return;
+
+  try {
+    const { data } = await axios.get(
+      `${API}/recibos/protocolitos/${encodeURIComponent(value)}`
+    );
+    const d = data?.data || {};
+
+    setF((prev) => {
+      // Motivo tal cual viene del Protocolito (backend ya expone estos campos)
+      const motivoPlano =
+        d.tipoTramite || d.motivo || d.servicio || d.accion || "";
+
+      // Plantilla requerida: "Pago de {motivo}"
+      const conceptoPlantilla = motivoPlano
+        ? `Pago de ${motivoPlano} con numero de Protocolito #${d.numeroTramite}`
+        : (d.numeroTramite
+            ? `Pago de trámite Protocolito #${d.numeroTramite}`
+            : "Pago de trámite Protocolito");
+
+      const keepUserConcept =
+        conceptoTouched && String(prev.concepto || "").trim().length > 0;
+
+      return {
         ...prev,
         fecha: d.fecha ? String(d.fecha).slice(0, 10) : prev.fecha,
         recibiDe: d.cliente || prev.recibiDe,
         abogado: d.abogado || prev.abogado,
         control: d.numeroTramite ? String(d.numeroTramite) : prev.control,
-        concepto:
-          prev.concepto ||
-          (d.numeroTramite
-            ? `Pago de Protocolito #${d.numeroTramite}`
-            : "Pago de trámite Protocolito"),
-      }));
-    } catch (e) {
-      alert(e.response?.data?.msg || e.message || "Error");
-    }
+        concepto: keepUserConcept ? prev.concepto : conceptoPlantilla,
+      };
+    });
+  } catch (e) {
+    alert(e.response?.data?.msg || e.message || "Error");
   }
+}
 
-  // validación y submit
+
+  // Helpers
   const toNum = (v) => Number(String(v).replace(/[^0-9.]/g, "")) || 0;
   const restante = Math.max(0, toNum(f.totalTramite) - toNum(f.totalPagado));
 
+  // Validación
   const errors = {};
   if (!f.fecha) errors.fecha = "Requerido";
   if (!f.recibiDe.trim()) errors.recibiDe = "Requerido";
   if (!f.totalTramite || isNaN(toNum(f.totalTramite))) errors.totalTramite = "Inválido";
   if (!f.totalPagado || isNaN(toNum(f.totalPagado))) errors.totalPagado = "Inválido";
+  // Para protocolito, pedimos número
+  if (f.tipoTramite === "Protocolito" && !f.control.trim()) errors.control = "Requerido";
 
-  const onSubmit = (e) => {
+  // Guardar en BD y luego mostrar vista previa para imprimir/guardar PDF
+  const onSubmit = async (e) => {
     e.preventDefault();
     if (Object.keys(errors).length) return;
-    setShowPrev(true);
+
+    try {
+      setSaving(true);
+      setSaveError("");
+      setSavedId("");
+
+      const payload = {
+        fecha: f.fecha,
+        tipoTramite: f.tipoTramite,
+        recibiDe: f.recibiDe,
+        abogado: f.abogado || "",
+        concepto: f.concepto || "",
+        // en Protocolito 'control' es el # Trámite
+        control: f.control || null,
+        totalTramite: toNum(f.totalTramite),
+        totalPagado: toNum(f.totalPagado),
+        restante,
+
+        // aunque los ocultaste para protocolito, pueden ir en 0
+        totalImpuestos: toNum(f.totalImpuestos),
+        valorAvaluo: toNum(f.valorAvaluo),
+        totalGastosExtra: toNum(f.totalGastosExtra),
+        totalHonorarios: toNum(f.totalHonorarios),
+      };
+
+      const { data } = await axios.post(
+        SAVE_URL,
+        payload /* , { headers: { Authorization: `Bearer ${token}` } } */
+      );
+
+      const id = data?.data?._id;
+      if (id) setSavedId(id);
+
+      if (data?.pdfUrl) {
+        const href = `${API}${
+          data.pdfUrl.startsWith("/") ? data.pdfUrl : `/${data.pdfUrl}`
+        }`;
+        window.open(href, "_blank", "noopener,noreferrer");
+      }
+
+      // si quieres además mostrar el modal de vista previa:
+      // setShowPrev(true);
+    } catch (err) {
+      setSaveError(
+        err.response?.data?.msg ||
+          err.response?.data?.mensaje ||
+          err.message ||
+          "No se pudo guardar el recibo"
+      );
+    } finally {
+      setSaving(false);
+    }
   };
+
+  // Etiqueta del campo "control" según tipo
+  const controlLabel =
+    f.tipoTramite === "Protocolito" ? "# Trámite *" : "Control";
 
   return (
     <div className="rn17">
@@ -112,7 +209,20 @@ export default function ReciboNotaria17() {
             <Field label="Tipo de trámite">
               <select
                 value={f.tipoTramite}
-                onChange={(e) => setF({ ...f, tipoTramite: e.target.value })}
+                onChange={(e) => {
+                  const next = e.target.value;
+                  setF((prev) => ({
+                    ...prev,
+                    tipoTramite: next,
+                    // si cambia a Protocolito, vaciamos control para obligar a elegir
+                    control: next === "Protocolito" ? "" : prev.control,
+                  }));
+
+                  // si salimos de Protocolito, limpiamos selección
+                  if (next !== "Protocolito") {
+                    setNumeroSel("");
+                  }
+                }}
               >
                 <option value="Protocolito">Protocolito</option>
                 <option value="Escritura">Escritura</option>
@@ -133,10 +243,13 @@ export default function ReciboNotaria17() {
                     <option key={p.numeroTramite} value={p.numeroTramite}>
                       #{p.numeroTramite} — {p.cliente ?? "Sin cliente"}
                       {p.abogado ? ` · ${p.abogado}` : ""}
+                      {p.tipoTramite ? ` · ${p.tipoTramite}` : ""}
                     </option>
                   ))}
                 </select>
-                {numsError && <small style={{ color: "#ff6b6b" }}>{numsError}</small>}
+                {numsError && (
+                  <small style={{ color: "#ff6b6b" }}>{numsError}</small>
+                )}
               </Field>
             )}
 
@@ -157,14 +270,18 @@ export default function ReciboNotaria17() {
             <Field label="Concepto" className="span-2">
               <input
                 value={f.concepto}
-                onChange={(e) => setF({ ...f, concepto: e.target.value })}
+                onChange={(e) => {
+                  setConceptoTouched(true); // marca que el usuario ya lo editó
+                  setF({ ...f, concepto: e.target.value });
+                }}
               />
             </Field>
 
-            <Field label="Control">
+            <Field label={controlLabel} error={errors.control}>
               <input
                 value={f.control}
                 onChange={(e) => setF({ ...f, control: e.target.value })}
+                placeholder={f.tipoTramite === "Protocolito" ? "Ej. 11232" : ""}
               />
             </Field>
 
@@ -184,50 +301,71 @@ export default function ReciboNotaria17() {
 
             <Field label="Restante (auto)">
               <input
-                value={restante.toLocaleString("es-MX", { minimumFractionDigits: 2 })}
+                value={restante.toLocaleString("es-MX", {
+                  minimumFractionDigits: 2,
+                })}
                 readOnly
               />
             </Field>
 
-            <Field label="Total Impuestos (sistema)">
-              <MoneyInput
-                value={f.totalImpuestos}
-                onChange={(v) => setF({ ...f, totalImpuestos: v })}
-                readOnly
-              />
-            </Field>
+            {/* Los 4 siguientes se ocultan visualmente para Protocolito; 
+                para otros tipos puedes mostrarlos si los necesitas */}
+            {f.tipoTramite !== "Protocolito" && (
+              <>
+                <Field label="Total Impuestos (sistema)">
+                  <MoneyInput
+                    value={f.totalImpuestos}
+                    onChange={(v) => setF({ ...f, totalImpuestos: v })}
+                    readOnly
+                  />
+                </Field>
 
-            <Field label="Valor Avalúo (sistema)">
-              <MoneyInput
-                value={f.valorAvaluo}
-                onChange={(v) => setF({ ...f, valorAvaluo: v })}
-                readOnly
-              />
-            </Field>
+                <Field label="Valor Avalúo (sistema)">
+                  <MoneyInput
+                    value={f.valorAvaluo}
+                    onChange={(v) => setF({ ...f, valorAvaluo: v })}
+                    readOnly
+                  />
+                </Field>
 
-            <Field label="Total Gastos Extra (sistema)">
-              <MoneyInput
-                value={f.totalGastosExtra}
-                onChange={(v) => setF({ ...f, totalGastosExtra: v })}
-                readOnly
-              />
-            </Field>
+                <Field label="Total Gastos Extra (sistema)">
+                  <MoneyInput
+                    value={f.totalGastosExtra}
+                    onChange={(v) => setF({ ...f, totalGastosExtra: v })}
+                    readOnly
+                  />
+                </Field>
 
-            <Field label="Total Honorarios (sistema)">
-              <MoneyInput
-                value={f.totalHonorarios}
-                onChange={(v) => setF({ ...f, totalHonorarios: v })}
-                readOnly
-              />
-            </Field>
+                <Field label="Total Honorarios (sistema)">
+                  <MoneyInput
+                    value={f.totalHonorarios}
+                    onChange={(v) => setF({ ...f, totalHonorarios: v })}
+                    readOnly
+                  />
+                </Field>
+              </>
+            )}
           </div>
 
+          {saveError && (
+            <div className="alert-err" style={{ marginTop: 10 }}>
+              {saveError}
+            </div>
+          )}
+
           <div className="actions">
-            <button className="btn primary" type="submit">Generar</button>
+            <button className="btn primary" type="submit" disabled={saving}>
+              {saving ? "Guardando…" : "Guardar y generar PDF"}
+            </button>
           </div>
         </form>
 
-        {showPrev && <Preview onClose={() => setShowPrev(false)} data={{ ...f, restante }} />}
+        {showPrev && (
+          <Preview
+            onClose={() => setShowPrev(false)}
+            data={{ ...f, restante, savedId }}
+          />
+        )}
       </div>
     </div>
   );
@@ -274,24 +412,42 @@ function Preview({ onClose, data }) {
               <h2>Notaría 17</h2>
               <span>{copia ? "COPIA" : "ORIGINAL"}</span>
             </header>
+
+            {/* Si el backend devolvió un ID/folio, lo mostramos */}
+            {data.savedId && (
+              <div className="row">
+                <b>Folio:</b><span>{data.savedId}</span>
+              </div>
+            )}
+
             <div className="row"><b>Fecha:</b><span>{data.fecha}</span></div>
             <div className="row"><b>Tipo de trámite:</b><span>{data.tipoTramite}</span></div>
             <div className="row"><b>Recibí de:</b><span>{data.recibiDe}</span></div>
             <div className="row"><b>Abogado Responsable:</b><span>{data.abogado || "—"}</span></div>
             <div className="row"><b>Concepto:</b><span>{data.concepto || "—"}</span></div>
-            <div className="row"><b>Control:</b><span>{data.control || "—"}</span></div>
+
+            {/* Etiqueta según tipo */}
+            <div className="row">
+              <b>{data.tipoTramite === "Protocolito" ? "# Trámite:" : "Control:"}</b>
+              <span>{data.control || "—"}</span>
+            </div>
+
             <div className="row"><b>Total del Trámite:</b><span>{monto(data.totalTramite)}</span></div>
             <div className="row"><b>Total Pagado:</b><span>{monto(data.totalPagado)}</span></div>
             <div className="row"><b>Restante:</b><span>{monto(data.restante)}</span></div>
+
             <div className="firmas">
               <div><div className="line" /><small>Recibí conforme</small></div>
               <div><div className="line" /><small>Notaría 17</small></div>
             </div>
           </div>
         ))}
+
         <div className="sheet-actions no-print">
           <button className="btn" onClick={onClose}>Cerrar</button>
-          <button className="btn primary" onClick={() => window.print()}>Imprimir</button>
+          <button className="btn primary" onClick={() => window.print()}>
+            Imprimir / Guardar PDF
+          </button>
         </div>
       </div>
     </div>

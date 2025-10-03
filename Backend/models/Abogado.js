@@ -1,18 +1,21 @@
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 
+// Valores permitidos para role
+const ROLES = ['ADMIN', 'ABOGADO', 'ASISTENTE', 'PROTOCOLITO', 'RECEPCION'];
 
 const abogadoSchema = new mongoose.Schema({
-  _id: {type: Number},// ID personalizado (4 dígitos)
+  _id: { type: Number }, // ID personalizado (4 dígitos)
   nombre: { type: String, required: true },
   disponible: { type: Boolean, default: true },
   asignaciones: { type: Number, default: 0 },
   orden: { type: Number, required: true },
-  ubicacion: { type: String, default: "sin sala" }, // Nombre de la sala
+  ubicacion: { type: String, default: 'sin sala' }, // Nombre de la sala
   passwordHash: { type: String, select: false },
-  role: { type: String, enum: ['admin', 'user'], default: 'user' },
-}, { timestamps: true });// <- importante: desactiva el _id automático
 
+  // 🔑 Nuevo enum de roles
+  role: { type: String, enum: ROLES, default: 'ABOGADO', index: true },
+}, { timestamps: true });
 
 // Métodos de instancia
 abogadoSchema.methods.setPassword = async function (plain) {
@@ -26,3 +29,4 @@ abogadoSchema.methods.validatePassword = async function (plain) {
 };
 
 module.exports = mongoose.model('Abogado', abogadoSchema);
+module.exports.ROLES = ROLES;

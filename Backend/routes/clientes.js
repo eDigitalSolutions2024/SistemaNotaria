@@ -6,7 +6,13 @@ const Sala = require('../models/Sala');
 
 router.post('/', async (req, res) => {
   try {
-    const { nombre, tipoServicio, tieneCita, abogadoPreferido } = req.body;
+    // ⬇️ Compatibilidad de nombres + teléfono
+    const nombre           = req.body.nombre;
+    const tipoServicio     = req.body.tipoServicio ?? req.body.servicio ?? '';
+    const tieneCita        = req.body.tieneCita;
+    const abogadoPreferido = req.body.abogadoPreferido ?? req.body.abogado_preferido ?? null;
+    const numero_telefono  = req.body.numero_telefono ?? ''; // ← NUEVO
+
     console.log("Body recibido:", req.body);
 
     const ultimo = await Cliente.findOne().sort({ _id: -1 }).exec();
@@ -21,33 +27,30 @@ router.post('/', async (req, res) => {
         abogadoAsignado = abogado;
         abogadoAsignado.disponible = false;
         abogadoAsignado.asignaciones += 1;
+        abogadoAsignado.ubicacion = 'Sin sala'; // ✅ Inicializar ubicación
+        await abogadoAsignado.save(); // ← no se toca
+      } else {
+        // Si el abogado no está disponible, el cliente queda en espera por ese abogado
+        const nuevoCliente = new Cliente({
+          _id: nuevoId,
+          nombre,
+          numero_telefono,                 // ← guarda teléfono
+          servicio: tipoServicio,
+          tieneCita,
+          estado: 'En espera',
+          en_espera: true,
+          abogado_asignado: null,
+          abogado_preferido: abogadoPreferido  // Se guarda el abogado aunque esté ocupado
+        });
 
-      
-       abogadoAsignado.ubicacion = 'Sin sala'; // ✅ Inicializar ubicación
-
-        await abogadoAsignado.save();
-      }else {
-    // Si el abogado no está disponible, el cliente queda en espera por ese abogado
-    const nuevoCliente = new Cliente({
-      _id: nuevoId,
-      nombre,
-      servicio: tipoServicio,
-      tieneCita,
-      estado: 'En espera',
-      en_espera: true,
-      abogado_asignado: null,
-      abogado_preferido: abogadoPreferido  // Se guarda el abogado aunque esté ocupado
-    });
-
-    await nuevoCliente.save();
-    const abogadoNombre = await Abogado.findOne({ _id: abogadoPreferido });
-    return res.status(200).json({
-      mensaje: `Cliente registrado en espera con el abogado ${abogadoNombre?.nombre || 'desconocido'}, que actualmente está ocupado.`,
-      cliente: nuevoCliente,
-      abogado: null
-    });
-  }
-
+        await nuevoCliente.save();
+        const abogadoNombre = await Abogado.findOne({ _id: abogadoPreferido });
+        return res.status(200).json({
+          mensaje: `Cliente registrado en espera con el abogado ${abogadoNombre?.nombre || 'desconocido'}, que actualmente está ocupado.`,
+          cliente: nuevoCliente,
+          abogado: null
+        });
+      }
     }
 
     // Si no se asignó por preferencia, aplicar lógica automática
@@ -58,23 +61,21 @@ router.post('/', async (req, res) => {
       if (abogadoAsignado) {
         abogadoAsignado.disponible = false;
         abogadoAsignado.asignaciones += 1;
-
-
-          abogadoAsignado.ubicacion = 'Sin sala'; // ✅ Inicializar ubicación
-
-        await abogadoAsignado.save();
+        abogadoAsignado.ubicacion = 'Sin sala'; // ✅ Inicializar ubicación
+        await abogadoAsignado.save(); // ← no se toca
       }
     }
 
     const nuevoCliente = new Cliente({
       _id: nuevoId,
       nombre,
+      numero_telefono,                     // ← guarda teléfono
       servicio: tipoServicio,
       tieneCita,
       estado: abogadoAsignado ? 'Asignado' : 'En espera',
       en_espera: !abogadoAsignado,
       abogado_asignado: abogadoAsignado ? abogadoAsignado._id : null,
-      abogado_preferido: abogadoPreferido || null 
+      abogado_preferido: abogadoPreferido || null
     });
 
     await nuevoCliente.save();
@@ -100,20 +101,16 @@ router.post('/', async (req, res) => {
 
 
 
+
 //Regresa datos de clientes con abogados asignados
 router.get('/', async (req, res) => {
   try {
-    // Obtener todos los clientes con abogado_asignado poblado
     const clientes = await Cliente.find().populate('abogado_asignado');
 
-    // Obtener todos los abogados para crear un mapa de ID => nombre
     const abogados = await Abogado.find({}, { _id: 1, nombre: 1 });
     const mapaAbogados = {};
-    abogados.forEach(ab => {
-      mapaAbogados[ab._id] = ab.nombre;
-    });
+    abogados.forEach(ab => { mapaAbogados[ab._id] = ab.nombre; });
 
-    // Construir la respuesta incluyendo abogado preferido si no hay asignado
     const respuesta = clientes.map(cliente => {
       const abogadoNombre = cliente.abogado_asignado?.nombre ||
                             mapaAbogados[cliente.abogado_preferido] ||
@@ -122,6 +119,7 @@ router.get('/', async (req, res) => {
       return {
         id: cliente._id,
         nombre: cliente.nombre,
+        numero_telefono: cliente.numero_telefono || '',  // ← NUEVO
         abogado: abogadoNombre,
         abogado_id: cliente.abogado_asignado?._id || cliente.abogado_preferido || null,
         hora_llegada: cliente.hora_llegada,

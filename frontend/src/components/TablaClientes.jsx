@@ -4,6 +4,7 @@ import React, {
 import DataTable from 'react-data-table-component';
 import axios from 'axios';
 import API_URL from '../api';
+import { COMPACT_DENSITY_FACTOR } from '@mui/x-data-grid';
 
 const TablaClientes = forwardRef((props, ref) => {
   const [clientes, setClientes] = useState([]);
@@ -23,6 +24,7 @@ const TablaClientes = forwardRef((props, ref) => {
     INICIAR: 'Iniciar trámite',
     CITA: 'Registro cita',
     NO_TRAMITE: 'No quiso trámite',
+    PRO_TRAMITE: 'en proceso de trámite',
   };
 
   function fieldMetaByAction(accion) {
@@ -84,14 +86,22 @@ const TablaClientes = forwardRef((props, ref) => {
       width: '72px',
       minWidth: '72px',
       maxWidth: '72px',
-      compact: true,
+      
     },
     {
       name: 'Cliente',
       selector: (row) => row.nombre,
       wrap: true,
-      width: '220px',
+      width: '150px',
       minWidth: '220px',
+      compact: true,
+    },
+    // === NUEVO: Teléfono ===
+    {
+      name: 'Teléfono',
+      selector: (row) => row.numero_telefono || '—',
+      width: '140px',
+      minWidth: '140px',
     },
     {
       name: 'Abogado asignado',
@@ -117,6 +127,13 @@ const TablaClientes = forwardRef((props, ref) => {
       cell: (row) => {
         const seleccion = accionesSeleccionadas[row.id] || '';
         const meta = fieldMetaByAction(seleccion);
+
+        const servicio = (row.servicio || '').toString().toLowerCase();
+        const base = ['Iniciar trámite', 'Registro cita', 'No quiso trámite'];
+        const opciones = (servicio === 'tramite' || servicio === 'trámite')
+          ? ['Finalizar trámite', ...base.slice(1)]
+          : base;
+
         return (
           <div style={{ minWidth: 220 }}>
             <select
@@ -132,7 +149,7 @@ const TablaClientes = forwardRef((props, ref) => {
               className="form-select form-select-sm mb-1"
             >
               <option value="">-- Selec --</option>
-              {['Iniciar trámite', 'Registro cita', 'No quiso trámite'].map((accion, i) => (
+              {opciones.map((accion, i) => (
                 <option key={i} value={accion}>
                   {accion}
                 </option>
@@ -202,8 +219,8 @@ const TablaClientes = forwardRef((props, ref) => {
       name: 'Motivo',
       selector: (row) => row.motivo || '---',
       wrap: true,
-      width: '260px',
-      minWidth: '260px',
+      width: '170px',
+      minWidth: '200px',
       maxWidth: '360px',
     },
   ];
@@ -211,7 +228,7 @@ const TablaClientes = forwardRef((props, ref) => {
   const customStyles = {
     tableWrapper: {
       style: {
-        overflowX: 'auto',        // ← scroll horizontal correcto
+        overflowX: 'auto',
         overflowY: 'auto',
         maxHeight: '70vh',
         borderRadius: '8px',
@@ -220,7 +237,7 @@ const TablaClientes = forwardRef((props, ref) => {
     table: {
       style: {
         width: '100%',
-        minWidth: 1550,          // suma aprox. de anchos ⇒ garantiza scroll X
+        minWidth: 1550,
         tableLayout: 'fixed',
         fontSize: '0.92rem',
       },
@@ -232,7 +249,7 @@ const TablaClientes = forwardRef((props, ref) => {
         whiteSpace: 'nowrap',
         fontWeight: 600,
         fontSize: '0.92rem',
-        justifyContent: 'flex-start',   // ← header alineado a la izquierda
+        justifyContent: 'flex-start',
       },
     },
     rows: { style: { minHeight: '44px' } },
@@ -242,13 +259,14 @@ const TablaClientes = forwardRef((props, ref) => {
         whiteSpace: 'nowrap',
         overflow: 'hidden',
         textOverflow: 'ellipsis',
-        justifyContent: 'flex-start',   // ← celdas alineadas a la izquierda
+        justifyContent: 'flex-start',
       },
     },
   };
 
   const conditionalRowStyles = [
     { when: (row) => row.accion === 'Iniciar trámite', style: { backgroundColor: '#d4edda' } },
+    { when: (row) => row.accion === 'Finalizar trámite', style: { backgroundColor: '#d4edda' } },
     { when: (row) => row.accion === 'Registro cita', style: { backgroundColor: '#d1ecf1' } },
     { when: (row) => row.accion === 'No quiso trámite', style: { backgroundColor: '#f8d7da' } },
     { when: (row) => row.accion === 'En proceso de trámite', style: { backgroundColor: '#fff3cd' } },

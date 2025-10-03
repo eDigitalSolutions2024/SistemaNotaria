@@ -100,3 +100,53 @@
   .rn17 .no-print{display:none}
   .rn17 .sheet{border:none; padding:0}
 }
+
+
+/* === Modal SIEMPRE por encima del sidebar y centrado === */
+.modal-backdrop {
+  position: fixed !important;
+  inset: 0 !important;
+  background: rgba(0,0,0,.45) !important;
+  display: flex !important;
+  justify-content: center !important;   /* centrado horizontal */
+  align-items: center !important;        /* centrado vertical */
+  padding: 16px !important;
+  overflow: auto !important;
+  z-index: 2147483647 !important;        /* <<< por encima de cualquier sidebar */
+}
+
+.sheet {
+  background: #fff !important;
+  width: min(900px, calc(100vw - 48px)) !important; /* margen lateral visible */
+  max-height: calc(100vh - 48px) !important;
+  overflow: auto !important;
+  border-radius: 10px !important;
+  box-shadow: 0 14px 44px rgba(0,0,0,.28) !important;
+  margin: auto !important;               /* asegura centrado dentro del flex */
+}
+
+/* Acciones fijas al fondo del modal mientras scrolleas */
+.sheet-actions {
+  position: sticky !important;
+  bottom: 0 !important;
+  background: #fff !important;
+  border-top: 1px solid #eee !important;
+  padding: 10px !important;
+}
+
+/* Responsive finos */
+@media (max-width: 768px) {
+  .sheet {
+    width: calc(100vw - 24px) !important;
+    max-height: calc(100vh - 24px) !important;
+    border-radius: 8px !important;
+  }
+}
+
+/* Impresión */
+@media print {
+  .modal-backdrop { position: static !important; inset: auto !important; padding: 0 !important; background: transparent !important; }
+  .sheet { max-height: none !important; overflow: visible !important; box-shadow: none !important; width: 100% !important; }
+  .no-print { display: none !important; }
+}
+

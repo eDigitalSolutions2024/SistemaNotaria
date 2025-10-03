@@ -217,7 +217,7 @@ router.put('/:id', async (req, res) => {
       abogado.ubicacion = ubicacion.trim() || '---';
     }
 
-    if (role === 'admin' || role === 'user') {
+    if (role === 'ADMIN' || role === 'ABOGADO' || role === 'ASISTENTE' || role === 'PROTOCOLITO' || role === 'RECEPCION') {
       abogado.role = role;
     }
 

@@ -303,8 +303,11 @@ export default function FormAbogado() {
                     value={eRole}
                     onChange={(e) => setERole(e.target.value)}
                   >
-                    <option value="user">Usuario</option>
-                    <option value="admin">Administrador</option>
+                    <option value="ADMIN">Administrador</option>
+                    <option value="ABOGADO">Abogado</option>
+                    <option value="ASISTENTE">Asistente Legal</option>
+                    <option value="PROTOCOLITO">Protocolito</option>
+                    <option value="RECEPCION">Recepción</option>
                   </select>
                 </div>
 

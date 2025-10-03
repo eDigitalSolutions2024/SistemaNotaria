@@ -4,6 +4,10 @@ const router = express.Router();
 
 const multer = require('multer');
 const XLSX = require('xlsx');
+const PDFDocument = require('pdfkit');   // <- nuevo
+const dayjs = require('dayjs');          // <- nuevo
+const fs   = require('fs');
+const path = require('path');
 
 const Protocolito = require('../models/Protocolito');
 const Cliente     = require('../models/Cliente');
@@ -14,6 +18,22 @@ const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024 },
 });
+
+
+// --- buscar logo (png/jpg) en ubicaciones típicas + ENV ---
+const LOGO_PATH =
+  process.env.PDF_LOGO_PATH || ([
+    path.join(__dirname, '..', 'assets', 'logo.png'),
+    path.join(__dirname, '..', 'assets', 'logo.jpg'),
+    path.join(__dirname, '..', '..', 'frontend', 'public', 'logo.png'),
+    path.join(__dirname, '..', '..', 'frontend', 'public', 'logo.jpg'),
+    path.join(process.cwd(), 'frontend', 'public', 'logo.png'),
+    path.join(process.cwd(), 'frontend', 'public', 'logo.jpg'),
+    path.join(process.cwd(), 'public', 'logo.png'),
+    path.join(process.cwd(), 'public', 'logo.jpg'),
+  ].find(p => { try { return fs.existsSync(p); } catch { return false; } }));
+
+console.log('[PDF] LOGO_PATH =', LOGO_PATH || 'NO ENCONTRADO');
 
 /* ========================== Helpers ========================== */
 // --- Import helpers ---
@@ -113,8 +133,8 @@ async function buildAbogadosMap() {
     { _id: 1, nombre: 1, iniciales: 1, abreviatura: 1, siglas: 1, codigo: 1, clave: 1, numero: 1, id: 1, abogado_id: 1 }
   ).lean();
 
-  const byId  = new Map(); // _id    -> nombre (completo)
-  const byKey = new Map(); // key(*) -> nombre (completo)
+  const byId  = new Map();
+  const byKey = new Map();
 
   for (const a of rows) {
     const nombre = (a.nombre || '').toString().trim();
@@ -135,7 +155,7 @@ async function resolveAbogadoNombre(raw, maps) {
   if (raw == null || raw === '') return null;
 
   if (typeof raw === 'object' && raw !== null) {
-    return raw.nombre || null; // solo nombre completo
+    return raw.nombre || null;
   }
   if (typeof raw === 'string' && isObjectId(raw)) {
     const hit = maps.byId.get(String(raw));
@@ -242,19 +262,14 @@ router.post('/', async (req, res) => {
       cliente     = c.nombre       ?? cliente;
       tipoTramite = tipoFromC      ?? tipoTramite;
       abogado     = abogadoFromC   ?? abogado;
-      fecha       = fechaFromC     ?? fecha;
+      
     }
 
     if (!cliente)     return res.status(400).json({ mensaje: 'Falta cliente' });
     if (!tipoTramite) return res.status(400).json({ mensaje: 'Falta tipo de trámite' });
 
     // --- Fecha robusta (mantén Date en Mongo) ---
-    const fechaOk = (() => {
-      if (!fecha) return new Date();
-      if (fecha instanceof Date && !isNaN(fecha)) return fecha;
-      const d = new Date(fecha);
-      return isNaN(d) ? new Date() : d;
-    })();
+    const fechaOk = new Date();
 
     // --- Resolver SIEMPRE nombre completo del abogado ---
     const maps = await buildAbogadosMap();
@@ -482,19 +497,410 @@ router.post('/import', upload.single('file'), async (req, res) => {
   }
 });
 
-/* ============================ PLANTILLA ============================ */
-router.get('/template', (req, res) => {
-  const wb = XLSX.utils.book_new();
-  const data = [
-    ['numero tramite','tipo tramite','cliente','fecha','abogado'],
-    [12345,'poder','Juan Pérez','2025-08-12','Lic. García'],
-  ];
-  const ws = XLSX.utils.aoa_to_sheet(data);
-  XLSX.utils.book_append_sheet(wb, ws, 'Protocolito');
-  const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
-  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-  res.setHeader('Content-Disposition', 'attachment; filename="protocolito_template.xlsx"');
-  return res.send(buf);
+/* ============================ EXPORT ============================ */
+// GET /protocolito/export?format=excel|pdf&from=YYYY-MM-DD&to=YYYY-MM-DD&cliente=...&abogado=...
+router.get('/export', async (req, res) => {
+  try {
+    // deps locales para no tocar el resto del archivo
+    const PDFDocument = require('pdfkit');
+    const dayjs = require('dayjs');
+    const XLSX = require('xlsx');
+    const path = require('path');
+    const fs = require('fs');
+
+    const { format = 'excel', from, to, cliente, abogado } = req.query;
+
+    // ---- Filtro ----
+    const filter = {};
+    if (from || to) {
+      filter.fecha = {};
+      if (from) filter.fecha.$gte = dayjs(from).startOf('day').toDate();
+      if (to)   filter.fecha.$lte = dayjs(to).endOf('day').toDate();
+    }
+    if (cliente) filter.cliente = { $regex: String(cliente).trim(), $options: 'i' };
+    if (abogado) filter.abogado = { $regex: String(abogado).trim(), $options: 'i' };
+
+    // ---- Datos ----
+    const docs = await Protocolito.find(filter).sort({ fecha: 1 }).lean();
+    const rows = docs.map(d => ({
+      numeroTramite: d.numeroTramite ?? '',
+      tipoTramite: d.tipoTramite ?? '',
+      cliente: d.cliente ?? '',
+      fecha: d.fecha ? dayjs(d.fecha).format('DD/MM/YYYY') : '',
+      abogado: d.abogado ?? '',
+      observaciones: d.observaciones ?? '',
+    }));
+
+    const filenameBase = `protocolito_${dayjs().format('YYYYMMDD_HHmm')}`;
+
+    // =========================== PDF ===========================
+    if (String(format).toLowerCase() === 'pdf') {
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${filenameBase}.pdf"`);
+
+      const doc = new PDFDocument({ margin: 36 });
+      doc.pipe(res);
+
+      // --- buscar logo (png/jpg) en ubicaciones típicas ---
+      const LOGO_CANDIDATES = [
+        path.join(__dirname, '..', '..', 'frontend', 'public', 'logo.png'),
+        path.join(process.cwd(), 'frontend', 'public', 'logo.png'),
+      ];
+      const LOGO_PATH = LOGO_CANDIDATES.find(p => { try { return fs.existsSync(p); } catch { return false; } });
+
+      // --- Config de página ---
+      const PAGE = {
+        left: doc.page.margins.left,
+        right: doc.page.width - doc.page.margins.right,
+        top: doc.page.margins.top,
+        bottom: doc.page.height - doc.page.margins.bottom,
+        width: doc.page.width - doc.page.margins.left - doc.page.margins.right,
+      };
+
+      // Columnas (porcentajes que suman 100%)
+      const COLS = [
+        { key: 'numeroTramite', title: '# Trámite', width: Math.round(PAGE.width * 0.12) },
+        { key: 'tipoTramite',   title: 'Tipo',      width: Math.round(PAGE.width * 0.16) },
+        { key: 'cliente',       title: 'Cliente',   width: Math.round(PAGE.width * 0.30) },
+        { key: 'fecha',         title: 'Fecha',     width: Math.round(PAGE.width * 0.12) },
+        { key: 'abogado',       title: 'Abogado',   width: Math.round(PAGE.width * 0.16) },
+        { key: 'observaciones', title: 'Observ.',   width: PAGE.width }, // se corrige abajo
+      ];
+      const sumExceptLast = COLS.slice(0, -1).reduce((a, c) => a + c.width, 0);
+      COLS[COLS.length - 1].width = PAGE.width - sumExceptLast;
+
+      const PADDING_X = 4;
+      const HEADER_H = 18;
+      const CELL_FONT_SIZE = 9;
+      const HEADER_FONT_SIZE = 9;
+
+      // =================== RESUMEN / CONTABILIDAD ===================
+      const totalTramites = rows.length;
+      const conteoPorAbogado = rows.reduce((acc, r) => {
+        const nombre = String(r.abogado || '—').trim().toUpperCase();
+        acc[nombre] = (acc[nombre] || 0) + 1;
+        return acc;
+      }, {});
+      const listaAbogados = Object.entries(conteoPorAbogado)
+        .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'es'));
+
+      // ================= Encabezado (logo izq + textos der) =================
+      function drawLogoLeft(yStart) {
+        const MAX_W = Math.min(140, PAGE.width * 0.22);
+        const MAX_H = 86;
+
+        try {
+          if (LOGO_PATH && fs.existsSync(LOGO_PATH)) {
+            const x = PAGE.left;
+            const y = yStart + 4;
+            doc.image(LOGO_PATH, x, y, { fit: [MAX_W, MAX_H] });
+            return { top: yStart, height: MAX_H + 8, bandWidth: MAX_W };
+          }
+        } catch (e) {
+          console.warn('[PDF] No se pudo cargar el logo:', e?.message);
+        }
+        return { top: yStart, height: 0, bandWidth: MAX_W };
+      }
+
+      function drawPageHeader() {
+        const TITLE_SIZE = 20;
+        const SUB_SIZE   = 11;
+
+        const logo = drawLogoLeft(PAGE.top);
+
+        const gap = 14;
+        const xRight = PAGE.left + logo.bandWidth + gap;
+        const wRight = PAGE.right - xRight;
+
+        let yRight = PAGE.top + 14;
+        doc.fillColor('black')
+           .fontSize(TITLE_SIZE)
+           .text('Reporte Protocolito', xRight, yRight, { width: wRight, align: 'left' });
+
+        const titleBottom = doc.y + 2;
+        const accentW = Math.min(90, wRight * 0.25);
+        doc.moveTo(xRight, titleBottom)
+           .lineTo(xRight + accentW, titleBottom)
+           .lineWidth(2)
+           .strokeColor('#999')
+           .stroke();
+        doc.strokeColor('black').lineWidth(1);
+
+        yRight = titleBottom + 6;
+        const filtroTxt1 = [
+          from ? `Desde: ${dayjs(from).format('DD/MM/YYYY')}` : null,
+          to   ? `Hasta: ${dayjs(to).format('DD/MM/YYYY')}`   : null,
+        ].filter(Boolean).join('   |   ');
+
+        const filtroTxt2 = [
+          cliente ? `Cliente: ${cliente}` : null,
+          abogado ? `Abogado: ${abogado}` : null,
+        ].filter(Boolean).join('   |   ');
+
+        const emitido = `Emitido: ${dayjs().format('DD/MM/YYYY HH:mm')}`;
+
+        doc.fontSize(SUB_SIZE).fillColor('#666');
+        if (filtroTxt1) {
+          doc.text(filtroTxt1, xRight, yRight, { width: wRight, align: 'left' });
+          yRight = doc.y + 2;
+        }
+        if (filtroTxt2) {
+          doc.text(filtroTxt2, xRight, yRight, { width: wRight, align: 'left' });
+          yRight = doc.y + 2;
+        }
+        doc.fillColor('#888').text(emitido, xRight, yRight, { width: wRight, align: 'left' });
+        const textBottom = doc.y;
+
+        const headerBottom = Math.max(PAGE.top + logo.height, textBottom) + 12;
+
+        doc.moveTo(PAGE.left, headerBottom)
+           .lineTo(PAGE.right, headerBottom)
+           .lineWidth(0.8)
+           .strokeColor('#bbb')
+           .stroke();
+        doc.strokeColor('black').lineWidth(1);
+
+        return headerBottom + 8;
+      }
+
+      // --- Header de tabla ---
+      function drawTableHeader(y) {
+        doc.fontSize(HEADER_FONT_SIZE);
+        let x = PAGE.left;
+        COLS.forEach(col => {
+          doc.rect(x, y, col.width, HEADER_H).stroke();
+          doc.text(col.title, x + PADDING_X, y + 4, { width: col.width - 2 * PADDING_X, align: 'left' });
+          x += col.width;
+        });
+        return y + HEADER_H;
+      }
+
+      // --- cálculo de alto por celda ---
+      function cellHeight(text, width) {
+        const h = doc.heightOfString(String(text ?? ''), {
+          width: width - 2 * PADDING_X,
+          align: 'left',
+          fontSize: CELL_FONT_SIZE,
+        });
+        return Math.max(h + 6, 16);
+      }
+
+      // --- dibujar fila con salto de página si es necesario ---
+      function drawRow(y, row) {
+        doc.fontSize(CELL_FONT_SIZE);
+        const rowH = Math.max(...COLS.map(col => cellHeight(row[col.key], col.width)));
+        if (y + rowH > PAGE.bottom) {
+          doc.addPage();
+          const yHeader = drawPageHeader();
+          y = drawTableHeader(yHeader + 8);
+        }
+        let x = PAGE.left;
+        COLS.forEach(col => {
+          doc.rect(x, y, col.width, rowH).stroke();
+          doc.text(String(row[col.key] ?? ''), x + PADDING_X, y + 3, {
+            width: col.width - 2 * PADDING_X,
+            align: 'left',
+          });
+          x += col.width;
+        });
+        return y + rowH;
+      }
+
+      // --- Bloque de Resumen / Contabilidad ---
+      function drawResumenContabilidad(yStart) {
+        // estimación para checar salto de página
+        const estimado = 70 + (listaAbogados.length * 16);
+        if (yStart + estimado > PAGE.bottom) {
+          doc.addPage();
+          yStart = drawPageHeader();
+        }
+
+        // Separador
+        doc.moveTo(PAGE.left, yStart)
+           .lineTo(PAGE.right, yStart)
+           .lineWidth(0.8)
+           .strokeColor('#bbb')
+           .stroke();
+        doc.strokeColor('black').lineWidth(1);
+
+        let y = yStart + 10;
+        doc.fontSize(12).fillColor('#000')
+           .text('Resumen / Contabilidad', PAGE.left, y, { width: PAGE.width, align: 'left' });
+
+        y = doc.y + 6;
+        doc.fontSize(10).fillColor('#333')
+           .text(`Total de trámites exportados: ${totalTramites}`, PAGE.left, y, { width: PAGE.width });
+
+        y = doc.y + 6;
+        doc.fontSize(10).fillColor('#333')
+           .text('Trámites por abogado:', PAGE.left, y, { width: PAGE.width });
+
+        y = doc.y + 4;
+        doc.fontSize(9).fillColor('#000');
+        const indent = 12;
+
+        listaAbogados.forEach(([nombre, cnt]) => {
+          doc.text(`• ${nombre} — ${cnt}`, PAGE.left + indent, y, {
+            width: PAGE.width - indent,
+            align: 'left',
+          });
+          y = doc.y + 2;
+          if (y > PAGE.bottom - 24) {
+            doc.addPage();
+            y = drawPageHeader() + 8;
+            doc.fontSize(9);
+          }
+        });
+
+        return y;
+      }
+
+      // --- Render ---
+      const headerBottomY = drawPageHeader();
+      let y = drawTableHeader(headerBottomY);
+      rows.forEach(r => { y = drawRow(y, r); });
+
+      // NUEVO: resumen/contabilidad al final
+      y = drawResumenContabilidad(y + 8);
+
+      doc.end();
+      return; // importante: salir para no continuar con Excel
+    }
+
+    // =========================== EXCEL ===========================
+    const wb = XLSX.utils.book_new();
+    const header = ['# Trámite', 'Tipo', 'Cliente', 'Fecha', 'Abogado', 'Observ.'];
+    const aoa = [header, ...rows.map(r => [
+      r.numeroTramite, r.tipoTramite, r.cliente, r.fecha, r.abogado, r.observaciones
+    ])];
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    XLSX.utils.book_append_sheet(wb, ws, 'Protocolito');
+    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${filenameBase}.xlsx"`);
+    return res.send(buf);
+  } catch (err) {
+    console.error('EXPORT PROTOCOLITO ERROR:', err);
+    res.status(500).json({ mensaje: 'Error al exportar', detalle: err?.message });
+  }
 });
+
+
+
+
+
+
+/* ===================== ENTREGA (estatus de entrega) ===================== */
+/**
+ * GET /protocolito/:id/entrega-info
+ * Devuelve datos para el modal de entrega: cliente, número y teléfono (si existe).
+ * El teléfono se busca en la colección Cliente por nombre (coincidencia exacta
+ * y, como respaldo, por regex insensible a mayúsculas) priorizando los más recientes.
+ */
+router.get('/:id/entrega-info', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const doc = await Protocolito.findById(id).lean();
+    if (!doc) return res.status(404).json({ mensaje: 'Trámite no encontrado' });
+
+    let telefono = '';
+    if (doc.cliente) {
+      // 1) intento exacto
+      let cli = await Cliente.findOne({ nombre: doc.cliente })
+        .sort({ hora_llegada: -1, createdAt: -1 })
+        .lean();
+
+      // 2) respaldo: regex i si no hubo match exacto
+      if (!cli) {
+        cli = await Cliente.findOne({ nombre: { $regex: `^${doc.cliente}$`, $options: 'i' } })
+          .sort({ hora_llegada: -1, createdAt: -1 })
+          .lean();
+      }
+
+      telefono =
+        cli?.numero_telefono ||
+        cli?.telefono ||
+        cli?.celular ||
+        '';
+    }
+
+    return res.json({
+      cliente: doc.cliente || '',
+      numeroTramite: doc.numeroTramite || '',
+      telefono,
+      estatus_entrega: doc.estatus_entrega || 'Pendiente',
+      fecha_entrega: doc.fecha_entrega || null,
+      notas: doc.notas || ''
+    });
+  } catch (err) {
+    console.error('ENTREGA-INFO ERROR:', err);
+    return res.status(500).json({ mensaje: 'Error al obtener información de entrega' });
+  }
+});
+
+/**
+ * POST /protocolito/:id/entregar
+ * Marca el trámite como ENTREGADO y guarda fecha_entrega.
+ * Opcional: actualiza el teléfono del Cliente si se envía.
+ * body: { telefono?: string, notas?: string }
+ */
+router.post('/:id/entregar', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { telefono, notas } = req.body || {};
+
+    const updated = await Protocolito.findByIdAndUpdate(
+      id,
+      {
+        estatus_entrega: 'Entregado',
+        fecha_entrega: new Date(),
+        ...(typeof notas === 'string' ? { notas } : {})
+      },
+      { new: true }
+    ).lean();
+
+    if (!updated) return res.status(404).json({ mensaje: 'Trámite no encontrado' });
+
+    // Si nos mandan teléfono, lo intentamos guardar en el registro del cliente
+    if (telefono && updated.cliente) {
+      await Cliente.updateOne(
+        { nombre: updated.cliente },
+        { $set: { numero_telefono: telefono } }
+      ).catch(() => {}); // no interrumpir si falla
+    }
+
+    return res.json({
+      ok: true,
+      estatus_entrega: updated.estatus_entrega,
+      fecha_entrega: updated.fecha_entrega,
+      notas: updated.notas || ''
+    });
+  } catch (err) {
+    console.error('ENTREGAR ERROR:', err);
+    return res.status(500).json({ mensaje: 'No se pudo marcar como entregado' });
+  }
+});
+
+/**
+ * (Opcional) Revertir entrega si te sirve en alguna ocasión:
+ * POST /protocolito/:id/revertir-entrega
+ */
+// router.post('/:id/revertir-entrega', async (req, res) => {
+//   try {
+//     const { id } = req.params;
+//     const updated = await Protocolito.findByIdAndUpdate(
+//       id,
+//       { estatus_entrega: 'Pendiente', fecha_entrega: null },
+//       { new: true }
+//     ).lean();
+//     if (!updated) return res.status(404).json({ mensaje: 'Trámite no encontrado' });
+//     return res.json({ ok: true, estatus_entrega: updated.estatus_entrega });
+//   } catch (err) {
+//     console.error('REVERTIR ENTREGA ERROR:', err);
+//     return res.status(500).json({ mensaje: 'No se pudo revertir la entrega' });
+//   }
+// });
+
 
 module.exports = router;

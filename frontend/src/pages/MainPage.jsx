@@ -23,6 +23,9 @@ function AuthedApp() {
   const [mostrarSubmenu, setMostrarSubmenu] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
 
+  // >>> NUEVO: almacena la fila seleccionada para Recibo
+  const [reciboRow, setReciboRow] = useState(null);
+
   const isMobile = () => window.innerWidth < 992;
 
   const go = (sec) => {
@@ -35,9 +38,23 @@ function AuthedApp() {
     switch (seccion) {
       case 'registrar-cliente': return <RegistrarCliente />;
       case 'registrar-abogado': return <FormAbogado />;
-      case 'protocolito':       return <Protocolito />;
-      case 'recibo':       return <Recibo/>;
-      default:                  return <RegistrarCliente />;
+
+      case 'protocolito':
+        // >>> PASAMOS un handler para abrir Recibo desde Protocolito
+        return (
+          <Protocolito
+            onOpenRecibo={(row) => {
+              setReciboRow(row);
+              setSeccion('recibo');
+            }}
+          />
+        );
+
+      case 'recibo':
+        // >>> Recibo recibe la fila seleccionada y un onBack opcional
+        return <Recibo row={reciboRow} onBack={() => setSeccion('protocolito')} />;
+
+      default: return <RegistrarCliente />;
     }
   };
 
@@ -137,7 +154,7 @@ function AuthedApp() {
             <li title="Recibos" style={itemStyle} onClick={() => go('recibo')}>
               <span style={iconStyle}>📄</span>{sidebarOpen && <span>Recibos</span>}
             </li>
-             {/*<li title="Asesorías Pendientes" style={itemStyle} onClick={() => go('asesorias')}>
+            {/*<li title="Asesorías Pendientes" style={itemStyle} onClick={() => go('asesorias')}>
               <span style={iconStyle}>📘</span>{sidebarOpen && <span>Asesorías Pendientes</span>}
             </li>*/}
             <li title="Protocolito" style={itemStyle} onClick={() => go('protocolito')}>

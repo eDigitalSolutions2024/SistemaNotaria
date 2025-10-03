@@ -25,6 +25,15 @@ temp/
 coverage/
 .nyc_output/
 
+# --- Anclados a la RAÍZ (para errores accidentales en la raíz) ---
+node_modules/
+**/node_modules/
+/package-lock.json
+/yarn.lock
+/pnpm-lock.yaml
+# Si NO tienes proyecto npm en la raíz, ignora también el package.json de la raíz:
+# /package.json
+
 # =========================
 # Backend (Node/Express)
 # =========================
@@ -34,6 +43,9 @@ Backend/build/
 Backend/.cache/
 Backend/.eslintcache
 Backend/*.tsbuildinfo
+# >>> NO ignores los manifests del Backend (deben versionarse)
+# Backend/package-lock.json   <-- QUITADO
+# Backend/package.json        <-- QUITADO
 
 # Env/credenciales (deja solo el ejemplo)
 Backend/.env
