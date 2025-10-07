@@ -147,4 +147,58 @@ router.get('/:id/pdf', async (req, res) => {
   }
 });
 
+
+// GET /api/recibos?q=texto&desde=YYYY-MM-DD&hasta=YYYY-MM-DD&page=1&limit=25
+router.get('/', async (req, res) => {
+  try {
+    const { q, desde, hasta } = req.query;
+    const page  = Math.max(1, parseInt(req.query.page || '1', 10));
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit || '25', 10)));
+    const skip  = (page - 1) * limit;
+
+    const filter = {};
+
+    // rango de fechas
+    if (desde || hasta) {
+      filter.fecha = {};
+      if (desde) filter.fecha.$gte = new Date(`${desde}T00:00:00.000Z`);
+      if (hasta) filter.fecha.$lte = new Date(`${hasta}T23:59:59.999Z`);
+    }
+
+    // búsqueda libre (recibiDe, concepto, abogado, tipoTramite, control)
+    if (q && String(q).trim()) {
+      const rx = new RegExp(String(q).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      filter.$or = [
+        { recibiDe: rx },
+        { concepto: rx },
+        { abogado: rx },
+        { tipoTramite: rx },
+        { control: rx },
+      ];
+    }
+
+    // ...dentro del GET '/'
+        const sort = { fecha: -1, _id: -1 }; // más recientes primero
+        const [list, total] = await Promise.all([
+          Recibo.find(filter)
+            .sort(sort)         // 👈 ordenados por fecha de emisión
+            .skip(skip)
+            .limit(limit)
+            .lean(),
+          Recibo.countDocuments(filter),
+        ]);
+    // calculamos numeroRecibo (últimos 4 del ObjectId) SIN modificar el modelo
+    const items = list.map(r => ({
+      ...r,
+      numeroRecibo: String(r?._id || '').slice(-4).toUpperCase(),
+    }));
+
+    return res.json({ ok: true, total, page, limit, items });
+  } catch (e) {
+    console.error('LISTAR RECIBOS ERROR:', e);
+    return res.status(500).json({ ok: false, msg: 'Error listando recibos' });
+  }
+});
+
+
 module.exports = router;

@@ -5,25 +5,24 @@ import FormAbogado from '../components/FormAbogado';
 import RegistrarCliente from '../pages/Home';
 import Protocolito from '../components/Protocolito';
 import Recibo from '../components/ReciboNotaria17';
+import ConsultarRecibos from '../components/ConsultarRecibos'; // ← NUEVO
 
 import { useAuth } from '../auth/AuthContext';
 import Login from '../components/Login';
 
-/** Conmutador: si no hay sesión -> Login; si hay sesión -> app */
 export default function MainPage() {
   const { isAuthenticated } = useAuth();
   return isAuthenticated ? <AuthedApp /> : <Login />;
 }
 
-/** Todo el layout con hooks va aquí (sin condicionales alrededor) */
 function AuthedApp() {
-  const { user, logout } = useAuth(); // ← user: { id/_id, role }, logout()
+  const { user, logout } = useAuth();
 
   const [seccion, setSeccion] = useState('registrar-cliente');
   const [mostrarSubmenu, setMostrarSubmenu] = useState(false);
+  const [mostrarSubmenuRecibos, setMostrarSubmenuRecibos] = useState(false); // ← NUEVO
   const [sidebarOpen, setSidebarOpen] = useState(true);
 
-  // >>> NUEVO: almacena la fila seleccionada para Recibo
   const [reciboRow, setReciboRow] = useState(null);
 
   const isMobile = () => window.innerWidth < 992;
@@ -31,6 +30,7 @@ function AuthedApp() {
   const go = (sec) => {
     setSeccion(sec);
     setMostrarSubmenu(false);
+    setMostrarSubmenuRecibos(false); // ← cerrar submenu Recibos
     if (isMobile()) setSidebarOpen(false);
   };
 
@@ -38,9 +38,7 @@ function AuthedApp() {
     switch (seccion) {
       case 'registrar-cliente': return <RegistrarCliente />;
       case 'registrar-abogado': return <FormAbogado />;
-
       case 'protocolito':
-        // >>> PASAMOS un handler para abrir Recibo desde Protocolito
         return (
           <Protocolito
             onOpenRecibo={(row) => {
@@ -49,11 +47,14 @@ function AuthedApp() {
             }}
           />
         );
-
       case 'recibo':
-        // >>> Recibo recibe la fila seleccionada y un onBack opcional
         return <Recibo row={reciboRow} onBack={() => setSeccion('protocolito')} />;
-
+      case 'recibos-consultar': // ← NUEVO
+        return (
+          <ConsultarRecibos
+            onOpenRecibo={(row) => { setReciboRow(row); setSeccion('recibo'); }}
+          />
+        );
       default: return <RegistrarCliente />;
     }
   };
@@ -92,12 +93,10 @@ function AuthedApp() {
 
   return (
     <div className="main-layout">
-      {/* SIDEBAR */}
       <aside
         className={`sidebar ${sidebarOpen ? 'expanded' : 'collapsed'}`}
         style={sidebarStyle}
       >
-        {/* Handle */}
         <button
           className="sidebar-handle"
           onClick={() => setSidebarOpen(o => !o)}
@@ -108,14 +107,12 @@ function AuthedApp() {
           {sidebarOpen ? '❮' : '❯'}
         </button>
 
-        {/* Encabezado */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 4px' }}>
           <span style={iconStyle}>⚖️</span>
           {sidebarOpen && <div className="sidebar-title" style={{ fontWeight: 700 }}>Notaría 17</div>}
         </div>
         <hr style={{ borderColor: '#374151', margin: '6px 0' }} />
 
-        {/* Menú */}
         <div style={{ overflowY: 'auto' }}>
           <ul style={{ padding: 0, margin: 0 }}>
             {/* Registrar (submenu) */}
@@ -131,14 +128,11 @@ function AuthedApp() {
               <span className="icon" style={iconStyle}>📋</span>
               {sidebarOpen && <span>Registrar ▾</span>}
             </li>
-
             {sidebarOpen && mostrarSubmenu && (
               <ul style={{ listStyle: 'none', paddingLeft: 40, marginTop: 4, marginBottom: 8 }}>
                 <li style={{ ...itemStyle, padding: '8px 6px' }} onClick={() => go('registrar-cliente')}>
                   <span style={iconStyle}>👤</span><span>Registrar Cliente</span>
                 </li>
-
-                {/* Solo ADMIN ve "Registrar Abogado" */}
                 {user?.role === 'admin' && (
                   <li style={{ ...itemStyle, padding: '8px 6px' }} onClick={() => go('registrar-abogado')}>
                     <span style={iconStyle}>👨‍⚖️</span><span>Registrar Abogado</span>
@@ -147,23 +141,43 @@ function AuthedApp() {
               </ul>
             )}
 
-            {/* Items simples */}
-            <li title="Buscar Cliente" style={itemStyle} onClick={() => go('buscar')}>
+            {/* Escrituras */}
+            <li title="Escrituras" style={itemStyle} onClick={() => go('buscar')}>
               <span style={iconStyle}>🔍</span>{sidebarOpen && <span>Escrituras</span>}
             </li>
-            <li title="Recibos" style={itemStyle} onClick={() => go('recibo')}>
-              <span style={iconStyle}>📄</span>{sidebarOpen && <span>Recibos</span>}
+
+            {/* Recibos (submenu) — NUEVO */}
+            <li
+              style={itemStyle}
+              className="submenu"
+              title="Recibos"
+              onClick={() => {
+                if (!sidebarOpen) { setSidebarOpen(true); return; }
+                setMostrarSubmenuRecibos(v => !v);
+              }}
+            >
+              <span style={iconStyle}>📄</span>
+              {sidebarOpen && <span>Recibos ▾</span>}
             </li>
-            {/*<li title="Asesorías Pendientes" style={itemStyle} onClick={() => go('asesorias')}>
-              <span style={iconStyle}>📘</span>{sidebarOpen && <span>Asesorías Pendientes</span>}
-            </li>*/}
+            {sidebarOpen && mostrarSubmenuRecibos && (
+              <ul style={{ listStyle: 'none', paddingLeft: 40, marginTop: 4, marginBottom: 8 }}>
+                <li style={{ ...itemStyle, padding: '8px 6px' }} onClick={() => go('recibo')}>
+                  <span style={iconStyle}>➕</span><span>Generar recibo</span>
+                </li>
+                <li style={{ ...itemStyle, padding: '8px 6px' }} onClick={() => go('recibos-consultar')}>
+                  <span style={iconStyle}>🗂️</span><span>Consultar recibos</span>
+                </li>
+              </ul>
+            )}
+
+            {/* Protocolito */}
             <li title="Protocolito" style={itemStyle} onClick={() => go('protocolito')}>
               <span style={iconStyle}>📑</span>{sidebarOpen && <span>Protocolito</span>}
             </li>
           </ul>
         </div>
 
-        {/* FOOTER DEL SIDEBAR (usuario + logout) */}
+        {/* FOOTER */}
         <div
           style={{
             marginTop: 'auto',
@@ -213,7 +227,6 @@ function AuthedApp() {
         </div>
       </aside>
 
-      {/* CONTENIDO */}
       <main className="contenido" style={mainStyle}>
         {renderContenido()}
       </main>

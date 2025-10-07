@@ -116,6 +116,23 @@ async function handleSelectNumero(value) {
 }
 
 
+// deja la fecha que ya tenía el usuario (o hoy), y limpia el resto
+const resetFormForType = (tipo, keepFecha) => ({
+  fecha: keepFecha || hoy,
+  tipoTramite: tipo,
+  recibiDe: "",
+  abogado: "",
+  concepto: "",
+  control: "",
+  totalTramite: "",
+  totalPagado: "",
+  totalImpuestos: "",
+  valorAvaluo: "",
+  totalGastosExtra: "",
+  totalHonorarios: "",
+});
+
+
   // Helpers
   const toNum = (v) => Number(String(v).replace(/[^0-9.]/g, "")) || 0;
   const restante = Math.max(0, toNum(f.totalTramite) - toNum(f.totalPagado));
@@ -211,22 +228,24 @@ async function handleSelectNumero(value) {
                 value={f.tipoTramite}
                 onChange={(e) => {
                   const next = e.target.value;
-                  setF((prev) => ({
-                    ...prev,
-                    tipoTramite: next,
-                    // si cambia a Protocolito, vaciamos control para obligar a elegir
-                    control: next === "Protocolito" ? "" : prev.control,
-                  }));
 
-                  // si salimos de Protocolito, limpiamos selección
-                  if (next !== "Protocolito") {
-                    setNumeroSel("");
-                  }
+                  // limpiar todo el formulario para el nuevo tipo
+                  setF((prev) => resetFormForType(next, prev.fecha));
+
+                  // resetear selects/flags relacionados
+                  setNumeroSel("");
+                  setConceptoTouched(false);
+                  setSavedId("");
+                  setSaveError("");
+
+                  // si quieres volver a cargar números al regresar a Protocolito,
+                  // puedes también hacer: loadedOnce.current = false;
                 }}
               >
                 <option value="Protocolito">Protocolito</option>
                 <option value="Escritura">Escritura</option>
                 <option value="Contrato">Contrato</option>
+                <option value="Otro">Otro</option>
               </select>
             </Field>
 
@@ -310,41 +329,43 @@ async function handleSelectNumero(value) {
 
             {/* Los 4 siguientes se ocultan visualmente para Protocolito; 
                 para otros tipos puedes mostrarlos si los necesitas */}
-            {f.tipoTramite !== "Protocolito" && (
-              <>
-                <Field label="Total Impuestos (sistema)">
-                  <MoneyInput
-                    value={f.totalImpuestos}
-                    onChange={(v) => setF({ ...f, totalImpuestos: v })}
-                    readOnly
-                  />
-                </Field>
+            {/* Ocultar para Protocolito y Contrato; mostrar en los demás tipos */}
+              {!["Protocolito", "Contrato","Otro"].includes(f.tipoTramite) && (
+                <>
+                  <Field label="Total Impuestos (sistema)">
+                    <MoneyInput
+                      value={f.totalImpuestos}
+                      onChange={(v) => setF({ ...f, totalImpuestos: v })}
+                      
+                    />
+                  </Field>
 
-                <Field label="Valor Avalúo (sistema)">
-                  <MoneyInput
-                    value={f.valorAvaluo}
-                    onChange={(v) => setF({ ...f, valorAvaluo: v })}
-                    readOnly
-                  />
-                </Field>
+                  <Field label="Valor Avalúo (sistema)">
+                    <MoneyInput
+                      value={f.valorAvaluo}
+                      onChange={(v) => setF({ ...f, valorAvaluo: v })}
+                     
+                    />
+                  </Field>
 
-                <Field label="Total Gastos Extra (sistema)">
-                  <MoneyInput
-                    value={f.totalGastosExtra}
-                    onChange={(v) => setF({ ...f, totalGastosExtra: v })}
-                    readOnly
-                  />
-                </Field>
+                  <Field label="Total Gastos Extra (sistema)">
+                    <MoneyInput
+                      value={f.totalGastosExtra}
+                      onChange={(v) => setF({ ...f, totalGastosExtra: v })}
+                     
+                    />
+                  </Field>
 
-                <Field label="Total Honorarios (sistema)">
-                  <MoneyInput
-                    value={f.totalHonorarios}
-                    onChange={(v) => setF({ ...f, totalHonorarios: v })}
-                    readOnly
-                  />
-                </Field>
-              </>
-            )}
+                  <Field label="Total Honorarios (sistema)">
+                    <MoneyInput
+                      value={f.totalHonorarios}
+                      onChange={(v) => setF({ ...f, totalHonorarios: v })}
+                      
+                    />
+                  </Field>
+                </>
+              )}
+
           </div>
 
           {saveError && (
