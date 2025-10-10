@@ -3,7 +3,7 @@ const { Schema } = mongoose;
 
 const ReciboSchema = new Schema({
   fecha:        { type: Date, required: true },
-  tipoTramite:  { type: String, enum: ['Protocolito','Escritura','Contrato'], default: 'Protocolito' },
+  tipoTramite:  { type: String, enum: ['Protocolito','Escritura','Contrato','otro'], default: 'Protocolito' },
   recibiDe:     { type: String, required: true, trim: true },
   abogado:      { type: String, trim: true },
   concepto:     { type: String, trim: true },

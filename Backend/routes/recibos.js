@@ -5,7 +5,7 @@ const router = express.Router();
 const Recibo = require('../models/Recibo');
 const Protocolito = require('../models/Protocolito');
 const { buildReciboPDF } = require('../utils/pdfRecibo');
-
+const XLSX = require('xlsx');
 /**
  * GET /api/recibos/protocolitos/numeros
  * Devuelve [{ numeroTramite, cliente, abogado, fecha }, ...]
@@ -200,5 +200,62 @@ router.get('/', async (req, res) => {
   }
 });
 
+
+// GET /recibos/export?q=&desde=&hasta=
+router.get('/export', async (req, res) => {
+  try {
+    const { q, desde, hasta } = req.query;
+
+    // --- Construye filtros como en tu GET /recibos ---
+    const filtro = {};
+    if (q) {
+      // ejemplo: busca en recibiDe o concepto
+      filtro.$or = [
+        { recibiDe: { $regex: q, $options: 'i' } },
+        { concepto: { $regex: q, $options: 'i' } },
+        { abogado:  { $regex: q, $options: 'i' } },
+      ];
+    }
+    if (desde || hasta) {
+      filtro.fecha = {};
+      if (desde) filtro.fecha.$gte = new Date(`${desde}T00:00:00.000Z`);
+      if (hasta) filtro.fecha.$lte = new Date(`${hasta}T23:59:59.999Z`);
+    }
+
+    const docs = await Recibo.find(filtro).sort({ fecha: -1 }).lean();
+
+    // --- Mapea columnas amigables ---
+    const rows = docs.map((r, idx) => ({
+      NoRecibo: (r._id ? String(r._id).slice(-4).toUpperCase() : (r.numeroRecibo || '')),
+      Fecha: r.fecha ? new Date(r.fecha).toISOString().slice(0,10) : '',
+      Cliente: r.recibiDe || '',
+      Concepto: r.concepto || '',
+      Total: (r.total != null ? Number(r.total) : (r.totalPagado != null ? Number(r.totalPagado) : 0)),
+      Abogado: r.abogado || '',
+    }));
+
+    // --- Genera workbook ---
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.json_to_sheet(rows);
+    // Formatea encabezados “bonitos”
+    XLSX.utils.book_append_sheet(wb, ws, 'Recibos');
+
+    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+
+    const hoy = new Date();
+    const y = hoy.getFullYear();
+    const m = String(hoy.getMonth() + 1).padStart(2, '0');
+    const d = String(hoy.getDate()).padStart(2, '0');
+
+    res.setHeader('Content-Disposition', `attachment; filename="recibos_${y}-${m}-${d}.xlsx"`);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    return res.send(buf);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'No se pudo generar el Excel.' });
+  }
+});
+
+module.exports = router;
 
 module.exports = router;

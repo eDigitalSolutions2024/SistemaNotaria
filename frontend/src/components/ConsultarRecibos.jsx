@@ -22,11 +22,7 @@ export default function ConsultarRecibos({ onOpenRecibo }) {
       if (desde) params.desde = desde;
       if (hasta) params.hasta = hasta;
 
-      // Espera un endpoint tipo GET /recibos (con filtros por query params)
-      // Ajusta si tu backend usa otra ruta.
       const { data } = await axios.get(`${API}/recibos`, { params });
-
-      // Normaliza _id -> id para DataGrid
       const mapped = (Array.isArray(data) ? data : data?.items || []).map((r, i) => ({
         id: r._id || r.id || i,
         ...r
@@ -40,92 +36,124 @@ export default function ConsultarRecibos({ onOpenRecibo }) {
     }
   };
 
-  useEffect(() => { fetchData(); /* carga inicial */ }, []);
-        const onlyDate = (d) => {
-        if (!d) return '';
-        const dt = new Date(d);
-        if (isNaN(dt)) return '';
-        const y = dt.getFullYear();
-        const m = String(dt.getMonth() + 1).padStart(2, '0');
-        const day = String(dt.getDate()).padStart(2, '0');
-        return `${y}-${m}-${day}`;
-        };
+  useEffect(() => { fetchData(); }, []);
+
+  const onlyDate = (d) => {
+    if (!d) return '';
+    const dt = new Date(d);
+    if (isNaN(dt)) return '';
+    const y = dt.getFullYear();
+    const m = String(dt.getMonth() + 1).padStart(2, '0');
+    const day = String(dt.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  };
 
   const columns = useMemo(() => ([
     {
-    field: 'numeroRecibo',
-    headerName: 'No. Recibo',
-    width: 110,
-    valueGetter: (_v, row) => {
-      const id = row?._id || row?.id || '';
-      return id ? String(id).slice(-4).toUpperCase() : '';
+      field: 'numeroRecibo',
+      headerName: 'No. Recibo',
+      width: 110,
+      valueGetter: (_v, row) => {
+        const id = row?._id || row?.id || '';
+        return id ? String(id).slice(-4).toUpperCase() : '';
+      },
     },
-  },
-  {
-    field: 'fecha',
-    headerName: 'Fecha',
-    width: 130,
-    // sin valueFormatter; devolvemos la cadena ya formateada
-    valueGetter: (_v, row) => onlyDate(row?.fecha),
-  },
-  { field: 'recibiDe', headerName: 'Cliente', flex: 1, maxWidth: 180 },
-  { field: 'concepto', headerName: 'Concepto', flex: 1.2, minWidth: 220 },
-  {
-    field: 'total',
-    headerName: 'Total',
-    width: 120,
-    valueGetter: (_v, row) =>
-      row?.total != null
-        ? `$ ${Number(row.total).toFixed(2)}`
-        : (row?.totalPagado != null ? `$ ${Number(row.totalPagado).toFixed(2)}` : ''),
-  },
-  { field: 'abogado', headerName: 'Abogado', width: 160, valueGetter: (_v, row) => row?.abogado || '' },
-{
-  field: 'acciones',
-  headerName: 'Acciones',
-  width: 140,
-  sortable: false,
-  align: 'center',
-  headerAlign: 'center',
-  renderCell: (params) => {
-    const id = params.row._id || params.row.id;
-    const openPdf = (e) => {
-      e.stopPropagation(); // no seleccionar fila
-      window.open(`${API}/recibos/${id}/pdf`, '_blank');
-    };
-
-    return (
-      <div style={{ width: '100%', display: 'flex', justifyContent: 'center' }}>
-        <button
-          onClick={openPdf}
-          title="Abrir PDF"
-          style={{
-            background: '#ef4444', 
-            marginTop: 15,    // rojo
-            color: '#fff',             // texto blanco
-            border: 'none',
-            padding: '6px 12px',
-            borderRadius: 8,
-            fontSize: 12,
-            fontWeight: 700,
-            cursor: 'pointer',
-            boxShadow: '0 1px 2px rgba(0,0,0,.08)',
-            transition: 'transform .06s ease, filter .15s ease',
-            lineHeight: 1.2,
-          }}
-          onMouseEnter={(e) => (e.currentTarget.style.filter = 'brightness(0.95)')}
-          onMouseLeave={(e) => (e.currentTarget.style.filter = '')}
-          onMouseDown={(e) => (e.currentTarget.style.transform = 'scale(0.98)')}
-          onMouseUp={(e) => (e.currentTarget.style.transform = '')}
-        >
-          PDF
-        </button>
-      </div>
-    );
-  },
-}
-
+    {
+      field: 'fecha',
+      headerName: 'Fecha',
+      width: 130,
+      valueGetter: (_v, row) => onlyDate(row?.fecha),
+    },
+    { field: 'recibiDe', headerName: 'Cliente', flex: 1, maxWidth: 180 },
+    { field: 'concepto', headerName: 'Concepto', flex: 1.2, minWidth: 220 },
+    {
+      field: 'total',
+      headerName: 'Total',
+      width: 120,
+      valueGetter: (_v, row) =>
+        row?.total != null
+          ? `$ ${Number(row.total).toFixed(2)}`
+          : (row?.totalPagado != null ? `$ ${Number(row.totalPagado).toFixed(2)}` : ''),
+    },
+    { field: 'abogado', headerName: 'Abogado', width: 160, valueGetter: (_v, row) => row?.abogado || '' },
+    {
+      field: 'acciones',
+      headerName: 'Acciones',
+      width: 140,
+      sortable: false,
+      align: 'center',
+      headerAlign: 'center',
+      renderCell: (params) => {
+        const id = params.row._id || params.row.id;
+        const openPdf = (e) => {
+          e.stopPropagation();
+          window.open(`${API}/recibos/${id}/pdf`, '_blank');
+        };
+        return (
+          <div style={{ width: '100%', display: 'flex', justifyContent: 'center' }}>
+            <button
+              onClick={openPdf}
+              title="Abrir PDF"
+              style={{
+                background: '#ef4444',
+                marginTop: 15,
+                color: '#fff',
+                border: 'none',
+                padding: '6px 12px',
+                borderRadius: 8,
+                fontSize: 12,
+                fontWeight: 700,
+                cursor: 'pointer',
+                boxShadow: '0 1px 2px rgba(0,0,0,.08)',
+                transition: 'transform .06s ease, filter .15s ease',
+                lineHeight: 1.2,
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.filter = 'brightness(0.95)')}
+              onMouseLeave={(e) => (e.currentTarget.style.filter = '')}
+              onMouseDown={(e) => (e.currentTarget.style.transform = 'scale(0.98)')}
+              onMouseUp={(e) => (e.currentTarget.style.transform = '')}
+            >
+              PDF
+            </button>
+          </div>
+        );
+      },
+    }
   ]), [onOpenRecibo]);
+
+  // --- NUEVO: Exportar Excel con los mismos filtros aplicados ---
+  const exportarExcel = async () => {
+    try {
+      const params = {};
+      if (q) params.q = q;
+      if (desde) params.desde = desde;
+      if (hasta) params.hasta = hasta;
+
+      const res = await axios.get(`${API}/recibos/export`, {
+        params,
+        responseType: 'blob'
+      });
+
+      const blob = new Blob([res.data], {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      });
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const hoy = new Date();
+      const y = hoy.getFullYear();
+      const m = String(hoy.getMonth() + 1).padStart(2, '0');
+      const d = String(hoy.getDate()).padStart(2, '0');
+      a.href = url;
+      a.download = `recibos_${y}-${m}-${d}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (e) {
+      console.error(e);
+      alert('No se pudo exportar el Excel.');
+    }
+  };
 
   return (
     <div style={{ display: 'grid', gap: 12 }}>
@@ -165,6 +193,23 @@ export default function ConsultarRecibos({ onOpenRecibo }) {
           <button onClick={() => { setQ(''); setDesde(''); setHasta(''); fetchData(); }}
                   style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #ddd', cursor: 'pointer' }}>
             Limpiar
+          </button>
+
+          {/* NUEVO: botón Exportar */}
+          <button
+            onClick={exportarExcel}
+            style={{
+              padding: '8px 12px',
+              borderRadius: 8,
+              border: '1px solid #10b981',
+              background: '#10b981',
+              color: '#fff',
+              cursor: 'pointer',
+              fontWeight: 600
+            }}
+            title="Exportar a Excel"
+          >
+            Exportar Excel
           </button>
         </div>
       </div>
