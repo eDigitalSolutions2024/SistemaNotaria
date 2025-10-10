@@ -13,6 +13,16 @@ export default function ConsultarRecibos({ onOpenRecibo }) {
   const [hasta, setHasta] = useState('');
   const [error, setError] = useState(null);
 
+  // lista de abogados detectados para el modal
+  const [abogadosSet, setAbogadosSet] = useState([]);
+
+  // --- modal de exportación ---
+  const [openExport, setOpenExport] = useState(false);
+  const [exDesde, setExDesde] = useState('');
+  const [exHasta, setExHasta] = useState('');
+  const [exAbogadoQ, setExAbogadoQ] = useState('');
+  const [exAbogadosSel, setExAbogadosSel] = useState([]);
+
   const fetchData = async () => {
     try {
       setLoading(true);
@@ -28,6 +38,14 @@ export default function ConsultarRecibos({ onOpenRecibo }) {
         ...r
       }));
       setRows(mapped);
+
+      // construir catálogo de abogados para el modal
+      const uniq = Array.from(
+        new Set(
+          mapped.map(r => (r?.abogado || '').trim()).filter(Boolean)
+        )
+      ).sort((a, b) => a.localeCompare(b, 'es'));
+      setAbogadosSet(uniq);
     } catch (e) {
       console.error(e);
       setError('No se pudieron cargar los recibos.');
@@ -75,7 +93,7 @@ export default function ConsultarRecibos({ onOpenRecibo }) {
           ? `$ ${Number(row.total).toFixed(2)}`
           : (row?.totalPagado != null ? `$ ${Number(row.totalPagado).toFixed(2)}` : ''),
     },
-    { field: 'abogado', headerName: 'Abogado', width: 160, valueGetter: (_v, row) => row?.abogado || '' },
+    { field: 'abogado', headerName: 'Abogado', width: 200, valueGetter: (_v, row) => row?.abogado || '' },
     {
       field: 'acciones',
       headerName: 'Acciones',
@@ -121,13 +139,33 @@ export default function ConsultarRecibos({ onOpenRecibo }) {
     }
   ]), [onOpenRecibo]);
 
-  // --- NUEVO: Exportar Excel con los mismos filtros aplicados ---
+  // --- botón Exportar abre modal ---
+  const openExportModal = () => {
+    // inicializa con filtros rápidos actuales
+    setExDesde(desde || '');
+    setExHasta(hasta || '');
+    setExAbogadoQ('');
+    setExAbogadosSel([]);
+    setOpenExport(true);
+  };
+  const closeExportModal = () => setOpenExport(false);
+
+  const toggleExAbogado = (name) => {
+    setExAbogadosSel(prev =>
+      prev.includes(name) ? prev.filter(n => n !== name) : [...prev, name]
+    );
+  };
+
   const exportarExcel = async () => {
     try {
       const params = {};
+      // filtros del modal
+      if (exDesde) params.desde = exDesde;
+      if (exHasta) params.hasta = exHasta;
+      if (exAbogadosSel.length) params.abogados = exAbogadosSel.join(',');
+      if (exAbogadoQ.trim()) params.abogadoQ = exAbogadoQ.trim();
+      // puedes incluir también el 'q' general si quieres que afecte la exportación
       if (q) params.q = q;
-      if (desde) params.desde = desde;
-      if (hasta) params.hasta = hasta;
 
       const res = await axios.get(`${API}/recibos/export`, {
         params,
@@ -149,6 +187,7 @@ export default function ConsultarRecibos({ onOpenRecibo }) {
       a.click();
       a.remove();
       window.URL.revokeObjectURL(url);
+      closeExportModal();
     } catch (e) {
       console.error(e);
       alert('No se pudo exportar el Excel.');
@@ -159,7 +198,7 @@ export default function ConsultarRecibos({ onOpenRecibo }) {
     <div style={{ display: 'grid', gap: 12 }}>
       <h2 style={{ margin: 0 }}>Consultar Recibos</h2>
 
-      {/* Filtros */}
+      {/* Filtros rápidos (siguen igual) */}
       <div style={{
         display: 'grid',
         gridTemplateColumns: '1fr repeat(2, max-content) max-content',
@@ -194,10 +233,9 @@ export default function ConsultarRecibos({ onOpenRecibo }) {
                   style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #ddd', cursor: 'pointer' }}>
             Limpiar
           </button>
-
-          {/* NUEVO: botón Exportar */}
+          {/* MISMO BOTÓN: abre modal de exportación con filtros */}
           <button
-            onClick={exportarExcel}
+            onClick={openExportModal}
             style={{
               padding: '8px 12px',
               borderRadius: 8,
@@ -227,6 +265,99 @@ export default function ConsultarRecibos({ onOpenRecibo }) {
           initialState={{ pagination: { paginationModel: { pageSize: 10 } } }}
         />
       </div>
+
+      {/* MODAL DE EXPORTACIÓN (solo se abre desde el botón) */}
+      {openExport && (
+        <div
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.35)', display: 'grid', placeItems: 'center', zIndex: 9999 }}
+          onClick={closeExportModal}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: 'min(720px, 92vw)',
+              maxHeight: '85vh',
+              overflow: 'auto',
+              background: '#fff',
+              borderRadius: 14,
+              boxShadow: '0 10px 30px rgba(0,0,0,.25)',
+              padding: 18,
+            }}
+          >
+            <h3 style={{ marginTop: 4, marginBottom: 12 }}>Exportar a Excel</h3>
+
+            <div style={{ display: 'grid', gap: 12 }}>
+              {/* Rango de fechas */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                <div>
+                  <label style={{ fontSize: 12, opacity: .75 }}>Desde</label>
+                  <input type="date" value={exDesde} onChange={(e) => setExDesde(e.target.value)}
+                         style={{ width: '100%', padding: 8, borderRadius: 8, border: '1px solid #ddd' }}/>
+                </div>
+                <div>
+                  <label style={{ fontSize: 12, opacity: .75 }}>Hasta</label>
+                  <input type="date" value={exHasta} onChange={(e) => setExHasta(e.target.value)}
+                         style={{ width: '100%', padding: 8, borderRadius: 8, border: '1px solid #ddd' }}/>
+                </div>
+              </div>
+
+              {/* Búsqueda por texto (abogado) */}
+              <div>
+                <label style={{ fontSize: 12, opacity: .75 }}>Buscar abogado (texto)</label>
+                <input
+                  value={exAbogadoQ}
+                  onChange={(e) => setExAbogadoQ(e.target.value)}
+                  placeholder="Escribe parte del nombre del abogado…"
+                  style={{ width: '100%', padding: 8, borderRadius: 8, border: '1px solid #ddd' }}
+                />
+              </div>
+
+              {/* Multi-select de abogados detectados */}
+              <div>
+                <label style={{ fontSize: 12, opacity: .75, display: 'block', marginBottom: 6 }}>
+                  Seleccionar abogados (opcional)
+                </label>
+                <div style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fill, minmax(220px,1fr))',
+                  gap: 6,
+                  border: '1px solid #eee',
+                  borderRadius: 10,
+                  padding: 8,
+                  maxHeight: 240,
+                  overflow: 'auto'
+                }}>
+                  {abogadosSet.length === 0 && (
+                    <div style={{ opacity: .6, fontSize: 13 }}>No hay abogados detectados en los resultados actuales.</div>
+                  )}
+                  {abogadosSet.map(name => (
+                    <label key={name} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '4px 6px' }}>
+                      <input
+                        type="checkbox"
+                        checked={exAbogadosSel.includes(name)}
+                        onChange={() => toggleExAbogado(name)}
+                      />
+                      <span>{name}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              {/* Botones */}
+              <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 6 }}>
+                <button onClick={closeExportModal}
+                        style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #ddd', background: '#fff', cursor: 'pointer' }}>
+                  Cancelar
+                </button>
+                <button onClick={exportarExcel}
+                        style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #10b981', background: '#10b981', color: '#fff', cursor: 'pointer', fontWeight: 600 }}>
+                  Exportar
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

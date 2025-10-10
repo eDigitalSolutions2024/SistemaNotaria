@@ -41,6 +41,12 @@ export default function ReciboNotaria17() {
   const [saveError, setSaveError] = useState("");
   const [savedId, setSavedId] = useState(""); // folio/ID devuelto por el backend
 
+
+  // catálogo de abogados/asistentes y selección actual
+const [catalogAbogados, setCatalogAbogados] = useState([]);
+const [loadingAbogados, setLoadingAbogados] = useState(false);
+const [abogadoId, setAbogadoId] = useState(''); // id numérico del modelo Abogado
+
   // Cargar números una sola vez cuando el tipo sea "Protocolito"
   useEffect(() => {
     if (f.tipoTramite !== "Protocolito") return;
@@ -61,6 +67,21 @@ export default function ReciboNotaria17() {
       })
       .finally(() => setNumsLoading(false));
   }, [f.tipoTramite]);
+
+
+  useEffect(() => {
+  let alive = true;
+  setLoadingAbogados(true);
+  axios.get(`${API}/recibos/abogados`)
+    .then(({ data }) => {
+      if (!alive) return;
+      const list = Array.isArray(data?.data) ? data.data : [];
+      setCatalogAbogados(list);
+    })
+    .catch(err => console.error('CAT ABOGADOS ERR:', err))
+    .finally(() => { if (alive) setLoadingAbogados(false); });
+  return () => { alive = false; };
+}, []);
 
   // Plantilla base editable en "Concepto" al cambiar tipo (sin pisar al usuario)
   useEffect(() => {
@@ -110,6 +131,8 @@ async function handleSelectNumero(value) {
         concepto: keepUserConcept ? prev.concepto : conceptoPlantilla,
       };
     });
+    const found = catalogAbogados.find(a => (a.nombre || '').trim() === (d.abogado || '').trim());
+if (found) setAbogadoId(String(found.id));
   } catch (e) {
     alert(e.response?.data?.msg || e.message || "Error");
   }
@@ -160,7 +183,8 @@ const resetFormForType = (tipo, keepFecha) => ({
         fecha: f.fecha,
         tipoTramite: f.tipoTramite,
         recibiDe: f.recibiDe,
-        abogado: f.abogado || "",
+        abogado: f.abogado || '',
+        abogadoId: abogadoId ? Number(abogadoId) : undefined, 
         concepto: f.concepto || "",
         // en Protocolito 'control' es el # Trámite
         control: f.control || null,
@@ -237,7 +261,7 @@ const resetFormForType = (tipo, keepFecha) => ({
                   setConceptoTouched(false);
                   setSavedId("");
                   setSaveError("");
-
+                     setAbogadoId('');
                   // si quieres volver a cargar números al regresar a Protocolito,
                   // puedes también hacer: loadedOnce.current = false;
                 }}
@@ -280,10 +304,23 @@ const resetFormForType = (tipo, keepFecha) => ({
             </Field>
 
             <Field label="Abogado Responsable">
-              <input
-                value={f.abogado}
-                onChange={(e) => setF({ ...f, abogado: e.target.value })}
-              />
+              <select
+                value={abogadoId}
+                onChange={(e) => {
+                  const id = e.target.value;
+                  setAbogadoId(id);
+                  const found = catalogAbogados.find(a => String(a.id) === String(id));
+                  setF(prev => ({ ...prev, abogado: found ? found.nombre : '' })); // nombre visible
+                }}
+              >
+                <option value="">{loadingAbogados ? 'Cargando…' : 'Selecciona…'}</option>
+                {catalogAbogados.map(a => (
+                  <option key={a.id} value={a.id}>
+                    {a.nombre} {a.role === 'ASISTENTE' ? '· Asistente' : ''}
+                    {a.disponible === false ? ' (no disponible)' : ''}
+                  </option>
+                ))}
+              </select>
             </Field>
 
             <Field label="Concepto" className="span-2">
