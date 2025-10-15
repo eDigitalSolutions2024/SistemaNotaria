@@ -11,3 +11,19 @@ code {
   font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
     monospace;
 }
+
+
+/* Fila cancelada: fondo rojo claro + texto más oscuro */
+.MuiDataGrid-row.row-cancelado {
+  background: #fee2e2;           /* rojo muy claro */
+}
+
+.MuiDataGrid-row.row-cancelado .MuiDataGrid-cell {
+  color: #7f1d1d;                /* rojo oscuro legible */
+  font-weight: 600;
+}
+
+/* Si usas virtual scroll, a veces el hover sobreescribe, reforzamos: */
+.MuiDataGrid-row.row-cancelado:hover {
+  background: #fecaca !important; /* un poco más intenso al hover */
+}

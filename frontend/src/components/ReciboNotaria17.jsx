@@ -4,7 +4,7 @@ import axios from "axios";
 import "../css/ReciboNotaria17.css";
 
 const API = process.env.REACT_APP_API_URL || "http://localhost:4000";
-const SAVE_URL = `${API}/recibos`; // ← ajusta si tu backend usa otra ruta
+const SAVE_URL = `${API}/recibos`;
 
 export default function ReciboNotaria17() {
   const hoy = useMemo(() => new Date().toISOString().slice(0, 10), []);
@@ -16,47 +16,138 @@ export default function ReciboNotaria17() {
     recibiDe: "",
     abogado: "",
     concepto: "",
-    control: "",           // ← para Protocolito será “# Trámite”
+    control: "",
     totalTramite: "",
-    totalPagado: "",
-    // campos “del sistema” (ocultos en Protocolito)
+    totalPagado: "",      // Escritura: pagado acumulado (solo lectura)
+    abono: "",            // Escritura: abono del recibo actual
     totalImpuestos: "",
     valorAvaluo: "",
     totalGastosExtra: "",
     totalHonorarios: "",
   });
 
-  // Para NO sobreescribir el concepto si el usuario ya lo modificó
   const [conceptoTouched, setConceptoTouched] = useState(false);
 
-  // lista y selección de protocolitos
+  // catálogo de abogados
+  const [catalogAbogados, setCatalogAbogados] = useState([]);
+  const [loadingAbogados, setLoadingAbogados] = useState(false);
+  const [abogadoId, setAbogadoId] = useState("");
+
+  // protocolitos
   const [numsLoading, setNumsLoading] = useState(false);
   const [numsError, setNumsError] = useState("");
   const [protocolitos, setProtocolitos] = useState([]);
   const [numeroSel, setNumeroSel] = useState("");
   const loadedOnce = useRef(false);
 
-  // estado de guardado
+  // estado guardado
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
-  const [savedId, setSavedId] = useState(""); // folio/ID devuelto por el backend
+  const [savedId, setSavedId] = useState("");
 
+  // Autocomplete Escrituras + Historial
+  const [escSugs, setEscSugs] = useState([]);
+  const [hist, setHist] = useState(null);
+  const escSearchTimer = useRef(null);
 
-  // catálogo de abogados/asistentes y selección actual
-const [catalogAbogados, setCatalogAbogados] = useState([]);
-const [loadingAbogados, setLoadingAbogados] = useState(false);
-const [abogadoId, setAbogadoId] = useState(''); // id numérico del modelo Abogado
+  /* ---------------- Escritura: pendiente + historial ---------------- */
 
-  // Cargar números una sola vez cuando el tipo sea "Protocolito"
+  async function loadEscrituraPendiente() {
+    const numero = String(f.control || "").trim();
+    if (!numero) return;
+    try {
+      setSaving(true);
+      const { data } = await axios.get(
+        `${API}/recibos/escrituras/${encodeURIComponent(numero)}/pending`
+      );
+      const info = data?.data || null;
+      if (!info) {
+        setHist(null);
+        return;
+      }
+
+      setF((prev) => {
+        const keepConcept = conceptoTouched && prev.concepto.trim();
+        const total = Number(info.totalTramite ?? 0);
+        const pagAc = Number(info.pagadoAcum ?? 0);
+        const restanteSugerido = Math.max(0, total - pagAc);
+        const rec = info.last || {};
+        return {
+          ...prev,
+          tipoTramite: "Escritura",
+          control: info.control,
+          concepto: keepConcept ? prev.concepto : "Pago de Escritura",
+          totalTramite: String(info.totalTramite ?? ""),
+          totalPagado: String(info.pagadoAcum ?? ""), // acumulado (readOnly)
+          abono: String(restanteSugerido),            // sugerencia (editable)
+          recibiDe: rec.recibiDe || prev.recibiDe,
+          abogado: rec.abogado || prev.abogado,
+          // “de sistema” desde el último recibo si existen
+          totalImpuestos: String(rec.totalImpuestos ?? ""),
+          valorAvaluo: String(rec.valorAvaluo ?? ""),
+          totalGastosExtra: String(rec.totalGastosExtra ?? ""),
+          totalHonorarios: String(rec.totalHonorarios ?? ""),
+        };
+      });
+
+      if (info.last?.abogado) {
+        const found = catalogAbogados.find(
+          (a) => (a.nombre || "").trim() === (info.last.abogado || "").trim()
+        );
+        if (found) setAbogadoId(String(found.id));
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function loadEscrituraHistorial() {
+    const numero = String(f.control || "").trim();
+    if (!numero) {
+      setHist(null);
+      return;
+    }
+    try {
+      const { data } = await axios.get(
+        `${API}/recibos/escrituras/${encodeURIComponent(numero)}/history`
+      );
+      setHist(data?.data || null);
+    } catch (e) {
+      console.error("HIST ERROR:", e);
+      setHist(null);
+    }
+  }
+
+  /* ---------------- cat. abogados / protocolitos ---------------- */
+
+  useEffect(() => {
+    let alive = true;
+    setLoadingAbogados(true);
+    axios
+      .get(`${API}/recibos/abogados`)
+      .then(({ data }) => {
+        if (!alive) return;
+        const list = Array.isArray(data?.data) ? data.data : [];
+        setCatalogAbogados(list);
+      })
+      .catch((err) => console.error("CAT ABOGADOS ERR:", err))
+      .finally(() => {
+        if (alive) setLoadingAbogados(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
   useEffect(() => {
     if (f.tipoTramite !== "Protocolito") return;
     if (loadedOnce.current) return;
     setNumsLoading(true);
     setNumsError("");
-
-    const url = `${API}/recibos/protocolitos/numeros`;
     axios
-      .get(url)
+      .get(`${API}/recibos/protocolitos/numeros`)
       .then(({ data }) => {
         setProtocolitos(Array.isArray(data?.data) ? data.data : []);
         loadedOnce.current = true;
@@ -68,108 +159,124 @@ const [abogadoId, setAbogadoId] = useState(''); // id numérico del modelo Aboga
       .finally(() => setNumsLoading(false));
   }, [f.tipoTramite]);
 
+  /* ---------------- autollenado de concepto ---------------- */
 
   useEffect(() => {
-  let alive = true;
-  setLoadingAbogados(true);
-  axios.get(`${API}/recibos/abogados`)
-    .then(({ data }) => {
-      if (!alive) return;
-      const list = Array.isArray(data?.data) ? data.data : [];
-      setCatalogAbogados(list);
-    })
-    .catch(err => console.error('CAT ABOGADOS ERR:', err))
-    .finally(() => { if (alive) setLoadingAbogados(false); });
-  return () => { alive = false; };
-}, []);
+    if (conceptoTouched) return;
+    const ya = String(f.concepto || "").trim().length > 0;
+    if (ya) return;
+    if (f.tipoTramite === "Protocolito") return;
 
-  // Plantilla base editable en "Concepto" al cambiar tipo (sin pisar al usuario)
-  useEffect(() => {
-  if (conceptoTouched) return; // respetar lo que haya escrito el usuario
-  const yaTiene = String(f.concepto || "").trim().length > 0;
-  if (yaTiene) return;
+    let base = "";
+    if (f.tipoTramite === "Escritura") base = "Pago de Escritura";
+    else if (f.tipoTramite === "Contrato") base = "Pago de Contrato";
+    else base = "Pago de trámite";
+    setF((prev) => ({ ...prev, concepto: base }));
+  }, [f.tipoTramite, conceptoTouched]);
 
-  // Para Protocolito: no autollenar; el motivo llega al seleccionar el # de protocolito
-  if (f.tipoTramite === "Protocolito") return;
+  /* ---------------- seleccionar protocolito ---------------- */
 
-  // Para otros tipos, conserva la plantilla
-  const base = f.tipoTramite ? `Pago de ${f.tipoTramite} con numero de Protocolito #${f.numeroTramite} ` : "";
-  if (base) setF((prev) => ({ ...prev, concepto: base }));
-}, [f.tipoTramite, conceptoTouched]);
-  // Al elegir # de protocolito, autorrellena campos y plantilla de concepto (sin pisar al usuario)
-async function handleSelectNumero(value) {
-  setNumeroSel(value);
-  if (!value) return;
+  async function handleSelectNumero(value) {
+    setNumeroSel(value);
+    if (!value) return;
 
-  try {
-    const { data } = await axios.get(
-      `${API}/recibos/protocolitos/${encodeURIComponent(value)}`
-    );
-    const d = data?.data || {};
+    try {
+      const { data } = await axios.get(
+        `${API}/recibos/protocolitos/${encodeURIComponent(value)}`
+      );
+      const d = data?.data || {};
 
-    setF((prev) => {
-      // Motivo tal cual viene del Protocolito (backend ya expone estos campos)
-      const motivoPlano =
-        d.tipoTramite || d.motivo || d.servicio || d.accion || "";
+      setF((prev) => {
+        const motivoPlano =
+          d.tipoTramite || d.motivo || d.servicio || d.accion || "";
+        const conceptoPlantilla = motivoPlano
+          ? `Pago de ${motivoPlano} con número de Protocolito #${d.numeroTramite}`
+          : d.numeroTramite
+          ? `Pago de trámite Protocolito #${d.numeroTramite}`
+          : "Pago de trámite Protocolito";
 
-      // Plantilla requerida: "Pago de {motivo}"
-      const conceptoPlantilla = motivoPlano
-        ? `Pago de ${motivoPlano} con numero de Protocolito #${d.numeroTramite}`
-        : (d.numeroTramite
-            ? `Pago de trámite Protocolito #${d.numeroTramite}`
-            : "Pago de trámite Protocolito");
+        const keepUserConcept =
+          conceptoTouched && String(prev.concepto || "").trim().length > 0;
 
-      const keepUserConcept =
-        conceptoTouched && String(prev.concepto || "").trim().length > 0;
+        return {
+          ...prev,
+          fecha: d.fecha ? String(d.fecha).slice(0, 10) : prev.fecha,
+          recibiDe: d.cliente || prev.recibiDe,
+          abogado: d.abogado || prev.abogado,
+          control: d.numeroTramite ? String(d.numeroTramite) : prev.control,
+          concepto: keepUserConcept ? prev.concepto : conceptoPlantilla,
+        };
+      });
 
-      return {
-        ...prev,
-        fecha: d.fecha ? String(d.fecha).slice(0, 10) : prev.fecha,
-        recibiDe: d.cliente || prev.recibiDe,
-        abogado: d.abogado || prev.abogado,
-        control: d.numeroTramite ? String(d.numeroTramite) : prev.control,
-        concepto: keepUserConcept ? prev.concepto : conceptoPlantilla,
-      };
-    });
-    const found = catalogAbogados.find(a => (a.nombre || '').trim() === (d.abogado || '').trim());
-if (found) setAbogadoId(String(found.id));
-  } catch (e) {
-    alert(e.response?.data?.msg || e.message || "Error");
+      const found = catalogAbogados.find(
+        (a) => (a.nombre || "").trim() === (d.abogado || "").trim()
+      );
+      if (found) setAbogadoId(String(found.id));
+    } catch (e) {
+      alert(e.response?.data?.msg || e.message || "Error");
+    }
   }
-}
 
+  /* ---------------- helpers / validación / submit ---------------- */
 
-// deja la fecha que ya tenía el usuario (o hoy), y limpia el resto
-const resetFormForType = (tipo, keepFecha) => ({
-  fecha: keepFecha || hoy,
-  tipoTramite: tipo,
-  recibiDe: "",
-  abogado: "",
-  concepto: "",
-  control: "",
-  totalTramite: "",
-  totalPagado: "",
-  totalImpuestos: "",
-  valorAvaluo: "",
-  totalGastosExtra: "",
-  totalHonorarios: "",
-});
+  const resetFormForType = (tipo, keepFecha) => ({
+    fecha: keepFecha || hoy,
+    tipoTramite: tipo,
+    recibiDe: "",
+    abogado: "",
+    concepto: "",
+    control: "",
+    totalTramite: "",
+    totalPagado: "",
+    abono: "",
+    totalImpuestos: "",
+    valorAvaluo: "",
+    totalGastosExtra: "",
+    totalHonorarios: "",
+  });
 
-
-  // Helpers
   const toNum = (v) => Number(String(v).replace(/[^0-9.]/g, "")) || 0;
-  const restante = Math.max(0, toNum(f.totalTramite) - toNum(f.totalPagado));
 
-  // Validación
+  const isEscritura = f.tipoTramite === "Escritura";
+  const hasPrevEscritura =
+    isEscritura && Array.isArray(hist?.items) && hist.items.length > 0;
+
+  // Escritura: pagado acumulado (desde historial/pending)
+  const pagadoAcum = isEscritura ? toNum(f.totalPagado) : 0;
+  const maxAbono = Math.max(0, toNum(f.totalTramite) - pagadoAcum);
+
+  // Pago actual (clamp)
+  const pagoActual = isEscritura
+    ? Math.min(toNum(f.abono), maxAbono)
+    : Math.min(toNum(f.totalPagado), toNum(f.totalTramite));
+
+  // Restante
+  const restante = Math.max(0, toNum(f.totalTramite) - (pagadoAcum + pagoActual));
+
+  // Validaciones
   const errors = {};
   if (!f.fecha) errors.fecha = "Requerido";
   if (!f.recibiDe.trim()) errors.recibiDe = "Requerido";
   if (!f.totalTramite || isNaN(toNum(f.totalTramite))) errors.totalTramite = "Inválido";
-  if (!f.totalPagado || isNaN(toNum(f.totalPagado))) errors.totalPagado = "Inválido";
-  // Para protocolito, pedimos número
-  if (f.tipoTramite === "Protocolito" && !f.control.trim()) errors.control = "Requerido";
 
-  // Guardar en BD y luego mostrar vista previa para imprimir/guardar PDF
+  if (isEscritura) {
+    if (!f.abono || isNaN(toNum(f.abono))) {
+      errors.abono = "Inválido";
+    } else if (toNum(f.abono) > maxAbono) {
+      errors.abono = `No puedes abonar más de $${maxAbono.toFixed(2)}`;
+    }
+  } else {
+    if (!f.totalPagado || isNaN(toNum(f.totalPagado))) {
+      errors.totalPagado = "Inválido";
+    } else if (toNum(f.totalPagado) > toNum(f.totalTramite)) {
+      errors.totalPagado = "No puedes pagar más que el total del trámite";
+    }
+  }
+
+  if (f.tipoTramite === "Protocolito" && !f.control.trim()) {
+    errors.control = "Requerido";
+  }
+
   const onSubmit = async (e) => {
     e.preventDefault();
     if (Object.keys(errors).length) return;
@@ -179,31 +286,30 @@ const resetFormForType = (tipo, keepFecha) => ({
       setSaveError("");
       setSavedId("");
 
+      const abonoNum = isEscritura ? Math.min(toNum(f.abono), maxAbono) : 0;
+      const totalPagadoEnviar = isEscritura
+        ? abonoNum
+        : Math.min(toNum(f.totalPagado), toNum(f.totalTramite));
+
       const payload = {
         fecha: f.fecha,
         tipoTramite: f.tipoTramite,
         recibiDe: f.recibiDe,
-        abogado: f.abogado || '',
-        abogadoId: abogadoId ? Number(abogadoId) : undefined, 
+        abogado: f.abogado || "",
+        abogadoId: abogadoId ? Number(abogadoId) : undefined,
         concepto: f.concepto || "",
-        // en Protocolito 'control' es el # Trámite
         control: f.control || null,
         totalTramite: toNum(f.totalTramite),
-        totalPagado: toNum(f.totalPagado),
+        totalPagado: totalPagadoEnviar,
+        abono: isEscritura ? abonoNum : undefined,
         restante,
-
-        // aunque los ocultaste para protocolito, pueden ir en 0
         totalImpuestos: toNum(f.totalImpuestos),
         valorAvaluo: toNum(f.valorAvaluo),
         totalGastosExtra: toNum(f.totalGastosExtra),
         totalHonorarios: toNum(f.totalHonorarios),
       };
 
-      const { data } = await axios.post(
-        SAVE_URL,
-        payload /* , { headers: { Authorization: `Bearer ${token}` } } */
-      );
-
+      const { data } = await axios.post(SAVE_URL, payload);
       const id = data?.data?._id;
       if (id) setSavedId(id);
 
@@ -213,9 +319,6 @@ const resetFormForType = (tipo, keepFecha) => ({
         }`;
         window.open(href, "_blank", "noopener,noreferrer");
       }
-
-      // si quieres además mostrar el modal de vista previa:
-      // setShowPrev(true);
     } catch (err) {
       setSaveError(
         err.response?.data?.msg ||
@@ -228,9 +331,53 @@ const resetFormForType = (tipo, keepFecha) => ({
     }
   };
 
-  // Etiqueta del campo "control" según tipo
+  /* ---------------- control label/placeholder ---------------- */
+
   const controlLabel =
-    f.tipoTramite === "Protocolito" ? "# Trámite *" : "Control";
+    f.tipoTramite === "Protocolito"
+      ? "# Trámite *"
+      : isEscritura
+      ? "Número de Escritura"
+      : "Control";
+
+  const controlPlaceholder =
+    f.tipoTramite === "Protocolito"
+      ? "Ej. 11232"
+      : isEscritura
+      ? "Ej. 2024/0001"
+      : "";
+
+  /* ---------------- autocomplete escrituras ---------------- */
+
+  useEffect(() => {
+    if (!isEscritura) {
+      setEscSugs([]);
+      return;
+    }
+    const q = String(f.control || "").trim();
+    if (escSearchTimer.current) clearTimeout(escSearchTimer.current);
+    if (q.length < 2) {
+      setEscSugs([]);
+      return;
+    }
+    escSearchTimer.current = setTimeout(async () => {
+      try {
+        const { data } = await axios.get(`${API}/recibos/escrituras/search`, {
+          params: { q },
+        });
+        const list = Array.isArray(data?.data) ? data.data : [];
+        setEscSugs(list.slice(0, 20));
+      } catch {
+        setEscSugs([]);
+      }
+    }, 220);
+  }, [f.control, f.tipoTramite]); // eslint-disable-line
+
+  const onBlurControlEscritura = async () => {
+    if (!isEscritura) return;
+    await loadEscrituraPendiente();
+    await loadEscrituraHistorial();
+  };
 
   return (
     <div className="rn17">
@@ -252,18 +399,14 @@ const resetFormForType = (tipo, keepFecha) => ({
                 value={f.tipoTramite}
                 onChange={(e) => {
                   const next = e.target.value;
-
-                  // limpiar todo el formulario para el nuevo tipo
                   setF((prev) => resetFormForType(next, prev.fecha));
-
-                  // resetear selects/flags relacionados
                   setNumeroSel("");
                   setConceptoTouched(false);
                   setSavedId("");
                   setSaveError("");
-                     setAbogadoId('');
-                  // si quieres volver a cargar números al regresar a Protocolito,
-                  // puedes también hacer: loadedOnce.current = false;
+                  setAbogadoId("");
+                  setEscSugs([]);
+                  setHist(null);
                 }}
               >
                 <option value="Protocolito">Protocolito</option>
@@ -309,15 +452,19 @@ const resetFormForType = (tipo, keepFecha) => ({
                 onChange={(e) => {
                   const id = e.target.value;
                   setAbogadoId(id);
-                  const found = catalogAbogados.find(a => String(a.id) === String(id));
-                  setF(prev => ({ ...prev, abogado: found ? found.nombre : '' })); // nombre visible
+                  const found = catalogAbogados.find(
+                    (a) => String(a.id) === String(id)
+                  );
+                  setF((prev) => ({ ...prev, abogado: found ? found.nombre : "" }));
                 }}
               >
-                <option value="">{loadingAbogados ? 'Cargando…' : 'Selecciona…'}</option>
-                {catalogAbogados.map(a => (
+                <option value="">
+                  {loadingAbogados ? "Cargando…" : "Selecciona…"}
+                </option>
+                {catalogAbogados.map((a) => (
                   <option key={a.id} value={a.id}>
-                    {a.nombre} {a.role === 'ASISTENTE' ? '· Asistente' : ''}
-                    {a.disponible === false ? ' (no disponible)' : ''}
+                    {a.nombre} {a.role === "ASISTENTE" ? "· Asistente" : ""}
+                    {a.disponible === false ? " (no disponible)" : ""}
                   </option>
                 ))}
               </select>
@@ -327,7 +474,7 @@ const resetFormForType = (tipo, keepFecha) => ({
               <input
                 value={f.concepto}
                 onChange={(e) => {
-                  setConceptoTouched(true); // marca que el usuario ya lo editó
+                  setConceptoTouched(true);
                   setF({ ...f, concepto: e.target.value });
                 }}
               />
@@ -337,23 +484,99 @@ const resetFormForType = (tipo, keepFecha) => ({
               <input
                 value={f.control}
                 onChange={(e) => setF({ ...f, control: e.target.value })}
-                placeholder={f.tipoTramite === "Protocolito" ? "Ej. 11232" : ""}
+                onBlur={onBlurControlEscritura}
+                placeholder={controlPlaceholder}
+                list={isEscritura ? "escrituras-suggest" : undefined}
               />
+              {isEscritura && (
+                <datalist id="escrituras-suggest">
+                  {escSugs.map((s) => (
+                    <option key={s} value={s} />
+                  ))}
+                </datalist>
+              )}
+              {isEscritura && hist && (
+                <small style={{ display: "block", marginTop: 6, lineHeight: 1.4 }}>
+                  <b>Historial:</b>{" "}
+                  Total: $
+                  {Number(hist.totalTramite || hist.totalTramiteBase || 0).toLocaleString(
+                    "es-MX",
+                    { minimumFractionDigits: 2 }
+                  )}
+                  {" · "}Pagado: $
+                  {Number(hist.pagadoAcum || 0).toLocaleString("es-MX", {
+                    minimumFractionDigits: 2,
+                  })}
+                  {" · "}Restante: $
+                  {Number(hist.restante || 0).toLocaleString("es-MX", {
+                    minimumFractionDigits: 2,
+                  })}
+                  {Array.isArray(hist.items) && hist.items.length > 0 && (
+                    <>
+                      <br />
+                      {hist.items.map((r, i) => (
+                        <span key={r._id} style={{ marginRight: 10 }}>
+                          #{r.numeroRecibo}{" "}
+                          <a
+                            href={`${API}${r.pdfUrl}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            title="Abrir PDF del recibo"
+                          >
+                            PDF
+                          </a>
+                          {i < hist.items.length - 1 ? " | " : ""}
+                        </span>
+                      ))}
+                    </>
+                  )}
+                </small>
+              )}
             </Field>
 
             <Field label="Total del Trámite *" error={errors.totalTramite}>
               <MoneyInput
                 value={f.totalTramite}
                 onChange={(v) => setF({ ...f, totalTramite: v })}
+                readOnly={isEscritura && hasPrevEscritura} // ← BLOQUEA desde el 2º recibo
               />
             </Field>
 
-            <Field label="Total Pagado *" error={errors.totalPagado}>
-              <MoneyInput
-                value={f.totalPagado}
-                onChange={(v) => setF({ ...f, totalPagado: v })}
-              />
-            </Field>
+            {/* Escritura: acumulado (readOnly) + Abono */}
+            {isEscritura ? (
+              <>
+                <Field label="Total Pagado (acumulado)">
+                  <MoneyInput value={f.totalPagado} onChange={() => {}} readOnly />
+                </Field>
+
+                <Field label="Abono (este recibo) *" error={errors.abono}>
+                  <MoneyInput
+                    value={f.abono}
+                    onChange={(v) => {
+                      const n = toNum(v);
+                      const clamped = Math.min(n, maxAbono);
+                      setF({ ...f, abono: String(clamped) });
+                    }}
+                  />
+                  <small style={{ display: "block", marginTop: 4, opacity: 0.75 }}>
+                    Máximo permitido: $
+                    {maxAbono.toLocaleString("es-MX", { minimumFractionDigits: 2 })}
+                  </small>
+                </Field>
+              </>
+            ) : (
+              // Otros tipos
+              <Field label="Total Pagado *" error={errors.totalPagado}>
+                <MoneyInput
+                  value={f.totalPagado}
+                  onChange={(v) => {
+                    const n = toNum(v);
+                    const clamped = Math.min(n, toNum(f.totalTramite));
+                    setF({ ...f, totalPagado: String(clamped) });
+                  }}
+                />
+              </Field>
+            )}
 
             <Field label="Restante (auto)">
               <input
@@ -364,45 +587,38 @@ const resetFormForType = (tipo, keepFecha) => ({
               />
             </Field>
 
-            {/* Los 4 siguientes se ocultan visualmente para Protocolito; 
-                para otros tipos puedes mostrarlos si los necesitas */}
-            {/* Ocultar para Protocolito y Contrato; mostrar en los demás tipos */}
-              {!["Protocolito", "Contrato","Otro"].includes(f.tipoTramite) && (
-                <>
-                  <Field label="Total Impuestos (sistema)">
-                    <MoneyInput
-                      value={f.totalImpuestos}
-                      onChange={(v) => setF({ ...f, totalImpuestos: v })}
-                      
-                    />
-                  </Field>
+            {/* Campos “sistema” solo para Escritura (como tenías) */}
+            {!["Protocolito", "Contrato", "Otro"].includes(f.tipoTramite) && (
+              <>
+                <Field label="Total Impuestos (sistema)">
+                  <MoneyInput
+                    value={f.totalImpuestos}
+                    onChange={(v) => setF({ ...f, totalImpuestos: v })}
+                  />
+                </Field>
 
-                  <Field label="Valor Avalúo (sistema)">
-                    <MoneyInput
-                      value={f.valorAvaluo}
-                      onChange={(v) => setF({ ...f, valorAvaluo: v })}
-                     
-                    />
-                  </Field>
+                <Field label="Valor Avalúo (sistema)">
+                  <MoneyInput
+                    value={f.valorAvaluo}
+                    onChange={(v) => setF({ ...f, valorAvaluo: v })}
+                  />
+                </Field>
 
-                  <Field label="Total Gastos Extra (sistema)">
-                    <MoneyInput
-                      value={f.totalGastosExtra}
-                      onChange={(v) => setF({ ...f, totalGastosExtra: v })}
-                     
-                    />
-                  </Field>
+                <Field label="Total Gastos Extra (sistema)">
+                  <MoneyInput
+                    value={f.totalGastosExtra}
+                    onChange={(v) => setF({ ...f, totalGastosExtra: v })}
+                  />
+                </Field>
 
-                  <Field label="Total Honorarios (sistema)">
-                    <MoneyInput
-                      value={f.totalHonorarios}
-                      onChange={(v) => setF({ ...f, totalHonorarios: v })}
-                      
-                    />
-                  </Field>
-                </>
-              )}
-
+                <Field label="Total Honorarios (sistema)">
+                  <MoneyInput
+                    value={f.totalHonorarios}
+                    onChange={(v) => setF({ ...f, totalHonorarios: v })}
+                  />
+                </Field>
+              </>
+            )}
           </div>
 
           {saveError && (
@@ -461,6 +677,13 @@ function Preview({ onClose, data }) {
   const monto = (n) =>
     `$${Number(n || 0).toLocaleString("es-MX", { minimumFractionDigits: 2 })}`;
 
+  const controlLabelPreview =
+    data.tipoTramite === "Protocolito"
+      ? "# Trámite:"
+      : data.tipoTramite === "Escritura"
+      ? "Número de Escritura:"
+      : "Control:";
+
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="sheet" onClick={(e) => e.stopPropagation()}>
@@ -471,7 +694,6 @@ function Preview({ onClose, data }) {
               <span>{copia ? "COPIA" : "ORIGINAL"}</span>
             </header>
 
-            {/* Si el backend devolvió un ID/folio, lo mostramos */}
             {data.savedId && (
               <div className="row">
                 <b>Folio:</b><span>{data.savedId}</span>
@@ -484,9 +706,8 @@ function Preview({ onClose, data }) {
             <div className="row"><b>Abogado Responsable:</b><span>{data.abogado || "—"}</span></div>
             <div className="row"><b>Concepto:</b><span>{data.concepto || "—"}</span></div>
 
-            {/* Etiqueta según tipo */}
             <div className="row">
-              <b>{data.tipoTramite === "Protocolito" ? "# Trámite:" : "Control:"}</b>
+              <b>{controlLabelPreview}</b>
               <span>{data.control || "—"}</span>
             </div>
 

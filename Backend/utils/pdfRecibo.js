@@ -265,6 +265,12 @@ async function drawBloque(doc, data, etiqueta, assets) {
   yy = drawLabelValue(doc, 'Total del Trámite', money(data.totalTramite), x1, yy, 120, 140);
   drawRowLine(doc, x1, x2, yy - 2);
 
+  // 👇 NUEVO: abono visible cuando > 0
+  if (Number(data.abono || 0) > 0) {
+    yy = drawLabelValue(doc, 'Abono (este recibo)', money(data.abono), x1, yy, 120, 140);
+    drawRowLine(doc, x1, x2, yy - 2);
+  }
+
   yy = drawLabelValue(doc, 'Total Pagado', money(data.totalPagado), x1, yy, 120, 140);
   drawRowLine(doc, x1, x2, yy - 2);
 

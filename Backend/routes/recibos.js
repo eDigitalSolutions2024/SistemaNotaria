@@ -13,10 +13,15 @@ function escapeRegex(s = '') {
   return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-/** Construye el filtro para Recibo desde query params */
+
+
 function buildFilter(query = {}) {
-  const { q, desde, hasta, abogados, abogadoQ } = query;
+  const { q, desde, hasta, abogados, abogadoQ, estatus } = query;
   const filter = {};
+
+  // Estatus (por defecto: Activo); usa 'Todos' para no filtrar
+  if (estatus === 'Cancelado') filter.estatus = 'Cancelado';
+  else if (!estatus || estatus === 'Activo') filter.estatus = 'Activo';
 
   // Rango de fechas (inclusive)
   if (desde || hasta) {
@@ -39,16 +44,11 @@ function buildFilter(query = {}) {
 
   // Lista exacta de abogados (CSV)
   if (abogados) {
-    const list = String(abogados)
-      .split(',')
-      .map(s => s.trim())
-      .filter(Boolean);
-    if (list.length) {
-      filter.abogado = { $in: list };
-    }
+    const list = String(abogados).split(',').map(s => s.trim()).filter(Boolean);
+    if (list.length) filter.abogado = { $in: list };
   }
 
-  // Texto parcial por abogado (solo si no se aplicó $in)
+  // Texto parcial abogado (si no hay $in)
   if (abogadoQ && !filter.abogado) {
     const rx = new RegExp(escapeRegex(String(abogadoQ).trim()), 'i');
     filter.abogado = rx;
@@ -56,6 +56,7 @@ function buildFilter(query = {}) {
 
   return filter;
 }
+
 
 /** Mapea recibo para Excel/listado */
 function mapToExcelRow(r) {
@@ -69,6 +70,7 @@ function mapToExcelRow(r) {
         ? Number(r.total)
         : (r.totalPagado != null ? Number(r.totalPagado) : 0),
     Abogado: r.abogado || '',
+    Estatus: r.estatus || 'Activo', 
   };
 }
 
@@ -117,20 +119,20 @@ router.get('/protocolitos/:numero', async (req, res) => {
  * POST /api/recibos
  * Crear un recibo nuevo
  */
-// Reemplaza tu handler POST actual por este bloque (o añade la parte de abogadoId):
+// POST /api/recibos
 router.post('/', async (req, res) => {
   try {
-    const {
+    let {
       fecha,
       tipoTramite,
       recibiDe,
-      abogado,        // fallback por si quieren escribir el nombre manual
-      abogadoId,      // 👈 NUEVO: numérico (id del modelo Abogado)
+      abogado,             // fallback si escriben manual
+      abogadoId,           // id numérico del modelo Abogado
       concepto,
       control,
       totalTramite,
-      totalPagado,
-      restante,
+      totalPagado,         // en Escritura: viene = abono (si lo mandas así desde el front)
+      abono,               // 👈 NUEVO: explícito
       totalImpuestos = 0,
       valorAvaluo = 0,
       totalGastosExtra = 0,
@@ -142,44 +144,80 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ ok: false, msg: 'Faltan campos obligatorios' });
     }
 
-    // Resolver nombre desde abogadoId si viene
-    let abogadoNombre = abogado || '';
-    let abogadoRef = undefined;
+    // normaliza números
+    totalTramite   = Number(totalTramite || 0);
+    totalPagado    = Number(totalPagado  || 0);
+    abono          = Number(abono        || 0);
+    totalImpuestos = Number(totalImpuestos || 0);
+    valorAvaluo    = Number(valorAvaluo    || 0);
+    totalGastosExtra = Number(totalGastosExtra || 0);
+    totalHonorarios  = Number(totalHonorarios  || 0);
 
+    // resolver nombre desde abogadoId (si llega)
+    let abogadoNombre = abogado || '';
     if (abogadoId !== undefined && abogadoId !== null && String(abogadoId).trim() !== '') {
-      // como tu _id es Number, lo casteamos
       const numId = Number(abogadoId);
       if (Number.isFinite(numId)) {
         const a = await Abogado.findById(numId).lean();
-        if (a) {
-          abogadoNombre = a.nombre || abogadoNombre;
-          abogadoRef = a._id; // Number
-        }
+        if (a) abogadoNombre = a.nombre || abogadoNombre;
       }
+    }
+
+    // --- VALIDACIÓN Y CÁLCULO ---
+    let restante = 0;
+
+    if (tipoTramite === 'Escritura') {
+      if (!control) {
+        return res.status(400).json({ ok: false, msg: 'Número de Escritura (control) requerido' });
+      }
+
+      // Suma histórica (excluye cancelados)
+      const agg = await Recibo.aggregate([
+        { $match: { tipoTramite: 'Escritura', control: String(control), estatus: { $ne: 'Cancelado' } } },
+        { $group: { _id: null, sum: { $sum: '$totalPagado' } } }
+      ]);
+      const pagadoAcum = Number(agg?.[0]?.sum || 0);
+      const maxAbono   = Math.max(0, totalTramite - pagadoAcum);
+
+      // compatibilidad: si no viene "abono", usa totalPagado como abono
+      if (abono <= 0 && totalPagado > 0) abono = totalPagado;
+
+      if (abono <= 0) {
+        return res.status(400).json({ ok: false, msg: 'Abono debe ser mayor a 0' });
+      }
+      if (abono > maxAbono) {
+        return res.status(400).json({ ok: false, msg: `Abono excede el restante ($${maxAbono.toFixed(2)})` });
+      }
+
+      // Lo que este recibo suma al histórico es su abono
+      totalPagado = abono;
+      restante = Math.max(0, totalTramite - (pagadoAcum + abono));
+    } else {
+      // Otros tipos: no puede pagar más que el total del trámite
+      if (totalPagado > totalTramite) {
+        return res.status(400).json({ ok: false, msg: 'No puedes pagar más que el total del trámite' });
+      }
+      abono = 0; // solo usamos abono en Escritura
+      restante = Math.max(0, totalTramite - totalPagado);
     }
 
     const payload = {
       fecha,
       tipoTramite,
       recibiDe,
-      abogado: abogadoNombre,   // guardamos SIEMPRE el nombre visible
+      abogado: abogadoNombre,
       concepto: concepto || '',
       control: control || null,
-      totalTramite: Number(totalTramite || 0),
-      totalPagado: Number(totalPagado || 0),
-      restante: Number(restante || 0),
-      totalImpuestos: Number(totalImpuestos || 0),
-      valorAvaluo: Number(valorAvaluo || 0),
-      totalGastosExtra: Number(totalGastosExtra || 0),
-      totalHonorarios: Number(totalHonorarios || 0),
+      totalTramite,
+      totalPagado,   // en Escritura: es el abono del recibo
+      abono,         // 👈 guarda explícito
+      restante,
+      totalImpuestos,
+      valorAvaluo,
+      totalGastosExtra,
+      totalHonorarios,
       creadoPor: creadoPor || undefined,
     };
-
-    // (Opcional) si tu schema de Recibo tiene este campo:
-    // en tu ReciboSchema agrega: abogadoId: { type: Number, required: false }
-    if (abogadoRef !== undefined) {
-      payload.abogadoId = abogadoRef;
-    }
 
     const doc = await Recibo.create(payload);
 
@@ -330,6 +368,170 @@ router.get('/abogados', async (_req, res) => {
     res.status(500).json({ ok: false, msg: 'Error obteniendo catálogo de abogados' });
   }
 });
+
+
+// PATCH /recibos/:id/cancel
+// body: { motivo: string }
+// ✅ Después
+router.patch('/:id/cancel', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { motivo } = req.body;
+    if (!motivo || !motivo.trim()) {
+      return res.status(400).json({ ok: false, msg: 'Motivo requerido' });
+    }
+
+    const update = {
+      estatus: 'Cancelado',
+      cancelacion: {
+        motivo: motivo.trim(),
+        fecha: new Date(),
+        usuarioId: req.user?.id || undefined,       // si tienes auth
+        usuarioNombre: req.user?.nombre || undefined
+      }
+    };
+
+    const doc = await Recibo.findByIdAndUpdate(id, update, { new: true });
+    if (!doc) return res.status(404).json({ ok: false, msg: 'No encontrado' });
+
+    res.json({ ok: true, data: doc });
+  } catch (e) {
+    console.error('CANCEL RECIBO ERROR:', e);
+    res.status(500).json({ ok: false, msg: 'No se pudo cancelar el recibo' });
+  }
+});
+
+
+
+// routes/recibos.js  (agrega esto abajo de tus otros endpoints)
+// GET /api/recibos/escrituras/:numero/pending
+router.get('/escrituras/:numero/pending', async (req, res) => {
+  try {
+    const numero = String(req.params.numero || '').trim();
+    if (!numero) return res.status(400).json({ ok: false, msg: 'Número de Escritura requerido' });
+
+    const pipeline = [
+      { $match: {
+        tipoTramite: 'Escritura',
+        control: numero,
+        estatus: { $ne: 'Cancelado' }    // ignorar cancelados
+      }},
+      { $sort: { createdAt: -1, _id: -1 } }, // último primero
+      {
+        $group: {
+          _id: '$control',
+          totalBase:  { $max: '$totalTramite' }, // base más alta registrada
+          pagadoAcum: { $sum: '$totalPagado' },  // suma de pagos
+          count:      { $sum: 1 },
+          last:       { $first: '$$ROOT' }       // el más reciente (referencia visual)
+        }
+      },
+      {
+        $project: {
+          _id: 0,
+          control:      '$_id',
+          totalTramite: '$totalBase',
+          pagadoAcum:   1,
+          restante:     { $max: [{ $subtract: ['$totalBase', '$pagadoAcum'] }, 0] },
+          count:        1,
+          // ⬇️ manda también los “de sistema” desde el último recibo
+          last: {
+            _id:              '$last._id',
+            fecha:            '$last.fecha',
+            recibiDe:         '$last.recibiDe',
+            abogado:          '$last.abogado',
+            concepto:         '$last.concepto',
+            totalTramite:     '$last.totalTramite',
+            totalPagado:      '$last.totalPagado',
+            restante:         '$last.restante',
+            totalImpuestos:   '$last.totalImpuestos',
+            valorAvaluo:      '$last.valorAvaluo',
+            totalGastosExtra: '$last.totalGastosExtra',
+            totalHonorarios:  '$last.totalHonorarios'
+          }
+        }
+      }
+    ];
+
+    const [row] = await Recibo.aggregate(pipeline);
+    if (!row) {
+      return res.json({ ok: true, data: null, msg: 'No hay recibos para ese Número de Escritura (o todos están cancelados).' });
+    }
+
+    const liquidado = Number(row.restante || 0) <= 0;
+
+    return res.json({
+      ok: true,
+      data: {
+        control:      row.control,
+        totalTramite: row.totalTramite,
+        pagadoAcum:   row.pagadoAcum,
+        restante:     row.restante,
+        count:        row.count,
+        liquidado,
+        last:         row.last
+      }
+    });
+  } catch (e) {
+    console.error('PENDING ESCRITURA ERROR:', e);
+    return res.status(500).json({ ok: false, msg: 'Error calculando pendiente de Escritura' });
+  }
+});
+
+
+
+// GET /api/recibos/escrituras/search?q=2024/
+router.get('/escrituras/search', async (req, res) => {
+  const q = String(req.query.q || '').trim();
+  const rx = q ? new RegExp(escapeRegex(q), 'i') : null;
+  const filter = { tipoTramite: 'Escritura' };
+  if (rx) filter.control = rx;
+  const rows = await Recibo.find(filter)
+    .distinct('control'); // solo lista controles
+  res.json({ ok: true, data: rows.slice(0, 20) });
+});
+
+// GET /api/recibos/escrituras/:numero/history
+router.get('/escrituras/:numero/history', async (req, res) => {
+  try {
+    const numero = String(req.params.numero || '').trim();
+    if (!numero) return res.status(400).json({ ok: false, msg: 'Número de Escritura requerido' });
+
+    const filter = {
+      tipoTramite: 'Escritura',
+      control: numero,
+      estatus: { $ne: 'Cancelado' }
+    };
+
+    const items = await Recibo.find(filter).sort({ fecha: 1, _id: 1 }).lean();
+
+    const totalTramiteBase = items.reduce((acc, r) => Math.max(acc, Number(r.totalTramite || 0)), 0);
+    const pagadoAcum = items.reduce((acc, r) => acc + Number(r.totalPagado || 0), 0);
+    const restante = Math.max(0, totalTramiteBase - pagadoAcum);
+
+    const rows = items.map(r => ({
+      _id: r._id,
+      numeroRecibo: String(r._id).slice(-4).toUpperCase(),
+      fecha: r.fecha,
+      recibiDe: r.recibiDe,
+      abogado: r.abogado,
+      concepto: r.concepto,
+      totalTramite: Number(r.totalTramite || 0),
+      totalPagado: Number(r.totalPagado || 0),
+      estatus: r.estatus || 'Activo',
+      pdfUrl: `/recibos/${r._id}/pdf`,
+    }));
+
+    res.json({
+      ok: true,
+      data: { control: numero, totalTramiteBase, pagadoAcum, restante, items: rows }
+    });
+  } catch (e) {
+    console.error('ESCRITURA HISTORY ERROR:', e);
+    res.status(500).json({ ok: false, msg: 'Error obteniendo historial' });
+  }
+});
+
 
 
 module.exports = router;
