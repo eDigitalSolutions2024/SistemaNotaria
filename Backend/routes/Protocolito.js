@@ -912,4 +912,40 @@ router.post('/:id/entregar', async (req, res) => {
 // });
 
 
+
+// POST /protocolito/:id/justificante
+router.post('/:id/justificante', /*authMiddleware,*/ async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { motivo } = req.body;
+    const usuario =
+      (req.user?.nombre || req.user?.name || req.user?.username || 'Sistema');
+
+    if (!motivo || !motivo.trim()) {
+      return res.status(400).json({ mensaje: 'El motivo es requerido' });
+    }
+
+    const doc = await Protocolito.findByIdAndUpdate(
+      id,
+      {
+        $set: {
+          estatus_recibo: 'JUSTIFICADO',
+          justificante_text: motivo.trim(),
+          justificante_by: usuario,
+          justificante_at: new Date()
+        }
+      },
+      { new: true }
+    );
+
+    if (!doc) return res.status(404).json({ mensaje: 'Trámite no encontrado' });
+    res.json({ ok: true, data: doc });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ mensaje: 'Error al guardar justificante' });
+  }
+});
+
+
+
 module.exports = router;

@@ -29,6 +29,18 @@ const protocolitoSchema = new mongoose.Schema({
   estatus_entrega: { type: String, default: 'Pendiente' },
   fecha_entrega: { type: Date },
   notas: { type: String, trim: true },
+
+
+  estatus_recibo: {
+    type: String,
+    enum: ['SIN_RECIBO', 'JUSTIFICADO', 'CON_RECIBO'],
+    default: 'SIN_RECIBO',
+    index: true
+  },
+  justificante_text: { type: String, trim: true, default: '' },
+  justificante_by:   { type: String, trim: true, default: '' },
+  justificante_at:   { type: Date, default: null },
+  
  
   creadoEn: { type: Date, default: Date.now }
 }, { timestamps: true });

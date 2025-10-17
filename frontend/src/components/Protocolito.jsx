@@ -8,6 +8,7 @@ import {
 } from '@mui/material';
 
 import { useAuth } from '../auth/AuthContext';
+
 import '../css/styles.css';
 
 const API = process.env.REACT_APP_API_URL || 'http://localhost:4000';
@@ -93,7 +94,8 @@ function applyClienteToProtocolito(cliente, prev) {
 const pickRowFromVG = (p, row) => (p && p.row) ? p.row : (row || p || {});
 
 // ----- componente -----
-export default function Protocolito() {
+export default function Protocolito({ onOpenRecibo }) {
+  
   const { user } = useAuth();
   const isAdmin = user?.role === 'admin';
   const canExport = ['ADMIN', 'PROTOCOLITO', 'RECEPCION', 'admin', 'protocolito', 'recepcion'].includes(user?.role);
@@ -148,6 +150,83 @@ export default function Protocolito() {
 // --- opciones de abogados para el modal de exportar (desde el CATÁLOGO del sistema) ---
 const [abogadosOpts, setAbogadosOpts] = useState([]);
 const [abogadosLoading, setAbogadosLoading] = useState(false);
+
+// --- Modal: opciones cuando NO hay recibo ---
+  const [missingOpen, setMissingOpen] = useState(false);
+  const [missingRow, setMissingRow] = useState(null);
+  // Sub-modales/estados (UI lista; endpoints los definimos después)
+  const [attachOpen, setAttachOpen] = useState(false);
+  const [attachQ, setAttachQ] = useState('');
+  const [attachLoading, setAttachLoading] = useState(false);
+  const [attachRows, setAttachRows] = useState([]);      // resultados de búsqueda
+  const [attachSelectedId, setAttachSelectedId] = useState(null);
+  const [justifyOpen, setJustifyOpen] = useState(false);
+  const [justifyText, setJustifyText] = useState('');
+
+// --- Modal: lectura de justificante ---
+const [justifyViewOpen, setJustifyViewOpen] = useState(false);
+const [justifyViewRow, setJustifyViewRow] = useState(null);
+
+
+
+  const openMissing = (row) => {
+    setMissingRow(row || null);
+    setMissingOpen(true);
+  };
+  const closeMissing = () => {
+    setMissingOpen(false);
+    setMissingRow(null);
+  };
+
+  // Navega a la pantalla de generar recibo
+  // Abre la pantalla "recibo" del MainPage (router por estado)
+const goToGenerarRecibo = (row) => {
+    const payload = {
+   control: row?.numeroTramite ?? '',
+    cliente: row?.cliente ?? '',
+    protocoloId: row?._id ?? '',
+    // agrega cualquier otro campo que tu ReciboNotaria17 aproveche:
+    tipoTramite: row?.tipoTramite ?? row?.motivo ?? row?.servicio ?? row?.accion ?? ''
+  };
+  if (typeof onOpenRecibo === 'function') onOpenRecibo(payload);
+};
+
+
+
+// Busca recibos existentes por folio/cliente/fecha (ajusta el endpoint a tu backend)
+const searchReceipts = async (q) => {
+  setAttachLoading(true);
+  try {
+    const { data } = await axios.get(`${API}/recibos/search`, { params: { q } });
+    // Se espera un array: [{ id, folio, cliente, total, fecha, controls: [numerosTramite] }, ...]
+    setAttachRows(Array.isArray(data) ? data : []);
+  } catch {
+    setAttachRows([]);
+  } finally {
+    setAttachLoading(false);
+  }
+};
+
+// Vincula un recibo a este # de trámite
+const linkReceipt = async () => {
+  if (!attachSelectedId || !missingRow?.numeroTramite) return;
+  try {
+    await axios.post(`${API}/recibos/link`, {
+      reciboId: attachSelectedId,
+      control: Number(missingRow.numeroTramite)
+    });
+    setMsg({ type: 'ok', text: 'Recibo vinculado al trámite.' });
+    setAttachOpen(false);
+    setMissingOpen(false);
+    setAttachSelectedId(null);
+    fetchData(); // refresca para que el indicador cambie a "Recibo"
+  } catch (e) {
+    setMsg({ type: 'error', text: e?.response?.data?.mensaje || 'No se pudo vincular.' });
+  }
+};
+
+
+
 
 // Helper: nombre y rol
 const getUserName = (u) =>
@@ -599,55 +678,93 @@ const onSaveNew = async () => {
 
   // Muestra el botón "Recibo" si existe; si no, un label gris "No tiene recibo"
   const ReciboIndicator = ({ row }) => {
-    const numero = row?.numeroTramite;
-    const [estado, setEstado] = React.useState('loading'); // 'loading' | 'si' | 'no'
+  const numero = row?.numeroTramite;
+  const estatus = row?.estatus_recibo; // 'SIN_RECIBO' | 'JUSTIFICADO' | 'CON_RECIBO'
+  const [estado, setEstado] = React.useState('loading'); // 'si' | 'no' | 'justificado' | 'loading'
 
-    React.useEffect(() => {
-      let alive = true;
-      if (!numero) { setEstado('no'); return; }
+  React.useEffect(() => {
+    let alive = true;
 
-      (async () => {
-        try {
-          await axios.get(`${API}/recibos/by-control/${encodeURIComponent(numero)}/latest`);
-          if (alive) setEstado('si');
-        } catch {
-          if (alive) setEstado('no');
-        }
-      })();
-
-      return () => { alive = false; };
-    }, [numero]);
-
-    if (estado === 'si') {
-      return (
-        <button
-          className="btn btn-primary"
-          style={{ padding: '6px 10px', fontSize: 13 }}
-          onClick={() => openReciboPdf(row)}
-        >
-          Recibo
-        </button>
-      );
+    // Si viene marcado desde BD, respétalo
+    if (estatus === 'JUSTIFICADO') {
+      setEstado('justificado');
+      return;
+    }
+    if (estatus === 'CON_RECIBO') {
+      setEstado('si');
+      return;
+    }
+    if (!numero) {
+      setEstado('no');
+      return;
     }
 
-    // label cuando no hay recibo
+    (async () => {
+      try {
+        await axios.get(`${API}/recibos/by-control/${encodeURIComponent(numero)}/latest`);
+        if (alive) setEstado('si');
+      } catch {
+        if (alive) setEstado(estatus === 'JUSTIFICADO' ? 'justificado' : 'no');
+      }
+    })();
+
+    return () => { alive = false; };
+  }, [numero, estatus]);
+
+  if (estado === 'si') {
     return (
-      <span
+      <button
+        className="btn btn-primary"
+        style={{ padding: '6px 10px', fontSize: 13 }}
+        onClick={() => openReciboPdf(row)}
+      >
+        Recibo
+      </button>
+    );
+  }
+
+  if (estado === 'justificado') {
+    return (
+      <button
+        type="button"
+        onClick={() => { setJustifyViewRow(row); setJustifyViewOpen(true); }}
         style={{
           padding: '6px 10px',
           fontSize: 13,
-          background: '#e9ecef',
-          border: '1px solid #dcdcdc',
+          background: '#e6f4ea',
+          border: '1px solid #b7dfc5',
           borderRadius: 6,
           lineHeight: 1.2,
-          cursor: 'default'
+          cursor: 'pointer'
         }}
-        title="No existe un recibo guardado para este trámite"
+        title="Ver justificante"
       >
-        No tiene recibo
-      </span>
+        Justificado
+      </button>
     );
-  };
+  }
+
+  // SIN_RECIBO
+  return (
+    <button
+      type="button"
+      onClick={() => openMissing(row)}
+      style={{
+        padding: '6px 10px',
+        fontSize: 13,
+        background: '#e9ecef',
+        border: '1px solid #dcdcdc',
+        borderRadius: 6,
+        lineHeight: 1.2,
+        cursor: 'pointer'
+      }}
+      title="Opciones para generar/adjuntar justificante"
+    >
+      No tiene recibo
+    </button>
+  );
+};
+
 
   // columnas tabla principal
   const baseColumns = [
@@ -1191,6 +1308,200 @@ const onSaveNew = async () => {
           </Button>
         </DialogActions>
       </Dialog>
+
+      {/* Modal: opciones cuando NO hay recibo */}
+<Dialog open={missingOpen} onClose={closeMissing} fullWidth maxWidth="sm">
+  <DialogTitle>Este trámite no tiene recibo</DialogTitle>
+  <DialogContent dividers>
+    <div style={{ display: 'grid', gap: 12 }}>
+      <div>
+        <b>Trámite:</b> {missingRow?.numeroTramite ?? '—'}
+      </div>
+      <div>
+        <b>Cliente:</b> {missingRow?.cliente ?? '—'}
+      </div>
+      <div style={{ display: 'grid', gap: 8 }}>
+        <Button
+          variant="contained"
+          onClick={() => {
+            closeMissing();
+            goToGenerarRecibo(missingRow);
+          }}
+        >
+          Generar recibo
+        </Button>
+
+        <Button
+          variant="outlined"
+          onClick={() => {
+            setAttachQ('');
+             setAttachRows([]);
+             setAttachSelectedId(null);
+             setAttachOpen(true);
+             searchReceipts(''); // primera carga
+          }}
+        >
+          Adjuntar recibo existente
+        </Button>
+
+        <Button
+          variant="text"
+          onClick={() => setJustifyOpen(true)}
+        >
+          Capturar justificante (sin recibo)
+        </Button>
+      </div>
+    </div>
+  </DialogContent>
+  <DialogActions>
+    <Button onClick={closeMissing}>Cerrar</Button>
+  </DialogActions>
+</Dialog>
+
+
+<Dialog open={attachOpen} onClose={() => setAttachOpen(false)} fullWidth maxWidth="md">
+  <DialogTitle>Adjuntar recibo existente</DialogTitle>
+  <DialogContent dividers>
+    <div style={{ display: 'grid', gap: 12 }}>
+      <div>
+        <b># Trámite:</b> {missingRow?.numeroTramite ?? '—'} · <b>Cliente:</b> {missingRow?.cliente ?? '—'}
+      </div>
+
+      <div style={{ display: 'flex', gap: 8 }}>
+        <TextField
+          fullWidth
+          size="small"
+          placeholder="Buscar por folio, cliente o fecha (YYYY-MM-DD)…"
+          value={attachQ}
+          onChange={(e) => setAttachQ(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && searchReceipts(attachQ)}
+        />
+        <Button variant="outlined" onClick={() => searchReceipts(attachQ)} disabled={attachLoading}>
+          {attachLoading ? 'Buscando…' : 'Buscar'}
+        </Button>
+      </div>
+
+      <div style={{ width: '100%' }}>
+        <DataGrid
+          rows={attachRows}
+          getRowId={(r) => r.id || r._id}
+          columns={[
+            { field: 'folio', headerName: 'Folio', width: 120 },
+            { field: 'cliente', headerName: 'Cliente', flex: 1, minWidth: 220 },
+            {
+              field: 'fecha',
+              headerName: 'Fecha',
+              width: 130,
+              valueGetter: (p) => (p?.row?.fecha ? new Date(p.row.fecha).toLocaleDateString('es-MX') : '—')
+            },
+            {
+              field: 'total',
+              headerName: 'Total',
+              width: 120,
+              valueGetter: (p) => (p?.row?.total != null ? `$${p.row.total}` : '—')
+            },
+            {
+              field: 'controles',
+              headerName: '# Trámites vinculados',
+              width: 190,
+              valueGetter: (p) => (Array.isArray(p?.row?.controls) ? p.row.controls.length : 0)
+            }
+          ]}
+          autoHeight
+          loading={attachLoading}
+          pageSizeOptions={[5, 10, 25]}
+          initialState={{ pagination: { paginationModel: { pageSize: 10, page: 0 } } }}
+          disableRowSelectionOnClick
+          onRowClick={(params) => setAttachSelectedId(params.id)}
+          getRowClassName={(params) => (params.id === attachSelectedId ? 'row-selected' : '')}
+        />
+      </div>
+    </div>
+  </DialogContent>
+  <DialogActions>
+    <Button onClick={() => setAttachOpen(false)}>Cancelar</Button>
+    <Button variant="contained" onClick={linkReceipt} disabled={!attachSelectedId}>
+      Vincular a este trámite
+    </Button>
+  </DialogActions>
+</Dialog>
+
+
+<Dialog open={justifyOpen} onClose={() => setJustifyOpen(false)} fullWidth maxWidth="sm">
+  <DialogTitle>Justificante: no se ha generado recibo</DialogTitle>
+  <DialogContent dividers>
+    <div style={{ display: 'grid', gap: 12 }}>
+      <div><b># Trámite:</b> {missingRow?.numeroTramite ?? '—'}</div>
+      <TextField
+        label="Motivo / Justificación"
+        size="small"
+        multiline
+        minRows={3}
+        value={justifyText}
+        onChange={(e) => setJustifyText(e.target.value)}
+        placeholder="Ejemplo: Falta documentación, pago en validación, etc."
+      />
+    </div>
+  </DialogContent>
+  <DialogActions>
+    <Button onClick={() => setJustifyOpen(false)}>Cancelar</Button>
+    <Button
+  variant="contained"
+  onClick={async () => {
+    try {
+      await axios.post(`${API}/protocolito/${missingRow._id}/justificante`, {
+        motivo: justifyText
+      });
+      setJustifyOpen(false);
+      setMsg({ type: 'ok', text: 'Justificante guardado y estatus actualizado a JUSTIFICADO.' });
+      setJustifyText('');
+      setMissingOpen(false);
+      await fetchData(); // refresca la grilla para que se vea "Justificado"
+    } catch (e) {
+      setMsg({ type: 'error', text: e?.response?.data?.mensaje || 'No se pudo guardar el justificante' });
+    }
+  }}
+  disabled={!justifyText?.trim()}
+>
+  Guardar justificante
+</Button>
+
+  </DialogActions>
+</Dialog>
+<Dialog
+  open={justifyViewOpen}
+  onClose={() => setJustifyViewOpen(false)}
+  fullWidth
+  maxWidth="sm"
+>
+  <DialogTitle>Justificante del trámite</DialogTitle>
+  <DialogContent dividers>
+    <div style={{ display: 'grid', gap: 12 }}>
+      <div><b># Trámite:</b> {justifyViewRow?.numeroTramite ?? '—'}</div>
+      <div><b>Cliente:</b> {justifyViewRow?.cliente ?? '—'}</div>
+      <TextField
+        label="Motivo / Justificación"
+        size="small"
+        multiline
+        minRows={3}
+        value={justifyViewRow?.justificante_text || '—'}
+        InputProps={{ readOnly: true }}
+      />
+      <div style={{ fontSize: 12, color: '#666' }}>
+        <b>Capturado por:</b> {justifyViewRow?.justificante_by || '—'} ·{' '}
+        <b>Fecha:</b>{' '}
+        {justifyViewRow?.justificante_at
+          ? new Date(justifyViewRow.justificante_at).toLocaleString('es-MX')
+          : '—'}
+      </div>
+    </div>
+  </DialogContent>
+  <DialogActions>
+    <Button onClick={() => setJustifyViewOpen(false)}>Cerrar</Button>
+  </DialogActions>
+</Dialog>
+
+
     </div>
   );
 }

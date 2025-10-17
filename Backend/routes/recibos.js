@@ -4,6 +4,7 @@ const router = express.Router();
 // routes/recibos.js (arriba de todo con tus otros imports)
 const Abogado = require('../models/Abogado'); // 👈 usa tu path real
 const Recibo = require('../models/Recibo');
+const ReciboLink = require('../models/ReciboLink');
 const Protocolito = require('../models/Protocolito');
 const { buildReciboPDF } = require('../utils/pdfRecibo');
 const XLSX = require('xlsx');
@@ -237,30 +238,44 @@ router.post('/', async (req, res) => {
  * GET /api/recibos/by-control/:control/latest
  * Devuelve el último recibo cuyo "control" == :control
  */
+/**
+ * GET /api/recibos/by-control/:control/latest
+ * Devuelve el último recibo con ese control (directo o por vínculo)
+ */
 router.get('/by-control/:control/latest', async (req, res) => {
   try {
     const controlRaw = req.params.control;
-    let rec = await Recibo.findOne({ control: String(controlRaw) })
-      .sort({ createdAt: -1 })
+    const controlNum = Number(controlRaw);
+    const asString = String(controlRaw);
+
+    // A) directo en el recibo
+    let rec = await Recibo.findOne({ control: asString })
+      .sort({ createdAt: -1, _id: -1 })
       .lean();
 
-    if (!rec) {
-      const n = Number(controlRaw);
-      if (Number.isFinite(n)) {
-        rec = await Recibo.findOne({ control: String(n) })
-          .sort({ createdAt: -1 })
-          .lean();
-      }
+    // soporte por si guardaste control como número en algunos docs
+    if (!rec && Number.isFinite(controlNum)) {
+      rec = await Recibo.findOne({ control: String(controlNum) })
+        .sort({ createdAt: -1, _id: -1 })
+        .lean();
+    }
+
+    // B) por vínculo
+    if (!rec && Number.isFinite(controlNum)) {
+      const link = await ReciboLink.findOne({ control: controlNum })
+        .sort({ createdAt: -1, _id: -1 })
+        .lean();
+      if (link) rec = await Recibo.findById(link.reciboId).lean();
     }
 
     if (!rec) return res.status(404).json({ ok: false, msg: 'No encontrado' });
-
     return res.json({ ok: true, id: rec._id, data: rec });
   } catch (e) {
     console.error('RECIBO by-control ERROR:', e);
     return res.status(500).json({ ok: false, msg: 'Error buscando recibo' });
   }
 });
+
 
 /**
  * GET /api/recibos/:id/pdf
@@ -529,6 +544,236 @@ router.get('/escrituras/:numero/history', async (req, res) => {
   } catch (e) {
     console.error('ESCRITURA HISTORY ERROR:', e);
     res.status(500).json({ ok: false, msg: 'Error obteniendo historial' });
+  }
+});
+
+/* --------------------- Vínculos Recibo ⇄ #Trámite --------------------- */
+
+// POST /api/recibos/link
+// body: { reciboId: string, control: number }
+router.post('/link', async (req, res) => {
+  try {
+    const { reciboId, control } = req.body || {};
+    if (!reciboId || !Number.isFinite(Number(control))) {
+      return res.status(400).json({ ok: false, msg: 'Datos inválidos' });
+    }
+
+    const exists = await Recibo.exists({ _id: reciboId });
+    if (!exists) return res.status(404).json({ ok: false, msg: 'Recibo no encontrado' });
+
+    await ReciboLink.updateOne(
+      { reciboId, control: Number(control) },
+      { $setOnInsert: { reciboId, control: Number(control), createdAt: new Date() } },
+      { upsert: true }
+    );
+
+    return res.json({ ok: true });
+  } catch (e) {
+    console.error('LINK RECIBO ERROR:', e);
+    return res.status(500).json({ ok: false, msg: 'Error vinculando recibo' });
+  }
+});
+
+// POST /api/recibos/link/bulk
+// body: { reciboId: string, controls: number[] }
+router.post('/link/bulk', async (req, res) => {
+  try {
+    const { reciboId, controls } = req.body || {};
+    if (!reciboId || !Array.isArray(controls) || !controls.length) {
+      return res.status(400).json({ ok: false, msg: 'Datos inválidos' });
+    }
+    const exists = await Recibo.exists({ _id: reciboId });
+    if (!exists) return res.status(404).json({ ok: false, msg: 'Recibo no encontrado' });
+
+    const ops = controls
+      .map(Number)
+      .filter(Number.isFinite)
+      .map(ctrl => ({
+        updateOne: {
+          filter: { reciboId, control: ctrl },
+          update: { $setOnInsert: { reciboId, control: ctrl, createdAt: new Date() } },
+          upsert: true
+        }
+      }));
+
+    if (!ops.length) return res.status(400).json({ ok: false, msg: 'Sin controles válidos' });
+    await ReciboLink.bulkWrite(ops, { ordered: false });
+
+    return res.json({ ok: true, linked: ops.length });
+  } catch (e) {
+    console.error('BULK LINK RECIBO ERROR:', e);
+    return res.status(500).json({ ok: false, msg: 'Error vinculando recibo (bulk)' });
+  }
+});
+
+// DELETE /api/recibos/link
+// body: { reciboId: string, control: number }
+router.delete('/link', async (req, res) => {
+  try {
+    const { reciboId, control } = req.body || {};
+    if (!reciboId || !Number.isFinite(Number(control))) {
+      return res.status(400).json({ ok: false, msg: 'Datos inválidos' });
+    }
+    await ReciboLink.deleteOne({ reciboId, control: Number(control) });
+    return res.json({ ok: true });
+  } catch (e) {
+    console.error('UNLINK RECIBO ERROR:', e);
+    return res.status(500).json({ ok: false, msg: 'Error desvinculando recibo' });
+  }
+});
+
+// GET /api/recibos/:id/links
+router.get('/:id/links', async (req, res) => {
+  try {
+    const links = await ReciboLink.find({ reciboId: req.params.id })
+      .sort({ createdAt: -1 })
+      .lean();
+    return res.json({ ok: true, data: links });
+  } catch (e) {
+    console.error('LIST LINKS ERROR:', e);
+    return res.status(500).json({ ok: false, msg: 'Error listando vínculos' });
+  }
+});
+
+// (Opcional) GET /api/recibos/links/by-control/:control  → listar todos los recibos vinculados a ese #Trámite
+router.get('/links/by-control/:control', async (req, res) => {
+  try {
+    const control = Number(req.params.control);
+    if (!Number.isFinite(control)) return res.status(400).json({ ok: false, msg: 'control inválido' });
+
+    const links = await ReciboLink.find({ control }).sort({ createdAt: -1 }).lean();
+    const ids = links.map(l => l.reciboId);
+    const recibos = ids.length ? await Recibo.find({ _id: { $in: ids } }).lean() : [];
+    return res.json({ ok: true, data: recibos });
+  } catch (e) {
+    console.error('BY-CONTROL LINKS ERROR:', e);
+    return res.status(500).json({ ok: false, msg: 'Error listando recibos por vínculo' });
+  }
+});
+
+// ✅ BUSCAR RECIBOS PARA EL MODAL DE ADJUNTAR
+// GET /api/recibos/search?q=texto
+// Devuelve: [{ id, _id, folio, cliente, fecha, total, controls: [numsDeTramite] }, ...]
+router.get('/search', async (req, res) => {
+  try {
+    const q = String(req.query.q || '').trim();
+
+    // armar filtros básicos (cliente / concepto / abogado)
+    const match = { estatus: { $ne: 'Cancelado' } };
+    const or = [];
+    if (q) {
+      const rx = new RegExp(escapeRegex(q), 'i');
+      or.push({ recibiDe: rx }, { concepto: rx }, { abogado: rx }, { control: rx });
+    }
+
+    // si parece fecha YYYY-MM-DD, filtrar por ese día
+    const isDate = /^\d{4}-\d{2}-\d{2}$/.test(q);
+    if (isDate) {
+      match.fecha = {
+        $gte: new Date(`${q}T00:00:00.000Z`),
+        $lte: new Date(`${q}T23:59:59.999Z`)
+      };
+    }
+
+    const isFolioSuffix = /^[a-f0-9]{2,8}$/i.test(q); // para buscar por sufijo del ObjectId
+
+    const pipeline = [
+      { $match: match },
+      // convertir _id a string para poder matchear por sufijo (folio)
+      { $addFields: { strId: { $toString: '$_id' } } },
+    ];
+
+    if (q && or.length) {
+      pipeline.push({ $match: { $or: or } });
+    }
+
+    if (q && isFolioSuffix) {
+      pipeline.push({ $match: { strId: { $regex: `${q}$`, $options: 'i' } } });
+    }
+
+    // traer vínculos (Recibo ⇄ #Trámite)
+    pipeline.push(
+      {
+        $lookup: {
+          from: 'recibolinks',             // nombre de la colección de ReciboLink
+          localField: '_id',
+          foreignField: 'reciboId',
+          as: 'links'
+        }
+      },
+      {
+        $project: {
+          _id: 1,
+          id: '$_id',
+          fecha: 1,
+          recibiDe: 1,
+          concepto: 1,
+          abogado: 1,
+          control: 1,
+          total: { $ifNull: ['$total', '$totalPagado'] },
+          // folio = últimos 4 del ObjectId en mayúsculas
+          folio: { $toUpper: { $substr: ['$strId', 20, 4] } },
+          // arreglo de números de trámite ya vinculados
+          controls: {
+            $map: { input: '$links', as: 'l', in: '$$l.control' }
+          }
+        }
+      },
+      { $sort: { fecha: -1, _id: -1 } },
+      { $limit: 50 } // límite razonable para el modal
+    );
+
+    const rows = await Recibo.aggregate(pipeline);
+
+    // adaptar nombres de campo a lo que espera tu DataGrid del modal
+    const data = rows.map(r => ({
+      id: r._id,                // para DataGrid
+      _id: r._id,
+      folio: r.folio,
+      cliente: r.recibiDe || '',
+      fecha: r.fecha || null,
+      total: Number(r.total || 0),
+      controls: Array.isArray(r.controls) ? r.controls : []
+    }));
+
+    return res.json(data);
+  } catch (e) {
+    console.error('RECIBOS SEARCH ERROR:', e);
+    return res.status(500).json({ ok: false, msg: 'Error buscando recibos' });
+  }
+});
+
+
+// POST /protocolito/:id/justificante
+router.post('/:id/justificante', /*authMiddleware,*/ async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { motivo } = req.body;
+    const usuario =
+      (req.user?.nombre || req.user?.name || req.user?.username || 'Sistema');
+
+    if (!motivo || !motivo.trim()) {
+      return res.status(400).json({ mensaje: 'El motivo es requerido' });
+    }
+
+    const doc = await Protocolito.findByIdAndUpdate(
+      id,
+      {
+        $set: {
+          estatus_recibo: 'JUSTIFICADO',
+          justificante_text: motivo.trim(),
+          justificante_by: usuario,
+          justificante_at: new Date()
+        }
+      },
+      { new: true }
+    );
+
+    if (!doc) return res.status(404).json({ mensaje: 'Trámite no encontrado' });
+    res.json({ ok: true, data: doc });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ mensaje: 'Error al guardar justificante' });
   }
 });
 

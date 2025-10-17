@@ -4,12 +4,15 @@ import API_URL from '../api';
 
 export default function FormCliente({ onCreado }) {
   const [nombre, setNombre] = useState('');
-  const [telefono, setTelefono] = useState('');              // ← se enviará como numero_telefono
-  const [tipoServicio, setTipoServicio] = useState('');
-  const [tieneCita, setTieneCita] = useState(null);
+  const [telefono, setTelefono] = useState('');               // se enviará como numero_telefono
+  const [tipoServicio, setTipoServicio] = useState('');       // obligatorio
+  const [tieneCita, setTieneCita] = useState(false);          // ocultamos "Sin cita"; solo mostramos "Con cita"
   const [mensaje, setMensaje] = useState('');
-  const [abogadoPreferido, setAbogadoPreferido] = useState(''); // guardamos string del <select>, convertimos a Number al enviar
+  const [abogadoPreferido, setAbogadoPreferido] = useState('');
   const [abogados, setAbogados] = useState([]);
+
+  // errores de validación por campo
+  const [errors, setErrors] = useState({ telefono: '', tipoServicio: '' });
 
   useEffect(() => {
     const obtenerAbogados = async () => {
@@ -24,25 +27,41 @@ export default function FormCliente({ onCreado }) {
     obtenerAbogados();
   }, []);
 
+  const validate = () => {
+    const newErrors = { telefono: '', tipoServicio: '' };
+
+    // Teléfono: mínimo 10 dígitos (ignorando símbolos)
+    const telRaw = (telefono || '').trim();
+    const digits = telRaw.replace(/\D/g, '');
+    if (!digits) {
+      newErrors.telefono = 'Por favor ingresa el número de teléfono.';
+    } else if (digits.length < 10) {
+      newErrors.telefono = 'El teléfono debe ser un numero valido .';
+    }
+
+    // Tipo de servicio obligatorio
+    if (!tipoServicio) {
+      newErrors.tipoServicio = 'Selecciona el tipo de servicio.';
+    }
+
+    setErrors(newErrors);
+    // es válido si no hay mensajes
+    return !newErrors.telefono && !newErrors.tipoServicio;
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setMensaje('');
 
-    // validación mínima del teléfono (requerido por el modelo)
-    const tel = telefono.trim();
-    if (!tel) {
-      setMensaje('Por favor ingresa el número de teléfono.');
-      return;
-    }
+    if (!validate()) return;
 
     try {
       let abogadoAsignadoNum = null;
 
       if (tieneCita) {
-        // viene del select como string -> convertir a Number si no es vacío
         abogadoAsignadoNum = abogadoPreferido !== '' ? Number(abogadoPreferido) : null;
       } else {
-        // Toma el primero de la lista (ajusta tu criterio si necesitas “disponible”)
+        // asignación automática simple (puedes mantenerla como estaba)
         try {
           const resAbogado = await fetch(`${API_URL}/abogados`);
           const dataAbogado = await resAbogado.json();
@@ -59,11 +78,11 @@ export default function FormCliente({ onCreado }) {
 
       const payload = {
         nombre,
-        numero_telefono: tel,                 // ← nombre EXACTO del modelo
-        servicio: tipoServicio || '',         // tu modelo tiene `servicio`, además de `motivo/accion`
+        numero_telefono: telefono.trim(),
+        servicio: tipoServicio,                 // obligatorio
         tieneCita: Boolean(tieneCita),
-        abogado_preferido: abogadoAsignadoNum, // ← Number (puede ser null)
-        abogado_asignado: abogadoAsignadoNum,  // ← Number (puede ser null)
+        abogado_preferido: abogadoAsignadoNum,
+        abogado_asignado: abogadoAsignadoNum,
       };
 
       const response = await fetch(`${API_URL}/clientes`, {
@@ -83,12 +102,13 @@ export default function FormCliente({ onCreado }) {
 
         onCreado && onCreado(data.cliente);
 
-        // Reset
+        // reset
         setNombre('');
         setTelefono('');
         setTipoServicio('');
-        setTieneCita(null);
+        setTieneCita(false);
         setAbogadoPreferido('');
+        setErrors({ telefono: '', tipoServicio: '' });
       } else {
         setMensaje('Error: ' + (data?.mensaje || 'No se pudo registrar'));
       }
@@ -100,7 +120,7 @@ export default function FormCliente({ onCreado }) {
   return (
     <div className="container mt-4">
       <h2>Formulario para registrar cliente</h2>
-      <form onSubmit={handleSubmit}>
+      <form onSubmit={handleSubmit} noValidate>
         <div className="mb-3">
           <label>Nombre del cliente:</label>
           <input
@@ -112,28 +132,36 @@ export default function FormCliente({ onCreado }) {
           />
         </div>
 
-        {/* Teléfono (requerido por el modelo) */}
+        {/* Teléfono obligatorio con mínimo 10 dígitos */}
         <div className="mb-3">
           <label>Número de teléfono:</label>
           <input
             type="tel"
-            className="form-control"
+            className={`form-control ${errors.telefono ? 'is-invalid' : ''}`}
             placeholder="Ej. 6560000000"
             value={telefono}
             onChange={(e) => {
-              // permitimos dígitos y + para internacionales
-              const v = e.target.value.replace(/[^\d+]/g, '').slice(0, 15);
+              // permitir solo dígitos y un '+' inicial; limitar a 20 caracteres
+              let v = e.target.value.replace(/[^\d+]/g, '');
+              if (v.includes('+')) {
+                // permitir '+' solo al inicio
+                v = '+' + v.replace(/\+/g, '').replace(/[^\d]/g, '');
+              }
+              v = v.slice(0, 20);
               setTelefono(v);
             }}
             required
           />
+          {errors.telefono && <div className="invalid-feedback">{errors.telefono}</div>}
+          
         </div>
 
         {/* Fila combinada */}
         <div className="form-group-inline">
           <div className="form-group">
-            <label>Tipo de servicio:</label>
+            <label>Tipo de servicio <span style={{color:'#d00'}}>*</span></label>
             <div className="checkbox-group">
+              {/* Usa radio-like checkboxes; obligatorio */}
               <input
                 type="checkbox"
                 checked={tipoServicio === 'Asesoría'}
@@ -148,49 +176,48 @@ export default function FormCliente({ onCreado }) {
               />
               <label>Trámite</label>
             </div>
+            {errors.tipoServicio && (
+              <div style={{ color: '#d00', fontSize: 12, marginTop: 4 }}>
+                {errors.tipoServicio}
+              </div>
+            )}
           </div>
 
           <div className="form-group">
             <label>¿Tiene cita?</label>
             <div className="checkbox-group">
+              {/* Ocultamos la opción "Sin cita". Solo mostramos "Con cita" */}
               <input
                 type="checkbox"
                 checked={tieneCita === true}
-                onChange={() => setTieneCita(true)}
+                onChange={() => setTieneCita((prev) => !prev)}
               />
               <label>Con cita</label>
-
-              <input
-                type="checkbox"
-                checked={tieneCita === false}
-                onChange={() => setTieneCita(false)}
-              />
-              <label>Sin cita</label>
             </div>
           </div>
 
           {tieneCita && (
-  <div className="form-group mt-2">
-    <label>Abogado con el que tiene cita:</label>
-    <select
-      className="form-control"
-      value={abogadoPreferido}
-      onChange={(e) => setAbogadoPreferido(e.target.value)}
-    >
-      <option value="">-- Selecciona un abogado --</option>
-      {(abogados || [])
-        .filter(a => {
-          const r = String(a.role || '').toLowerCase();
-          return r === 'abogado' || r === 'asistente'  ;
-        })
-        .map((abogado) => (
-          <option key={abogado._id} value={abogado._id}>
-            {abogado.nombre}
-          </option>
-        ))}
-    </select>
-  </div>
-)}
+            <div className="form-group mt-2">
+              <label>Abogado con el que tiene cita:</label>
+              <select
+                className="form-control"
+                value={abogadoPreferido}
+                onChange={(e) => setAbogadoPreferido(e.target.value)}
+              >
+                <option value="">-- Selecciona un abogado --</option>
+                {(abogados || [])
+                  .filter(a => {
+                    const r = String(a.role || '').toLowerCase();
+                    return r === 'abogado' || r === 'asistente';
+                  })
+                  .map((abogado) => (
+                    <option key={abogado._id} value={abogado._id}>
+                      {abogado.nombre}
+                    </option>
+                  ))}
+              </select>
+            </div>
+          )}
         </div>
 
         <button type="submit" className="btn btn-primary">Registrar cliente</button>
