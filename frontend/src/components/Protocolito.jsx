@@ -1220,7 +1220,7 @@ const descargarPlantilla = (id) => {
         <Menu anchorEl={tplAnchorEl} open={Boolean(tplAnchorEl)} onClose={closeTplMenu}>
           {tplOptions.length > 0
             ? tplOptions.map(p => (
-                <MenuItem key={p.key} onClick={() => descargarPlantilla(p.type)}>
+                <MenuItem key={p.key} onClick={() => descargarPlantilla(p.id)}>
                   {p.label}
                 </MenuItem>
               ))

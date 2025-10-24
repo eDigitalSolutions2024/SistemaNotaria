@@ -12,11 +12,11 @@ const PLANTILLAS_DIR = path.join(__dirname, '..', 'Plantillas');
 
 // Manifiesto simple (clave legible -> archivo)
 const MANIFIESTO = [
-  { id: 'poder-ppcaaad-irrev-202509', type: 'poder',       label: 'PPCAAAD Irrevocable',           file: 'PPCAAAD Lim Inm Irrevocable en Acta El a El 202509.docx' },
-  { id: 'poder-ppcaaad-rev-202509',   type: 'poder',       label: 'PPCAAAD Revocable',             file: 'PPCAAAD Lim Inm Revocable en Acta El a El 202509.docx' },
-  { id: 'poder-ppc-amplio-202510',    type: 'poder',       label: 'PPC Amplio en Acta 202510',     file: 'PPC Amplio en Acta 202510.docx' },
-  { id: 'poder-ppcaa-amplio-202510',  type: 'poder',       label: 'PPCAA Amplio en Acta 202510',   file: 'PPCAA Amplio en Acta 202510.docx' },
-  { id: 'ratif-vehicular-202510',     type: 'ratificacion',label: 'Ratificación Vehicular 202510', file: 'Ratificación Vehicular 202510.docx' },
+  { id: 'poderirrev', type: 'poder',       label: 'PPCAAAD Irrevocable',           file: 'PPCAAAD Lim Inm Irrevocable en Acta El a El 202509.docx' },
+  { id: 'poderrev',   type: 'poder',       label: 'PPCAAAD Revocable',             file: 'PPCAAAD Lim Inm Revocable en Acta El a El 202509.docx' },
+  { id: 'poder-ppc-amplio',    type: 'poder',       label: 'PPC Amplio en Acta ',     file: 'PPC Amplio en Acta 202510.docx' },
+  { id: 'poder-ppcaa-amplio',  type: 'poder',       label: 'PPCAA Amplio en Acta ',   file: 'PPCAA Amplio en Acta 202510.docx' },
+  { id: 'ratif-vehicular',     type: 'ratificacion',label: 'Ratificación Vehicular ', file: 'Ratificación Vehicular 202510.docx' },
 ];
 
 // Lista (para poblar el menú en el front)
