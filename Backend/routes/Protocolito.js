@@ -530,8 +530,12 @@ router.get('/export', async (req, res) => {
     if (abogado) filter.abogado = { $regex: String(abogado).trim(), $options: 'i' };
 
     // ---- Datos ----
-    const docs = await Protocolito.find(filter).sort({ fecha: 1 }).lean();
-    const rows = docs.map(d => ({
+    const docs = await Protocolito.find(filter)
+  .collation({ locale: 'es', numericOrdering: true })
+  .sort({ numeroTramite: 1 })
+  .lean();
+  
+  const rows = docs.map(d => ({
       numeroTramite: d.numeroTramite ?? '',
       tipoTramite: d.tipoTramite ?? '',
       cliente: d.cliente ?? '',

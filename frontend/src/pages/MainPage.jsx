@@ -6,6 +6,7 @@ import RegistrarCliente from '../pages/Home';
 import Protocolito from '../components/Protocolito';
 import Recibo from '../components/ReciboNotaria17';
 import ConsultarRecibos from '../components/ConsultarRecibos'; // ← NUEVO
+import Escrituras from '../components/Escrituras';
 
 import { useAuth } from '../auth/AuthContext';
 import Login from '../components/Login';
@@ -41,6 +42,15 @@ function AuthedApp() {
       case 'protocolito':
         return (
           <Protocolito
+            onOpenRecibo={(row) => {
+              setReciboRow(row);
+              setSeccion('recibo');
+            }}
+          />
+        );
+        case 'Escrituras':
+        return (
+          <Escrituras
             onOpenRecibo={(row) => {
               setReciboRow(row);
               setSeccion('recibo');
@@ -141,10 +151,7 @@ function AuthedApp() {
               </ul>
             )}
 
-            {/* Escrituras */}
-            <li title="Escrituras" style={itemStyle} onClick={() => go('buscar')}>
-              <span style={iconStyle}>🔍</span>{sidebarOpen && <span>Escrituras</span>}
-            </li>
+          
 
             {/* Recibos (submenu) — NUEVO */}
             <li
@@ -173,6 +180,11 @@ function AuthedApp() {
             {/* Protocolito */}
             <li title="Protocolito" style={itemStyle} onClick={() => go('protocolito')}>
               <span style={iconStyle}>📑</span>{sidebarOpen && <span>Protocolito</span>}
+            </li>
+
+              {/* Escrituras */}
+            <li title="Escrituras" style={itemStyle} onClick={() => go('Escrituras')}>
+              <span style={iconStyle}>🔍</span>{sidebarOpen && <span>Escrituras</span>}
             </li>
           </ul>
         </div>

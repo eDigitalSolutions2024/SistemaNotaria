@@ -10,7 +10,7 @@ const MongoStore = require('connect-mongo');
 
 const authRoutes = require('./routes/auth');
 const recibosRouter = require('./routes/recibos');
-
+const escriturasRoutes = require('./routes/escrituras');
 dotenv.config({
   path: path.resolve(__dirname, process.env.NODE_ENV === 'production'
     ? '.env.production'
@@ -144,6 +144,8 @@ app.use('/api/salas', require('./routes/salas'));
 app.use('/api/Protocolito', require('./routes/Protocolito'));
 app.use('/api/recibos', recibosRouter);              // ← dropdown de protocolitos
 app.use('/api/plantillas', require('./routes/plantillas'));
+app.use('/api/escrituras', escriturasRoutes);
+// Si tu front usa prefijo /api: app.use('/api/escrituras', escriturasRoutes);
 
 app.get('/', (_req, res) => res.send('🚀 Servidor de Notaría corriendo correctamente'));
 

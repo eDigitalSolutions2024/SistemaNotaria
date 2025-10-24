@@ -1,4 +1,4 @@
-// src/components/Protocolito.jsx
+// src/components/Escrituras.jsx
 import React, { useEffect, useRef, useState } from 'react';
 import axios from 'axios';
 import { DataGrid } from '@mui/x-data-grid';
@@ -8,20 +8,22 @@ import {
 } from '@mui/material';
 
 import { useAuth } from '../auth/AuthContext';
-
 import '../css/styles.css';
 
-const API = process.env.REACT_APP_API_URL || 'http://localhost:4000';
+const API = process.env.REACT_APP_API_URL || 'http://localhost:8010';
 
 // ----- utils -----
 const emptyRow = {
   _id: null,
-  numeroTramite: '',
+  numeroControl: '',
   tipoTramite: '',
   cliente: '',
   fecha: '',
   abogado: ''
 };
+
+const same = (a, b) => String(a ?? '') === String(b ?? '');
+const fmtRange = (d, h) => (d && h ? `${d} a ${h}` : '—');
 
 function formatDateInput(d) {
   if (!d) return '';
@@ -43,6 +45,21 @@ const isEligible = (c) => {
   return a.includes('iniciar') || a.includes('finalizar');
 };
 
+// ====== TESTAMENTO: helpers HH:mm ======
+const HHMM_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
+const isHHMM = (s) => HHMM_RE.test(String(s || '').trim());
+
+async function checkHorarioTestamento({ apiBase, fecha, inicio, fin, excludeId }) {
+  // Compat: backend actual acepta "hora", así que consultamos con la hora de inicio.
+  const params = { fecha };
+  if (inicio) params.hora = inicio;
+  if (excludeId) params.excludeId = excludeId;
+  const { data } = await axios.get(`${apiBase}/escrituras/testamento/check`, { params });
+  return Boolean(data?.available);
+}
+
+const isTestamentoTipo = (tipo) => /testamento/i.test(String(tipo || ''));
+
 const timeOf = (r) => {
   const v = r?.hora_llegada ?? r?.horaLlegada ?? r?.createdAt ?? r?.fecha;
   const t = v ? new Date(v).getTime() : 0;
@@ -53,6 +70,73 @@ const timeOf = (r) => {
 const tipoFromRow = (r) =>
   (r?.tipoTramite || r?.motivo || r?.servicio || r?.accion || '').trim();
 const incluye = (txt, needle) => norm(txt).includes(norm(needle));
+
+// ---------- Volumen y folios (helpers alineados a tus rutas) ----------
+
+// Incrementa etiquetas de volumen “Libro 3” -> “Libro 4” o “5” -> “6”
+function incVolumenTag(vol) {
+  const s = String(vol ?? '').trim();
+  if (!s) return null;
+  const m = s.match(/^(.*?)(\d+)\s*$/);
+  if (m) return `${m[1]}${Number(m[2]) + 1}`;
+  if (/^\d+$/.test(s)) return String(Number(s) + 1);
+  return null;
+}
+
+// Volumen vigente: toma el último con volumen y consulta /escrituras/folio/next
+async function fetchVolumenActual(apiBase) {
+  const { data: items } = await axios.get(`${apiBase}/escrituras`);
+  const arr = Array.isArray(items) ? items : [];
+  const lastWithVol = arr.find(r =>
+    r?.volumen != null || r?.libro != null || r?.numLibro != null || r?.numeroLibro != null
+  );
+  if (!lastWithVol) return null;
+
+  const lastVol =
+    lastWithVol.volumen ?? lastWithVol.libro ?? lastWithVol.numLibro ?? lastWithVol.numeroLibro;
+
+  try {
+    const { data } = await axios.get(`${apiBase}/escrituras/folio/next`, {
+      params: { volumen: String(lastVol), len: 1 }
+    });
+    return data?.volumen ?? lastVol; // si el libro está lleno, backend devuelve el siguiente
+  } catch {
+    return lastVol;
+  }
+}
+
+// Sugiere el siguiente folio disponible para un volumen
+async function suggestNextFolioFor(apiBase, volumen, len = 1) {
+  if (!volumen && volumen !== 0) return null;
+  try {
+    const { data } = await axios.get(`${apiBase}/escrituras/folio/next`, {
+      params: { volumen: String(volumen).trim(), len }
+    });
+    return data?.siguienteDesde ?? null;
+  } catch {
+    return null;
+  }
+}
+
+// Chequeo local de traslape (UI). El backend sigue siendo autoridad (409).
+function foliosTraslapanLocal(rows, volumen, desde, hasta, excludeId = null) {
+  const v = String(volumen ?? '').trim();
+  const d = Number(desde), h = Number(hasta);
+  if (!v || !Number.isFinite(d) || !Number.isFinite(h)) return null;
+
+  const overlaps = (a1, a2, b1, b2) => a1 <= b2 && b1 <= a2;
+
+  for (const r of rows || []) {
+    if (excludeId && (r?._id === excludeId)) continue;
+    const rv = r?.volumen ?? r?.libro ?? r?.numLibro ?? r?.numeroLibro;
+    const rd = Number(r?.folioDesde ?? r?.folio_inicio ?? r?.folioStart ?? r?.folio);
+    const rh = Number(r?.folioHasta ?? r?.folio_fin ?? r?.folioEnd ?? r?.folio);
+    if (String(rv) === v && Number.isFinite(rd) && Number.isFinite(rh)) {
+      if (overlaps(d, h, rd, rh)) return { conflict: true, with: r };
+    }
+  }
+  return { conflict: false };
+}
 
 // --- Subtipos extensibles por tipo de trámite ---
 const SUBTIPOS_BY_TIPO = {
@@ -72,7 +156,7 @@ const stripSubtipo = (tipo) =>
     .trim();
 
 // >>> PRIORIZA MOTIVO PARA TIPO DE TRÁMITE <<<
-function applyClienteToProtocolito(cliente, prev) {
+function applyClienteToEscritura(cliente, prev) {
   const fechaISO = cliente?.hora_llegada
     ? formatDateInput(cliente.hora_llegada)
     : formatDateInput(new Date());
@@ -92,9 +176,57 @@ function applyClienteToProtocolito(cliente, prev) {
 
 const pickRowFromVG = (p, row) => (p && p.row) ? p.row : (row || p || {});
 
-// ----- componente -----
-export default function Protocolito({ onOpenRecibo }) {
+// dd/mm/aa
+const onlyDateDMY2 = (raw) => {
+  if (!raw) return '—';
+  const d = raw instanceof Date ? raw : new Date(raw);
+  if (Number.isNaN(d.getTime())) {
+    const m = String(raw).match(/\d{4}-\d{2}-\d{2}/);
+    if (m) {
+      const [y, mo, da] = m[0].split('-');
+      return `${da}/${mo}/${String(y).slice(-2)}`;
+    }
+    const i = String(raw).indexOf('T');
+    if (i > 0) {
+      const [y, mo, da] = String(raw).slice(0, i).split('-');
+      if (y && mo && da) return `${da}/${mo}/${String(y).slice(-2)}`;
+    }
+    return '—';
+  }
+  const dd = String(d.getDate()).padStart(2, '0');
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const yy = String(d.getFullYear()).slice(-2);
+  return `${dd}/${mm}/${yy}`;
+};
 
+
+
+// ---- Horario (testamento) helpers ----
+const hhmmOrNull = (s) => (isHHMM(s) ? s : null);
+const getHoraInicio = (r) =>
+  hhmmOrNull(r?.horaLecturaInicio) ||
+  hhmmOrNull(r?.horaLectura) ||     // compat legacy: único campo
+  hhmmOrNull(r?.hora_inicio) ||
+  hhmmOrNull(r?.horaInicio) || null;
+
+const getHoraFin = (r) =>
+  hhmmOrNull(r?.horaLecturaFin) ||
+  hhmmOrNull(r?.hora_fin) ||
+  hhmmOrNull(r?.horaFin) || null;
+
+const formatHorarioCell = (row) => {
+  const tipo = tipoFromRow(row);
+  if (!isTestamentoTipo(tipo)) return '—';
+  const i = getHoraInicio(row);
+  const f = getHoraFin(row);
+  if (i && f) return `${i} a ${f}`;
+  if (i) return i;   // legacy: solo inicio
+  return '—';
+};
+
+
+// ----- componente -----
+export default function Escrituras({ onOpenRecibo }) {
   const { user } = useAuth();
   const isAdmin = user?.role === 'admin';
   const canExport = ['ADMIN', 'PROTOCOLITO', 'RECEPCION', 'admin', 'protocolito', 'recepcion'].includes(user?.role);
@@ -116,6 +248,17 @@ export default function Protocolito({ onOpenRecibo }) {
   const [msg, setMsg] = useState(null);
   const fileInputRef = useRef(null);
   const [importing, setImporting] = useState(false);
+
+  // Volumen (auto) y Folios (editables) para alta
+  const [newVolumen, setNewVolumen] = useState('');
+  const [newFolioDesde, setNewFolioDesde] = useState('');
+  const [newFolioHasta, setNewFolioHasta] = useState('');
+
+
+  const [volumenEditable, setVolumenEditable] = useState(false);
+  // TESTAMENTO (alta)
+  const [newHoraInicio, setNewHoraInicio] = useState('');
+  const [newHoraFin, setNewHoraFin] = useState('');
 
   // Picker clientes
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -168,15 +311,15 @@ export default function Protocolito({ onOpenRecibo }) {
   const [obsDrafts, setObsDrafts] = useState({}); // { [rowId]: "texto" }
   const [obsSaving, setObsSaving] = useState({});   // { [rowId]: boolean }
 
-  const getRowKey = (r) => r?._id ?? r?.id ?? r?.numeroTramite;
+  const getRowKey = (r) => r?._id ?? r?.id ?? r?.numeroControl;
 
-  /** Guarda solo 'observaciones' usando tu PUT actual (requiere campos obligatorios) */
+  /** Guarda solo 'observaciones' (PUT completo de la escritura) */
   const saveObs = async (id, fallbackRow) => {
     const row = rows.find((r) => getRowKey(r) === id) || fallbackRow;
     if (!row) return;
 
     const payload = {
-      numeroTramite: Number(row.numeroTramite),
+      numeroControl: Number(row.numeroControl),
       tipoTramite: (row.tipoTramite || row.motivo || row.servicio || row.accion || '').trim(),
       cliente: String(row.cliente || '').trim(),
       fecha: row.fecha,
@@ -186,7 +329,7 @@ export default function Protocolito({ onOpenRecibo }) {
 
     try {
       setObsSaving((p) => ({ ...p, [id]: true }));
-      await axios.put(`${API}/protocolito/${id}`, payload);
+      await axios.put(`${API}/escrituras/${id}`, payload);
       setMsg({ type: 'ok', text: 'Observaciones guardadas' });
       await fetchData();
       setObsDrafts((p) => ({ ...p, [id]: payload.observaciones }));
@@ -209,7 +352,7 @@ export default function Protocolito({ onOpenRecibo }) {
   // Navega a la pantalla de generar recibo
   const goToGenerarRecibo = (row) => {
     const payload = {
-      control: row?.numeroTramite ?? '',
+      control: row?.numeroControl ?? '',
       cliente: row?.cliente ?? '',
       protocoloId: row?._id ?? '',
       tipoTramite: row?.tipoTramite ?? row?.motivo ?? row?.servicio ?? row?.accion ?? ''
@@ -254,13 +397,13 @@ export default function Protocolito({ onOpenRecibo }) {
 
   // Vincula recibo
   const linkReceipt = async () => {
-    if (!attachSelectedId || !missingRow?.numeroTramite) return;
+    if (!attachSelectedId || !missingRow?.numeroControl) return;
     try {
       await axios.post(`${API}/recibos/link`, {
         reciboId: attachSelectedId,
-        control: Number(missingRow.numeroTramite)
+        control: Number(missingRow.numeroControl)
       });
-      setMsg({ type: 'ok', text: 'Recibo vinculado al trámite.' });
+      setMsg({ type: 'ok', text: 'Recibo vinculado al control.' });
       setAttachOpen(false);
       setMissingOpen(false);
       setAttachSelectedId(null);
@@ -342,13 +485,13 @@ export default function Protocolito({ onOpenRecibo }) {
       let changed = false;
 
       for (const r of vis) {
-        const id = r?._id ?? r?.id ?? r?.numeroTramite;
+        const id = r?._id ?? r?.id ?? r?.numeroControl;
         if (id == null) continue;
         if (!(id in next)) { next[id] = r?.observaciones ?? ''; changed = true; }
       }
 
       const visIds = new Set(
-        vis.map((r) => r?._id ?? r?.id ?? r?.numeroTramite).filter((x) => x != null)
+        vis.map((r) => r?._id ?? r?.id ?? r?.numeroControl).filter((x) => x != null)
       );
       for (const k of Object.keys(next)) {
         if (!visIds.has(k)) { delete next[k]; changed = true; }
@@ -359,7 +502,7 @@ export default function Protocolito({ onOpenRecibo }) {
 
   // Data inicial
   const buildExportUrl = (format) => {
-    const url = new URL(`${API}/protocolito/export`);
+    const url = new URL(`${API}/escrituras/export`);
     url.searchParams.set('format', format);
     if (filtroFrom) url.searchParams.set('from', filtroFrom);
     if (filtroTo) url.searchParams.set('to', filtroTo);
@@ -385,30 +528,22 @@ export default function Protocolito({ onOpenRecibo }) {
   }, []);
 
   const openTplMenu = (evt, row) => {
-  setTplAnchorEl(evt.currentTarget);
-  setTplRow(row);
+    setTplAnchorEl(evt.currentTarget);
+    setTplRow(row);
 
-  const tipo = tipoFromRow(row);
-  const isPoder = incluye(tipo, 'poder');
-  const isRatif = incluye(tipo, 'ratific'); // ratificación/ratificacion
+    const tipo = tipoFromRow(row);
+    const opciones = incluye(tipo, 'poder')
+      ? plantillas.filter(p => incluye(p.label, 'PPCAAAD'))
+      : [];
 
-  let opciones = [];
-  if (isPoder) {
-    opciones = plantillas.filter(p => p.type === 'poder');
-  } else if (isRatif) {
-    opciones = plantillas.filter(p => p.type === 'ratificacion');
-  }
-  setTplOptions(opciones);
-};
+    setTplOptions(opciones);
+  };
 
-const closeTplMenu = () => { setTplAnchorEl(null); setTplRow(null); setTplOptions([]); };
-
-// Descarga por id único
-const descargarPlantilla = (id) => {
-  window.location.href = `${API}/plantillas/${id}/download`;
-  closeTplMenu();
-};
-
+  const closeTplMenu = () => { setTplAnchorEl(null); setTplRow(null); setTplOptions([]); };
+  const descargarPlantilla = (key) => {
+    window.location.href = `${API}/plantillas/${key}/download`;
+    closeTplMenu();
+  };
 
   const fetchPicker = async (query) => {
     setPickerLoading(true);
@@ -459,14 +594,14 @@ const descargarPlantilla = (id) => {
     if (!cliente) return;
     if (pickerTarget === 'new') {
       setSelectedCliente(cliente);
-      setNewRow((prev) => applyClienteToProtocolito(cliente, prev));
+      setNewRow((prev) => applyClienteToEscritura(cliente, prev));
       const baseTipo =
         cliente?.motivo || cliente?.tipoTramite || cliente?.servicio || cliente?.accion || '';
       setNewSubtipo(getSubtipoFromTipo(baseTipo));
     } else if (pickerTarget) {
       setDrafts((prev) => ({
         ...prev,
-        [pickerTarget]: applyClienteToProtocolito(cliente, prev[pickerTarget] || {})
+        [pickerTarget]: applyClienteToEscritura(cliente, prev[pickerTarget] || {})
       }));
     }
     setPickerOpen(false);
@@ -475,7 +610,7 @@ const descargarPlantilla = (id) => {
   const fetchData = async () => {
     setLoading(true);
     try {
-      const { data } = await axios.get(`${API}/protocolito`, {
+      const { data } = await axios.get(`${API}/escrituras`, {
         params: q ? { q } : {}
       });
       setRows(Array.isArray(data) ? data : []);
@@ -493,12 +628,19 @@ const descargarPlantilla = (id) => {
     setDrafts(prev => ({
       ...prev,
       [row._id]: {
-        numeroTramite: row.numeroTramite,
+        numeroControl: row.numeroControl,
         tipoTramite: row.tipoTramite || row.motivo || row.servicio || row.accion || '',
         cliente: row.cliente,
         fecha: formatDateInput(row.fecha),
         abogado: row.abogado,
-        observaciones: row.observaciones || ''
+        // traer volumen y folios existentes si los hay
+        volumen: row.volumen ?? row.libro ?? row.numLibro ?? row.numeroLibro ?? '',
+        folioDesde: (row.folioDesde ?? row.folio_inicio ?? row.folioStart ?? ''),
+        folioHasta: (row.folioHasta ?? row.folio_fin ?? row.folioEnd ?? ''),
+        observaciones: row.observaciones || '',
+        // TESTAMENTO (compat legacy y nuevo)
+        horaLecturaInicio: row.horaLecturaInicio || row.horaLectura || '',
+        horaLecturaFin: row.horaLecturaFin || '',
       }
     }));
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -510,6 +652,11 @@ const descargarPlantilla = (id) => {
       setSelectedCliente(null);
       setAdding(false);
       setNewSubtipo('');
+      setNewVolumen('');
+      setNewFolioDesde('');
+      setNewFolioHasta('');
+      setNewHoraInicio('');
+      setNewHoraFin('');
     }
     setEditingId(null);
     setDrafts(prev => {
@@ -524,11 +671,11 @@ const descargarPlantilla = (id) => {
     else setDrafts(prev => ({ ...prev, [id]: { ...prev[id], [field]: value } }));
   };
 
-  const validateRow = ({ numeroTramite, tipoTramite, cliente, fecha, abogado }) => {
-    if (!numeroTramite || !tipoTramite || !cliente || !fecha || !abogado) {
+  const validateRow = ({ numeroControl, tipoTramite, cliente, fecha, abogado }) => {
+    if (!numeroControl || !tipoTramite || !cliente || !fecha || !abogado) {
       return 'Todos los campos son obligatorios';
     }
-    if (isNaN(Number(numeroTramite))) return 'El número de trámite debe ser numérico';
+    if (isNaN(Number(numeroControl))) return 'El número de control debe ser numérico';
     return null;
   };
 
@@ -536,36 +683,100 @@ const descargarPlantilla = (id) => {
     const cid = selectedCliente?._id || selectedCliente?.id;
     if (!cid) return setMsg({ type: 'warn', text: 'Selecciona un cliente primero' });
 
+    // Validación local de folio si se indicó alguno
+    if (newVolumen || newFolioDesde || newFolioHasta) {
+      const d = Number(newFolioDesde), h = Number(newFolioHasta);
+      if (!newVolumen && newVolumen !== 0) {
+        return setMsg({ type: 'warn', text: 'Volumen es obligatorio si registras folios' });
+      }
+      if (!Number.isFinite(d) || !Number.isFinite(h) || d <= 0 || h <= 0) {
+        return setMsg({ type: 'warn', text: 'Folio inválido: usa números positivos' });
+      }
+      if (d > h) {
+        return setMsg({ type: 'warn', text: 'Folio inválido: "desde" no puede ser mayor que "hasta"' });
+      }
+    }
+
+    // TESTAMENTO: validación de horas si aplica
+    if (isTestamentoTipo(newRow.tipoTramite)) {
+      if (!isHHMM(newHoraInicio) || !isHHMM(newHoraFin)) {
+        return setMsg({ type: 'warn', text: 'Para testamento, usa formato HH:mm en Hora inicio y Hora fin.' });
+      }
+      if (newHoraInicio >= newHoraFin) {
+        return setMsg({ type: 'warn', text: 'Hora fin debe ser mayor que hora inicio.' });
+      }
+      const disponible = await checkHorarioTestamento({
+        apiBase: API,
+        fecha: newRow.fecha,
+        inicio: newHoraInicio,
+        fin: newHoraFin
+      });
+      if (!disponible) {
+        return setMsg({ type: 'error', text: 'La hora de lectura seleccionada ya está ocupada para ese día.' });
+      }
+    }
+
     try {
       const finalTipo = String(newRow.tipoTramite || '').trim();
-      const { data: resp } = await axios.post(`${API}/protocolito`, { clienteId: cid });
+
+      // Crear escritura a partir de cliente seleccionado (backend genera # de control)
+      const { data: resp } = await axios.post(`${API}/escrituras`, {
+        clienteId: cid,
+        volumen: newVolumen || null,
+        folioDesde: newFolioDesde ? Number(newFolioDesde) : null,
+        folioHasta: newFolioHasta ? Number(newFolioHasta) : null,
+        // Enviamos horas en POST por si el backend ya las soporta
+        ...(isTestamentoTipo(finalTipo) ? {
+          horaLecturaInicio: newHoraInicio,
+          horaLecturaFin: newHoraFin
+        } : {})
+      });
 
       let createdId = resp?.id || resp?._id || resp?.data?._id || null;
-      let createdNumero = resp?.numeroTramite || resp?.data?.numeroTramite || null;
+      let createdNumero = resp?.numeroControl || resp?.data?.numeroControl || null;
 
       if (!createdId && createdNumero != null) {
         try {
-          const { data: list } = await axios.get(`${API}/protocolito`, {
+          const { data: list } = await axios.get(`${API}/escrituras`, {
             params: { q: String(createdNumero) }
           });
           const arr = Array.isArray(list) ? list : [];
-          const found = arr.find((r) => Number(r?.numeroTramite) === Number(createdNumero));
+          const found = arr.find((r) => Number(r?.numeroControl) === Number(createdNumero));
           if (found?._id) {
             createdId = found._id;
-            createdNumero = createdNumero ?? found.numeroTramite;
+            createdNumero = createdNumero ?? found.numeroControl;
           }
         } catch {}
       }
 
-      if (createdId && finalTipo) {
+      // PUT de aseguramiento por si el backend ignora esos campos en POST
+      if (createdId && (finalTipo || newVolumen || newFolioDesde || newFolioHasta || isTestamentoTipo(finalTipo))) {
         const payloadPut = {
-          numeroTramite: Number(createdNumero || 0),
-          tipoTramite: finalTipo,
+          numeroControl: Number(createdNumero || 0),
+          tipoTramite: finalTipo || undefined,
           cliente: String(newRow.cliente || ''),
           fecha: newRow.fecha,
           abogado: String(newRow.abogado || ''),
+          ...(newVolumen ? { volumen: newVolumen } : {}),
+          ...(newFolioDesde ? { folioDesde: Number(newFolioDesde) } : {}),
+          ...(newFolioHasta ? { folioHasta: Number(newFolioHasta) } : {}),
+          ...(isTestamentoTipo(finalTipo) ? {
+            horaLecturaInicio: newHoraInicio,
+            horaLecturaFin: newHoraFin
+          } : {})
         };
-        await axios.put(`${API}/protocolito/${createdId}`, payloadPut);
+        const { data: updated } = await axios.put(`${API}/escrituras/${createdId}`, payloadPut);
+
+        const volDespues = updated?.volumen ?? newVolumen ?? '';
+        const dDespues = updated?.folioDesde ?? newFolioDesde ?? '';
+        const hDespues = updated?.folioHasta ?? newFolioHasta ?? '';
+        if (volDespues || dDespues || hDespues) {
+          setMsg({ type: 'ok', text: `Escritura ${createdNumero ?? ''} creada. Volumen ${volDespues || '—'}, Folios ${fmtRange(dDespues, hDespues)}.` });
+        } else {
+          setMsg({ type: 'ok', text: `Escritura ${createdNumero ?? ''} creada` });
+        }
+      } else {
+        setMsg({ type: 'ok', text: `Escritura ${createdNumero ?? ''} creada` });
       }
 
       await fetchData();
@@ -573,7 +784,11 @@ const descargarPlantilla = (id) => {
       setSelectedCliente(null);
       setAdding(false);
       setNewSubtipo('');
-      setMsg({ type: 'ok', text: `Trámite ${createdNumero ?? ''} creado` });
+      setNewVolumen('');
+      setNewFolioDesde('');
+      setNewFolioHasta('');
+      setNewHoraInicio('');
+      setNewHoraFin('');
     } catch (err2) {
       const t = err2.response?.data?.mensaje || 'Error al crear';
       setMsg({ type: 'error', text: t });
@@ -582,34 +797,113 @@ const descargarPlantilla = (id) => {
 
   const onSaveEdit = async (id) => {
     const draft = drafts[id];
+
+    // Validación local de folio si hay cambios en esos campos
+    if (draft?.volumen || draft?.folioDesde || draft?.folioHasta) {
+      const d = Number(draft.folioDesde), h = Number(draft.folioHasta);
+      if (!draft.volumen && draft.volumen !== 0) {
+        return setMsg({ type: 'warn', text: 'Volumen es obligatorio si registras folios' });
+      }
+      if (!Number.isFinite(d) || !Number.isFinite(h) || d <= 0 || h <= 0) {
+        return setMsg({ type: 'warn', text: 'Folio inválido: usa números positivos' });
+      }
+      if (d > h) return setMsg({ type: 'warn', text: 'Folio inválido: "desde" no puede ser mayor que "hasta"' });
+    }
+
+    // Validación: no reutilizar folios ya ocupados (local)
+    if ((draft?.folioDesde || draft?.folioHasta)) {
+      const vol = drafts[id]?.volumen ?? '';
+      const chk = foliosTraslapanLocal(rows, vol, draft?.folioDesde, draft?.folioHasta, id);
+      if (chk?.conflict) {
+        const r = chk.with || {};
+        return setMsg({
+          type: 'error',
+          text: `Folio ocupado en Volumen ${vol}. Traslapa con el control ${r?.numeroControl ?? 'desconocido'} (${fmtRange(r?.folioDesde ?? r?.folio, r?.folioHasta ?? r?.folio)}).`
+        });
+      }
+    }
+
     const err = validateRow(draft);
     if (err) return setMsg({ type: 'warn', text: err });
 
+    // TESTAMENTO: validación de horas si aplica
+    if (isTestamentoTipo(draft.tipoTramite)) {
+      const hi = draft.horaLecturaInicio || '';
+      const hf = draft.horaLecturaFin || '';
+      if (!isHHMM(hi) || !isHHMM(hf)) {
+        return setMsg({ type: 'warn', text: 'Para testamento, usa formato HH:mm en Hora inicio y Hora fin.' });
+      }
+      if (hi >= hf) {
+        return setMsg({ type: 'warn', text: 'Hora fin debe ser mayor que hora inicio.' });
+      }
+      const disponible = await checkHorarioTestamento({
+        apiBase: API,
+        fecha: draft.fecha,
+        inicio: hi,
+        fin: hf,
+        excludeId: id
+      });
+      if (!disponible) {
+        return setMsg({ type: 'error', text: 'La hora de lectura seleccionada ya está ocupada para ese día.' });
+      }
+    }
+
     try {
+
+      const horasEdit =
+  isTestamentoTipo(draft.tipoTramite) && isHHMM(draft.horaLecturaInicio) && isHHMM(draft.horaLecturaFin)
+    ? { horaLecturaInicio: draft.horaLecturaInicio, horaLecturaFin: draft.horaLecturaFin }
+    : {}; // no toques horas si no son válidas
+
+
       const payload = {
-        numeroTramite: Number(draft.numeroTramite),
+        numeroControl: Number(draft.numeroControl),
         tipoTramite: draft.tipoTramite.trim(),
         cliente: draft.cliente.trim(),
         fecha: draft.fecha,
         abogado: draft.abogado.trim(),
-        ...(isAdmin ? { observaciones: (draft.observaciones || '').trim() } : {})
+        ...(draft.volumen != null && draft.volumen !== '' ? { volumen: draft.volumen } : {}),
+        ...(draft.folioDesde != null && draft.folioDesde !== '' ? { folioDesde: Number(draft.folioDesde) } : {}),
+        ...(draft.folioHasta != null && draft.folioHasta !== '' ? { folioHasta: Number(draft.folioHasta) } : {}),
+        ...(isAdmin ? { observaciones: (draft.observaciones || '').trim() } : {}),
+        ...horasEdit
+        
       };
-      await axios.put(`${API}/protocolito/${id}`, payload);
+
+      const { data: updated } = await axios.put(`${API}/escrituras/${id}`, payload);
+
       await fetchData();
       onCancel(id);
-      setMsg({ type: 'ok', text: 'Registro actualizado' });
+
+      const volAntes = draft.volumen ?? '';
+      const volDespues = updated?.volumen ?? volAntes;
+      const dAntes = draft.folioDesde ?? '';
+      const hAntes = draft.folioHasta ?? '';
+      const dDespues = updated?.folioDesde ?? dAntes;
+      const hDespues = updated?.folioHasta ?? hAntes;
+
+      if (!same(volAntes, volDespues) || !same(dAntes, dDespues) || !same(hAntes, hDespues)) {
+        setMsg({
+          type: 'ok',
+          text:
+            `Registro actualizado. ` +
+            `Rango final: Volumen ${volDespues || '—'}, Folios ${fmtRange(dDespues, hDespues)}.`
+        });
+      } else {
+        setMsg({ type: 'ok', text: 'Registro actualizado' });
+      }
     } catch (err2) {
       const t = err2.response?.status === 409
-        ? 'El número de trámite ya existe'
+        ? (err2.response?.data?.mensaje || 'Traslape de folio en este volumen')
         : (err2.response?.data?.mensaje || 'Error al actualizar');
       setMsg({ type: 'error', text: t });
     }
   };
 
   const onDelete = async (id) => {
-    if (!window.confirm('¿Eliminar este registro?')) return;
+    if (!window.confirm('¿Eliminar esta escritura?')) return;
     try {
-      await axios.delete(`${API}/protocolito/${id}`);
+      await axios.delete(`${API}/escrituras/${id}`);
       await fetchData();
       setMsg({ type: 'ok', text: 'Registro eliminado' });
     } catch (err2) {
@@ -617,12 +911,37 @@ const descargarPlantilla = (id) => {
     }
   };
 
-  const startAdd = () => {
+  const startAdd = async () => {
     setAdding(true);
     setNewRow(emptyRow);
     setSelectedCliente(null);
     setNewSubtipo('');
+    setNewVolumen('');
+    setNewFolioDesde('');
+    setNewFolioHasta('');
+    setNewHoraInicio('');
+    setNewHoraFin('');
     window.scrollTo({ top: 0, behavior: 'smooth' });
+
+    // volumen automático (bloqueado)
+    try {
+      const vol = await fetchVolumenActual(API);
+      if (vol != null) {
+        setNewVolumen(String(vol));
+        setVolumenEditable(false); 
+        const sugerido = await suggestNextFolioFor(API, vol);
+        if (sugerido != null) {
+          setNewFolioDesde(String(sugerido));
+          setNewFolioHasta((prev) => prev || String(sugerido));
+        }
+      } else {
+        setVolumenEditable(true); 
+        setMsg({ type: 'warn', text: 'No fue posible determinar el volumen actual.' });
+      }
+    } catch {
+      setVolumenEditable(true);  
+      setMsg({ type: 'warn', text: 'No fue posible determinar el volumen actual.' });
+    }
   };
 
   const handleSelectFile = async (e) => {
@@ -633,7 +952,7 @@ const descargarPlantilla = (id) => {
     try {
       const fd = new FormData();
       fd.append('file', file);
-      const { data } = await axios.post(`${API}/protocolito/import`, fd, {
+      const { data } = await axios.post(`${API}/escrituras/import`, fd, {
         headers: { 'Content-Type': 'multipart/form-data' }
       });
       await fetchData();
@@ -652,16 +971,6 @@ const descargarPlantilla = (id) => {
     }
   };
 
-  const onlyDate = (raw) => {
-    if (!raw) return '—';
-    const d = raw instanceof Date ? raw : new Date(raw);
-    if (!Number.isNaN(d.getTime())) return d.toLocaleDateString('es-MX');
-    const m = String(raw).match(/\d{4}-\d{2}-\d{2}/);
-    if (m) return m[0];
-    const i = String(raw).indexOf('T');
-    return i > 0 ? String(raw).slice(0, i) : String(raw);
-  };
-
   // ======= Entregar =======
   const openDeliver = async (row) => {
     try {
@@ -670,7 +979,7 @@ const descargarPlantilla = (id) => {
       setDeliverNotes('');
       setDeliverOpen(true);
 
-      const { data } = await axios.get(`${API}/protocolito/${row._id}/entrega-info`);
+      const { data } = await axios.get(`${API}/escrituras/${row._id}/entrega-info`);
       setDeliverPhone(data?.telefono || '—');
     } catch {
       setDeliverPhone('—');
@@ -689,15 +998,15 @@ const descargarPlantilla = (id) => {
     if (!deliverRow?._id) return;
     setDeliverLoading(true);
     try {
-      await axios.post(`${API}/protocolito/${deliverRow._id}/entregar`, {
+      await axios.post(`${API}/escrituras/${deliverRow._id}/entregar`, {
         telefono: deliverPhone && deliverPhone !== '—' ? String(deliverPhone) : undefined,
         notas: deliverNotes || undefined
       });
-      setMsg({ type: 'ok', text: 'Trámite marcado como entregado' });
+      setMsg({ type: 'ok', text: 'Escritura marcada como entregada' });
       closeDeliver();
       fetchData();
     } catch (err) {
-      setMsg({ type: 'error', text: err.response?.data?.mensaje || 'No se pudo marcar como entregado' });
+      setMsg({ type: 'error', text: err.response?.data?.mensaje || 'No se pudo marcar como entregada' });
       setDeliverLoading(false);
     }
   };
@@ -706,9 +1015,9 @@ const descargarPlantilla = (id) => {
   // Abrir PDF de recibo
   const openReciboPdf = async (row) => {
     try {
-      const numero = row?.numeroTramite;
+      const numero = row?.numeroControl;
       if (!numero) {
-        setMsg({ type: 'warn', text: 'Este registro no tiene # de trámite.' });
+        setMsg({ type: 'warn', text: 'Este registro no tiene # de control.' });
         return;
       }
       const { data } = await axios.get(
@@ -717,18 +1026,18 @@ const descargarPlantilla = (id) => {
       const pdfUrl = `${API}/recibos/${data.id}/pdf`;
       window.open(pdfUrl, '_blank');
     } catch (e) {
-      const msg =
+      const m =
         e?.response?.data?.msg ||
         (e?.response?.status === 404
-          ? 'No existe un recibo guardado para este trámite.'
+          ? 'No existe un recibo guardado para este control.'
           : 'No se pudo abrir el PDF del recibo.');
-      setMsg({ type: 'warn', text: msg });
+      setMsg({ type: 'warn', text: m });
     }
   };
 
   // Indicador Recibo
   const ReciboIndicator = ({ row }) => {
-    const numero = row?.numeroTramite;
+    const numero = row?.numeroControl;
     const estatus = row?.estatus_recibo;
     const [estado, setEstado] = React.useState('loading');
 
@@ -801,58 +1110,92 @@ const descargarPlantilla = (id) => {
   };
 
   // columnas tabla principal
-  const baseColumns = [
-    { field: 'numeroTramite', headerName: '# Trámite', width: 110, minWidth: 100, type: 'number' },
-    {
-      field: 'tipoTramite',
-      headerName: 'Tipo de trámite',
-      flex: 0.9, minWidth: 160,
-      valueGetter: (p, row) => {
-        const r = p?.row ?? row ?? {};
-        return r.tipoTramite || r.motivo || r.servicio || r.accion || '—';
-      }
+  // columnas tabla principal
+const baseColumns = [
+  { field: 'numeroControl', headerName: 'Núm. de Escritura', width: 150, minWidth: 130, type: 'number' },
+  {
+    field: 'fecha',
+    headerName: 'Fecha',
+    width: 110, minWidth: 100,
+    renderCell: (params) => onlyDateDMY2(params?.row?.fecha),
+    sortComparator: (_v1, _v2, a, b) => {
+      const ta = Date.parse(a?.row?.fecha);
+      const tb = Date.parse(b?.row?.fecha);
+      return (Number.isNaN(ta) ? 0 : ta) - (Number.isNaN(tb) ? 0 : tb);
     },
-    { field: 'cliente', headerName: 'Cliente', flex: 1.4, minWidth: 240 },
-    {
-      field: 'fecha',
-      headerName: 'Fecha',
-      width: 120, minWidth: 110,
-      renderCell: (params) => onlyDate(params?.row?.fecha),
-      sortComparator: (_v1, _v2, cellParams1, cellParams2) => {
-        const ra = cellParams1?.row?.fecha;
-        const rb = cellParams2?.row?.fecha;
-        const ta = Date.parse(ra);
-        const tb = Date.parse(rb);
-        return (Number.isNaN(ta) ? 0 : ta) - (Number.isNaN(tb) ? 0 : tb);
-      },
+  },
+  {
+    field: 'folio',
+    headerName: 'Número de Folio',
+    width: 160, minWidth: 150,
+    valueGetter: (p, row) => {
+      const r = p?.row ?? row ?? {};
+      const d = r.folioDesde ?? r.folio_inicio ?? r.folioStart;
+      const h = r.folioHasta ?? r.folio_fin ?? r.folioEnd;
+      if (Number.isFinite(Number(d)) && Number.isFinite(Number(h))) return `${d} a ${h}`;
+      return r.folio ?? r.numeroFolio ?? r.noFolio ?? r.folioEscritura ?? '—';
+    }
+  },
+  {
+    field: 'volumen',
+    headerName: 'Volumen',
+    width: 120, minWidth: 110,
+    valueGetter: (p, row) => {
+      const r = p?.row ?? row ?? {};
+      return r.volumen ?? r.libro ?? r.numLibro ?? r.numeroLibro ?? '—';
+    }
+  },
+  { field: 'cliente', headerName: 'Otorgante', flex: 1.2, minWidth: 220 },
+  {
+    field: 'tipoTramite',
+    headerName: 'Tipo de trámite',
+    flex: 1, minWidth: 160,
+    valueGetter: (p, row) => {
+      const r = p?.row ?? row ?? {};
+      return r.tipoTramite || r.motivo || r.servicio || r.accion || '—';
+    }
+  },
+  // >>> NUEVA COLUMNA: Horario (después de Tipo de trámite)
+  {
+    field: 'horario',
+    headerName: 'Horario',
+    width: 140,
+    minWidth: 120,
+    sortable: true,
+    valueGetter: (p, row) => formatHorarioCell(p?.row ?? row ?? {}),
+    sortComparator: (_v1, _v2, a, b) => {
+      const ha = formatHorarioCell(a?.row ?? {});
+      const hb = formatHorarioCell(b?.row ?? {});
+      return String(ha).localeCompare(String(hb));
     },
-    { field: 'abogado', headerName: 'Abogado', width: 140, minWidth: 130 },
-  ];
+  },
+  // Abogado con valueGetter flexible (arregla que saliera “—”)
+  {
+    field: 'abogado',
+    headerName: 'Abogado responsable',
+    width: 180,
+    minWidth: 160,
+   
+  },
+];
+
 
   const plantillasColumn = {
-  field: 'plantillas',
-  headerName: 'Plantillas',
-  width: 150, minWidth: 140,
-  sortable: false,
-  filterable: false,
-  renderCell: (params) => {
-    const t = tipoFromRow(params.row);
-    const label =
-      incluye(t, 'poder') ? 'Descargar (Poder)' :
-      incluye(t, 'ratific') ? 'Descargar (Ratificación)' :
-      'Descargar';
-    return (
+    field: 'plantillas',
+    headerName: 'Plantillas',
+    width: 150, minWidth: 140,
+    sortable: false,
+    filterable: false,
+    renderCell: (params) => (
       <button
         className="btn btn-editar"
         style={{ padding: '6px 10px', fontSize: 13 }}
         onClick={(e) => openTplMenu(e, params.row)}
       >
-        {label}
+        {incluye(tipoFromRow(params.row), 'poder') ? 'Descargar (Poder)' : 'Descargar'}
       </button>
-    );
-  }
-};
-
+    )
+  };
 
   const actionsColumn = {
     field: 'acciones',
@@ -891,7 +1234,7 @@ const descargarPlantilla = (id) => {
               style={{ padding: '6px 10px', fontSize: 13, background: entregado ? '#e8e8e8' : undefined }}
               disabled={entregado}
               onClick={() => openDeliver(r)}
-              title={entregado ? 'Ya entregado' : 'Marcar como entregado'}
+              title={entregado ? 'Ya entregada' : 'Marcar como entregada'}
             >
               {entregado ? 'Entregado' : 'Entregar'}
             </button>
@@ -901,7 +1244,6 @@ const descargarPlantilla = (id) => {
     }
   };
 
-  // Columna de Observaciones (solo admin)
   const observacionesColumn = {
     field: 'observaciones',
     headerName: 'Observaciones',
@@ -921,7 +1263,7 @@ const descargarPlantilla = (id) => {
 
       const onKeyDown = async (e) => {
         stopGrid(e);
-        if (e.key === 'Enter' && e.shiftKey) return; // salto de línea
+        if (e.key === 'Enter' && e.shiftKey) return;
         if (e.key === 'Enter') {
           e.preventDefault();
           if (!obsSaving[id]) await saveObs(id, row);
@@ -964,13 +1306,12 @@ const descargarPlantilla = (id) => {
     }
   };
 
-  // === Construcción de columnas ===
   const showActionsColumn = isAdmin || canDeliver;
   const columns = [
     ...baseColumns,
     plantillasColumn,
     ...(showActionsColumn ? [actionsColumn] : []),
-    ...(isAdmin ? [observacionesColumn] : []), // <- SOLO ADMIN
+    ...(isAdmin ? [observacionesColumn] : []),
   ];
 
   // columnas picker
@@ -1022,11 +1363,11 @@ const descargarPlantilla = (id) => {
 
   return (
     <div style={{ padding: 16 }}>
-      <h2>Protocolito</h2>
+      <h2>Escrituras</h2>
 
       {/* Barra de acciones */}
       <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
-        <button className="btn btn-primary" onClick={startAdd} disabled={adding || editingId}>+ Agregar trámite</button>
+        <button className="btn btn-primary" onClick={startAdd} disabled={adding || editingId}>+ Agregar escritura</button>
 
         {/* Importar Excel */}
         <input
@@ -1043,13 +1384,13 @@ const descargarPlantilla = (id) => {
         {/* Exportar */}
         {canExport && (
           <Button variant="text" onClick={() => setExportOpen(true)}>
-            Exportar protocolito
+            Exportar escrituras
           </Button>
         )}
 
         <input
           type="text"
-          placeholder="Buscar por número, cliente, tipo o abogado"
+          placeholder="Buscar por control, cliente, tipo o abogado"
           value={q}
           onChange={e => setQ(e.target.value)}
           style={{ flex: 1, minWidth: 260, maxWidth: 520 }}
@@ -1080,7 +1421,7 @@ const descargarPlantilla = (id) => {
             SELECCIONAR CLIENTE
           </Button>
 
-          <input type="hidden" value={newRow.numeroTramite ? String(newRow.numeroTramite) : ''} readOnly />
+          <input type="hidden" value={newRow.numeroControl ? String(newRow.numeroControl) : ''} readOnly />
 
           <input type="text" value={newRow.tipoTramite} readOnly disabled placeholder="Tipo de trámite" />
 
@@ -1107,6 +1448,79 @@ const descargarPlantilla = (id) => {
           <input type="text" value={newRow.fecha} readOnly disabled placeholder="Fecha" />
           <input type="text" value={newRow.abogado} readOnly disabled placeholder="Abogado responsable" />
 
+          {/* NUEVO: Volumen (auto) y Folios */}
+          <div style={{ gridColumn: '1 / -1', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <input
+                type="text"
+                placeholder="Volumen (libro)"
+                value={newVolumen}
+                onChange={(e) => setNewVolumen(e.target.value)}
+                readOnly={!volumenEditable}
+                disabled={!volumenEditable}
+                title={volumenEditable ? 'Escribe el volumen' : 'Seleccionado automáticamente por el sistema'}
+                style={{
+                  minWidth: 160,
+                  background: volumenEditable ? undefined : '#f3f4f6',
+                  cursor: volumenEditable ? 'text' : 'not-allowed'
+                }}
+              />
+            <input
+              type="number"
+              placeholder="Folio desde"
+              value={newFolioDesde}
+              onChange={(e) => {
+                const v = e.target.value;
+                setNewFolioDesde(v);
+                if (!newFolioHasta) setNewFolioHasta(v);
+              }}
+              style={{ minWidth: 140 }}
+            />
+            <input
+              type="number"
+              placeholder="Folio hasta"
+              value={newFolioHasta}
+              onChange={(e) => setNewFolioHasta(e.target.value)}
+              style={{ minWidth: 140 }}
+            />
+           <Button
+              variant="outlined"
+              onClick={async () => {
+                if (!newVolumen) return;
+                const sugerido = await suggestNextFolioFor(API, newVolumen);
+                if (sugerido != null) {
+                  setNewFolioDesde(String(sugerido));
+                  if (!newFolioHasta) setNewFolioHasta(String(sugerido));
+                }
+              }}
+              disabled={!newVolumen}   // <— importante
+            >
+              Siguiente disponible
+            </Button>
+          </div>
+
+          {/* NUEVO: Testamento - Horas */}
+          {isTestamentoTipo(newRow.tipoTramite) && (
+            <div style={{ gridColumn: '1 / -1', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <TextField
+                label="Hora inicio (HH:mm)"
+                size="small"
+                placeholder="HH:mm"
+                value={newHoraInicio}
+                onChange={(e) => setNewHoraInicio(e.target.value)}
+                inputProps={{ inputMode: 'numeric', pattern: '[0-2][0-9]:[0-5][0-9]' }}
+              />
+              <TextField
+                label="Hora fin (HH:mm)"
+                size="small"
+                placeholder="HH:mm"
+                value={newHoraFin}
+                onChange={(e) => setNewHoraFin(e.target.value)}
+                inputProps={{ inputMode: 'numeric', pattern: '[0-2][0-9]:[0-5][0-9]' }}
+                helperText="Para validar disponibilidad se usa la hora de inicio"
+              />
+            </div>
+          )}
+
           <div style={{ whiteSpace: 'nowrap' }}>
             <button onClick={onSaveNew} disabled={!selectedCliente}>Guardar</button>
             <button onClick={() => onCancel('new')} style={{ marginLeft: 8 }}>Cancelar</button>
@@ -1119,9 +1533,9 @@ const descargarPlantilla = (id) => {
         <div style={{ display: 'grid', gridTemplateColumns: '140px 1fr 1.2fr 180px 220px auto', gap: 8, marginBottom: 12, background: '#f9fafb', padding: 8, borderRadius: 8 }}>
           <input
             type="number"
-            value={drafts[editingId]?.numeroTramite ?? ''}
-            onChange={e => onChangeDraft(editingId, 'numeroTramite', e.target.value)}
-            placeholder="# Trámite"
+            value={drafts[editingId]?.numeroControl ?? ''}
+            onChange={e => onChangeDraft(editingId, 'numeroControl', e.target.value)}
+            placeholder="# Control"
           />
           <input
             type="text"
@@ -1169,6 +1583,69 @@ const descargarPlantilla = (id) => {
             placeholder="Abogado responsable"
           />
 
+          {/* NUEVO: Volumen (auto, bloqueado) y Folios edición */}
+          <div style={{ gridColumn: '1 / -1', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <input
+              type="text"
+              placeholder="Volumen (libro)"
+              value={drafts[editingId]?.volumen ?? ''}
+              readOnly
+              disabled
+              title="No editable (asignado automáticamente)"
+              style={{ minWidth: 160, background: '#f3f4f6', cursor: 'not-allowed' }}
+            />
+            <input
+              type="number"
+              placeholder="Folio desde"
+              value={drafts[editingId]?.folioDesde ?? ''}
+              onChange={(e) => onChangeDraft(editingId, 'folioDesde', e.target.value)}
+              style={{ minWidth: 140 }}
+            />
+            <input
+              type="number"
+              placeholder="Folio hasta"
+              value={drafts[editingId]?.folioHasta ?? ''}
+              onChange={(e) => onChangeDraft(editingId, 'folioHasta', e.target.value)}
+              style={{ minWidth: 140 }}
+            />
+            <Button
+              variant="outlined"
+              onClick={async () => {
+                const vol = drafts[editingId]?.volumen;
+                const sugerido = await suggestNextFolioFor(API, vol);
+                if (sugerido != null) {
+                  onChangeDraft(editingId, 'folioDesde', String(sugerido));
+                  if (!drafts[editingId]?.folioHasta) onChangeDraft(editingId, 'folioHasta', String(sugerido));
+                }
+              }}
+            >
+              Siguiente disponible
+            </Button>
+          </div>
+
+          {/* NUEVO: Testamento - Horas */}
+          {isTestamentoTipo(drafts[editingId]?.tipoTramite) && (
+            <div style={{ gridColumn: '1 / -1', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <TextField
+                label="Hora inicio (HH:mm)"
+                size="small"
+                placeholder="HH:mm"
+                value={drafts[editingId]?.horaLecturaInicio || ''}
+                onChange={(e) => onChangeDraft(editingId, 'horaLecturaInicio', e.target.value)}
+                inputProps={{ inputMode: 'numeric', pattern: '[0-2][0-9]:[0-5][0-9]' }}
+              />
+              <TextField
+                label="Hora fin (HH:mm)"
+                size="small"
+                placeholder="HH:mm"
+                value={drafts[editingId]?.horaLecturaFin || ''}
+                onChange={(e) => onChangeDraft(editingId, 'horaLecturaFin', e.target.value)}
+                inputProps={{ inputMode: 'numeric', pattern: '[0-2][0-9]:[0-5][0-9]' }}
+                helperText="Para validar disponibilidad se usa la hora de inicio"
+              />
+            </div>
+          )}
+
           {isAdmin && (
             <div style={{ gridColumn: '1 / -1' }}>
               <textarea
@@ -1193,7 +1670,7 @@ const descargarPlantilla = (id) => {
         <DataGrid
           rows={visibleRows}
           getRowId={(row) =>
-            row?._id ?? row?.id ?? row?.numeroTramite ?? `${row?.cliente}-${row?.fecha}`
+            row?._id ?? row?.id ?? row?.numeroControl ?? `${row?.cliente}-${row?.fecha}`
           }
           columns={columns}
           loading={loading}
@@ -1202,7 +1679,7 @@ const descargarPlantilla = (id) => {
           pageSizeOptions={[10, 25, 50, 100]}
           initialState={{
             pagination: { paginationModel: { pageSize: 25, page: 0 } },
-            sorting: { sortModel: [{ field: 'fecha', sort: 'desc' }] }
+            sorting: { sortModel: [{ field: 'numeroControl', sort: 'desc' }] }
           }}
           disableRowSelectionOnClick
           sx={{
@@ -1220,7 +1697,7 @@ const descargarPlantilla = (id) => {
         <Menu anchorEl={tplAnchorEl} open={Boolean(tplAnchorEl)} onClose={closeTplMenu}>
           {tplOptions.length > 0
             ? tplOptions.map(p => (
-                <MenuItem key={p.key} onClick={() => descargarPlantilla(p.type)}>
+                <MenuItem key={p.key} onClick={() => descargarPlantilla(p.key)}>
                   {p.label}
                 </MenuItem>
               ))
@@ -1259,9 +1736,9 @@ const descargarPlantilla = (id) => {
         </DialogActions>
       </Dialog>
 
-      {/* Modal Exportar protocolito */}
+      {/* Modal Exportar */}
       <Dialog open={exportOpen} onClose={() => setExportOpen(false)} fullWidth maxWidth="sm">
-        <DialogTitle>Exportar protocolito</DialogTitle>
+        <DialogTitle>Exportar escrituras</DialogTitle>
         <DialogContent dividers>
           <div style={{ display: 'grid', gap: 12 }}>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
@@ -1292,11 +1769,11 @@ const descargarPlantilla = (id) => {
 
       {/* Modal de Entregar */}
       <Dialog open={deliverOpen} onClose={closeDeliver} fullWidth maxWidth="sm">
-        <DialogTitle>Entregar trámite</DialogTitle>
+        <DialogTitle>Entregar escritura</DialogTitle>
         <DialogContent dividers>
           <div style={{ display: 'grid', gap: 12 }}>
             <TextField label="Cliente" size="small" value={deliverRow?.cliente || '—'} InputProps={{ readOnly: true }} />
-            <TextField label="Número de trámite" size="small" value={deliverRow?.numeroTramite ?? '—'} InputProps={{ readOnly: true }} />
+            <TextField label="Número de control" size="small" value={deliverRow?.numeroControl ?? '—'} InputProps={{ readOnly: true }} />
             <TextField label="Teléfono" size="small" value={deliverPhone} onChange={(e) => setDeliverPhone(e.target.value)} helperText="Para contactar al cliente al momento de entrega" />
             <TextField label="Notas" size="small" multiline minRows={2} value={deliverNotes} onChange={(e) => setDeliverNotes(e.target.value)} />
           </div>
@@ -1311,10 +1788,10 @@ const descargarPlantilla = (id) => {
 
       {/* Modal: opciones cuando NO hay recibo */}
       <Dialog open={missingOpen} onClose={closeMissing} fullWidth maxWidth="sm">
-        <DialogTitle>Este trámite no tiene recibo</DialogTitle>
+        <DialogTitle>Esta escritura no tiene recibo</DialogTitle>
         <DialogContent dividers>
           <div style={{ display: 'grid', gap: 12 }}>
-            <div><b>Trámite:</b> {missingRow?.numeroTramite ?? '—'}</div>
+            <div><b># Control:</b> {missingRow?.numeroControl ?? '—'}</div>
             <div><b>Cliente:</b> {missingRow?.cliente ?? '—'}</div>
             <div style={{ display: 'grid', gap: 8 }}>
               <Button variant="contained" onClick={() => { closeMissing(); goToGenerarRecibo(missingRow); }}>
@@ -1338,7 +1815,7 @@ const descargarPlantilla = (id) => {
         <DialogTitle>Adjuntar recibo existente</DialogTitle>
         <DialogContent dividers>
           <div style={{ display: 'grid', gap: 12 }}>
-            <div><b># Trámite:</b> {missingRow?.numeroTramite ?? '—'} · <b>Cliente:</b> {missingRow?.cliente ?? '—'}</div>
+            <div><b># Control:</b> {missingRow?.numeroControl ?? '—'} · <b>Cliente:</b> {missingRow?.cliente ?? '—'}</div>
             <div style={{ display: 'flex', gap: 8 }}>
               <TextField fullWidth size="small" placeholder="Buscar por folio, cliente o fecha (YYYY-MM-DD)…"
                 value={attachQ} onChange={(e) => setAttachQ(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && searchReceipts(attachQ)} />
@@ -1362,7 +1839,7 @@ const descargarPlantilla = (id) => {
                     valueGetter: (p) => (p?.row?.total != null) ? `$ ${Number(p.row.total).toFixed(2)}` : '—'
                   },
                   {
-                    field: 'controles', headerName: '# Trámites vinculados', width: 190,
+                    field: 'controles', headerName: '# Controles vinculados', width: 190,
                     valueGetter: (p) => Array.isArray(p?.row?.controls) ? p.row.controls.length : 0
                   }
                 ]}
@@ -1379,7 +1856,7 @@ const descargarPlantilla = (id) => {
         <DialogActions>
           <Button onClick={() => setAttachOpen(false)}>Cancelar</Button>
           <Button variant="contained" onClick={linkReceipt} disabled={!attachSelectedId}>
-            Vincular a este trámite
+            Vincular a este control
           </Button>
         </DialogActions>
       </Dialog>
@@ -1388,7 +1865,7 @@ const descargarPlantilla = (id) => {
         <DialogTitle>Justificante: no se ha generado recibo</DialogTitle>
         <DialogContent dividers>
           <div style={{ display: 'grid', gap: 12 }}>
-            <div><b># Trámite:</b> {missingRow?.numeroTramite ?? '—'}</div>
+            <div><b># Control:</b> {missingRow?.numeroControl ?? '—'}</div>
             <TextField
               label="Motivo / Justificación" size="small" multiline minRows={3}
               value={justifyText} onChange={(e) => setJustifyText(e.target.value)}
@@ -1402,7 +1879,7 @@ const descargarPlantilla = (id) => {
             variant="contained"
             onClick={async () => {
               try {
-                await axios.post(`${API}/protocolito/${missingRow._id}/justificante`, { motivo: justifyText });
+                await axios.post(`${API}/escrituras/${missingRow._id}/justificante`, { motivo: justifyText });
                 setJustifyOpen(false);
                 setMsg({ type: 'ok', text: 'Justificante guardado y estatus actualizado a JUSTIFICADO.' });
                 setJustifyText('');
@@ -1420,10 +1897,10 @@ const descargarPlantilla = (id) => {
       </Dialog>
 
       <Dialog open={justifyViewOpen} onClose={() => setJustifyViewOpen(false)} fullWidth maxWidth="sm">
-        <DialogTitle>Justificante del trámite</DialogTitle>
+        <DialogTitle>Justificante del control</DialogTitle>
         <DialogContent dividers>
           <div style={{ display: 'grid', gap: 12 }}>
-            <div><b># Trámite:</b> {justifyViewRow?.numeroTramite ?? '—'}</div>
+            <div><b># Control:</b> {justifyViewRow?.numeroControl ?? '—'}</div>
             <div><b>Cliente:</b> {justifyViewRow?.cliente ?? '—'}</div>
             <TextField
               label="Motivo / Justificación" size="small" multiline minRows={3}

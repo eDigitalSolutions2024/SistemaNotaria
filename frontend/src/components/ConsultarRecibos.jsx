@@ -109,15 +109,37 @@ export default function ConsultarRecibos({ onOpenRecibo }) {
 
   useEffect(() => { fetchData(); }, []);
 
-  const onlyDate = (d) => {
-    if (!d) return '';
-    const dt = new Date(d);
-    if (isNaN(dt)) return '';
-    const y = dt.getFullYear();
-    const m = String(dt.getMonth() + 1).padStart(2, '0');
-    const day = String(dt.getDate()).padStart(2, '0');
+  // Reemplaza tu onlyDate por esta:
+const onlyDate = (d) => {
+  if (!d) return '';
+
+  // 1) Si ya es fecha "plana" (sin hora), respétala.
+  if (typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d)) {
+    return d;
+  }
+
+  const dt = new Date(d);
+  if (isNaN(dt)) return '';
+
+  // 2) ¿Es exactamente medianoche en UTC? (caso típico guardado como 00:00:00Z)
+  const isMidnightUTC =
+    dt.getUTCHours() === 0 && dt.getUTCMinutes() === 0 && dt.getUTCSeconds() === 0;
+
+  if (isMidnightUTC) {
+    // Usa partes UTC para no “bajar” un día en la zona local
+    const y = dt.getUTCFullYear();
+    const m = String(dt.getUTCMonth() + 1).padStart(2, '0');
+    const day = String(dt.getUTCDate()).padStart(2, '0');
     return `${y}-${m}-${day}`;
-  };
+  }
+
+  // 3) Para datetimes reales, muestra en horario local del usuario
+  const y = dt.getFullYear();
+  const m = String(dt.getMonth() + 1).padStart(2, '0');
+  const day = String(dt.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+};
+
 
   const openCancelModal = (row) => {
     setCancelTarget({
@@ -172,7 +194,7 @@ export default function ConsultarRecibos({ onOpenRecibo }) {
       width: 110,
       valueGetter: (_v, row) => {
         const id = row?._id || row?.id || '';
-        return id ? String(id).slice(-4).toUpperCase() : '';
+        return id ? String(id).slice(-5).toUpperCase() : '';
       },
     },
     {
@@ -604,7 +626,10 @@ export default function ConsultarRecibos({ onOpenRecibo }) {
                 <div><b>Recibo:</b> #{reasonTarget.numero}</div>
                 {reasonTarget.usuarioNombre && <div><b>Cancelado por:</b> {reasonTarget.usuarioNombre}</div>}
                 {reasonTarget.fecha && (
-                  <div><b>Fecha:</b> {reasonTarget.fecha.toLocaleString()}</div>
+                  <div><b>Fecha:</b> {reasonTarget.fecha.toLocaleString('es-MX', {
+                    year: 'numeric', month: '2-digit', day: '2-digit',
+                    hour: '2-digit', minute: '2-digit'
+                  })}</div>
                 )}
                 <div>
                   <b>Motivo:</b>
