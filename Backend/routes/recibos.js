@@ -6,6 +6,9 @@ const Abogado = require('../models/Abogado'); // 👈 usa tu path real
 const Recibo = require('../models/Recibo');
 const ReciboLink = require('../models/ReciboLink');
 const Protocolito = require('../models/Protocolito');
+// routes/recibos.js (arriba junto con los otros models)
+const Escritura = require('../models/Escritura');   // 👈 faltaba
+
 const { buildReciboPDF } = require('../utils/pdfRecibo');
 const XLSX = require('xlsx');
 
@@ -112,6 +115,68 @@ router.get('/protocolitos/:numero', async (req, res) => {
   } catch (e) {
     console.error('GET PROTOCOLITO ERROR:', e);
     return res.status(500).json({ ok: false, msg: 'Error obteniendo protocolito' });
+  }
+});
+
+
+// GET /escrituras/numeros
+// Devuelve lista para el <select> del front:
+// [{ numeroControl, cliente, abogado, tipoTramite, fecha }]
+// GET /api/recibos/escrituras/numeros
+router.get('/escrituras/numeros', async (req, res) => {
+  try {
+    const { only } = req.query;
+    const filter = {};
+    if (String(only || '').toLowerCase() === 'escritura') {
+      filter.tipoTramite = { $regex: 'escritura', $options: 'i' };
+    }
+
+    const rows = await Escritura.find(filter)
+      .select('numeroControl cliente abogado tipoTramite fecha')
+      .sort({ numeroControl: -1 })
+      .lean();
+
+    res.json({ ok: true, data: rows });
+  } catch (e) {
+    console.error('ESCRITURAS NUMEROS ERROR:', e);
+    res.status(500).json({ ok: false, msg: 'Error listando números de escrituras' });
+  }
+});
+
+
+
+// GET /escrituras/search?q=texto
+// Sugerencias (datalist) devolviendo SOLO los números de escritura (strings)
+router.get('/escrituras/search', async (req, res) => {
+  try {
+    const q = String(req.query.q || '').trim();
+    if (!q) return res.json({ data: [] });
+
+    // Búsqueda por prefijo/contiene en numeroControl convirtiéndolo a string,
+    // y también por cliente/abogado si hace falta.
+    const findFilter = {
+      $and: [
+        { tipoTramite: { $regex: 'escritura', $options: 'i' } },
+        {
+          $or: [
+            { $expr: { $regexMatch: { input: { $toString: '$numeroControl' }, regex: q, options: 'i' } } },
+            { cliente: { $regex: q, $options: 'i' } },
+            { abogado: { $regex: q, $options: 'i' } },
+          ]
+        }
+      ]
+    };
+
+    const rows = await Escritura.find(findFilter, { numeroControl: 1 })
+      .sort({ numeroControl: -1 })
+      .limit(50)
+      .lean();
+
+    // devolver como array de strings para el datalist
+    const list = [...new Set(rows.map(r => String(r.numeroControl)))];
+    res.json({ data: list });
+  } catch (e) {
+    res.status(500).json({ msg: 'Error en búsqueda de escrituras', detalle: e.message });
   }
 });
 

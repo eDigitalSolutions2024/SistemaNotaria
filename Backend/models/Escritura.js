@@ -1,6 +1,13 @@
 // backend/models/Escritura.js
 const { Schema, model } = require('mongoose');
 
+// Helper: convierte a número o null
+const numOrNull = (v) => {
+  if (v === undefined || v === null || v === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+};
+
 const EscrituraSchema = new Schema(
   {
     numeroControl: { type: Number, required: true, unique: true, index: true },
@@ -11,7 +18,15 @@ const EscrituraSchema = new Schema(
     volumen: { type: String },        // si prefieres número, cambia a Number
     folioDesde: { type: Number },
     folioHasta: { type: Number },
+    horaLecturaInicio: { type: String, default: null }, // "HH:mm"
+    horaLecturaFin: { type: String, default: null },    // "HH:mm"
 
+    // ===== NUEVOS CAMPOS (recibo/resumen) =====
+    // ==== NUEVOS CAMPOS numéricos ====
+    totalImpuestos:   { type: Number, default: null, set: numOrNull },
+    valorAvaluo:      { type: Number, default: null, set: numOrNull },
+    totalGastosExtra: { type: Number, default: null, set: numOrNull },
+    totalHonorarios:  { type: Number, default: null, set: numOrNull },
 
     // Campos operativos / estatus
     observaciones: { type: String, default: '' },

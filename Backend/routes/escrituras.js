@@ -17,7 +17,6 @@ try { Cliente = require('../models/Cliente'); } catch { /* opcional */ }
 
 // --- helpers ---
 
-
 // === Folios por volumen ===
 const MAX_FOLIOS_POR_VOLUMEN = 300;
 
@@ -48,7 +47,6 @@ function incVolumenTag(vol) {
   return null;
 }
 
-
 // >>> TESTAMENTO — utilidades HH:mm
 function parseHHMM(s) {
   const m = String(s || '').trim().match(/^([01]\d|2[0-3]):([0-5]\d)$/);
@@ -69,6 +67,13 @@ function overlapped(aIni, aFin, bIni, bFin) {
 }
 // <<< TESTAMENTO
 
+// Montos numéricos (acepta '', null, undefined)
+const numOrNull = (v) => {
+  if (v === undefined) return undefined;   // "no tocar"
+  if (v === null || v === '') return null; // limpiar
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+};
 
 // Calcula el máximo folio usado en un volumen
 async function maxFolioUsado(volumen, excludeId = null) {
@@ -193,6 +198,47 @@ function overlapQuery(volumen, desde, hasta, excludeId) {
 
 // ====== Rutas ======
 
+
+
+
+
+// GET /escrituras/search?q=texto
+// Sugerencias (datalist) devolviendo SOLO los números de escritura (strings)
+router.get('/search', async (req, res) => {
+  try {
+    const q = String(req.query.q || '').trim();
+    if (!q) return res.json({ data: [] });
+
+    // Búsqueda por prefijo/contiene en numeroControl convirtiéndolo a string,
+    // y también por cliente/abogado si hace falta.
+    const findFilter = {
+      $and: [
+        { tipoTramite: { $regex: 'escritura', $options: 'i' } },
+        {
+          $or: [
+            { $expr: { $regexMatch: { input: { $toString: '$numeroControl' }, regex: q, options: 'i' } } },
+            { cliente: { $regex: q, $options: 'i' } },
+            { abogado: { $regex: q, $options: 'i' } },
+          ]
+        }
+      ]
+    };
+
+    const rows = await Escritura.find(findFilter, { numeroControl: 1 })
+      .sort({ numeroControl: -1 })
+      .limit(50)
+      .lean();
+
+    // devolver como array de strings para el datalist
+    const list = [...new Set(rows.map(r => String(r.numeroControl)))];
+    res.json({ data: list });
+  } catch (e) {
+    res.status(500).json({ msg: 'Error en búsqueda de escrituras', detalle: e.message });
+  }
+});
+
+
+
 // GET /escrituras
 router.get('/', async (req, res) => {
   try {
@@ -254,9 +300,19 @@ router.get('/export', async (req, res) => {
         const fecha = r.fecha ? new Date(r.fecha).toLocaleDateString('es-MX') : '—';
         const folioStr = (r.folioDesde != null && r.folioHasta != null) ? `${r.folioDesde} a ${r.folioHasta}` : '—';
         const volStr = r.volumen ?? '—';
+
+        const montos = [
+          r.totalImpuestos != null ? `Imp: $${Number(r.totalImpuestos).toFixed(2)}` : null,
+          r.valorAvaluo != null ? `Avalúo: $${Number(r.valorAvaluo).toFixed(2)}` : null,
+          r.totalGastosExtra != null ? `Extras: $${Number(r.totalGastosExtra).toFixed(2)}` : null,
+          r.totalHonorarios != null ? `Honor: $${Number(r.totalHonorarios).toFixed(2)}` : null,
+        ].filter(Boolean).join(' · ');
+
         doc.fontSize(11).text(
           `#${r.numeroControl} | ${fecha} | Folio: ${folioStr} | Vol: ${volStr} | ${r.cliente} | ${r.tipoTramite} | ${r.abogado}`
         );
+        if (montos) doc.text(`  ${montos}`);
+        doc.moveDown(0.2);
       });
       doc.end();
       return;
@@ -273,10 +329,13 @@ router.get('/export', async (req, res) => {
       { header: 'Volumen', key: 'volumen', width: 14 },
       { header: 'Folio desde', key: 'folioDesde', width: 14 },
       { header: 'Folio hasta', key: 'folioHasta', width: 14 },
+      { header: 'Total impuestos', key: 'totalImpuestos', width: 16 },
+      { header: 'Valor avalúo', key: 'valorAvaluo', width: 16 },
+      { header: 'Gastos extra', key: 'totalGastosExtra', width: 16 },
+      { header: 'Honorarios', key: 'totalHonorarios', width: 16 },
       { header: 'Estatus entrega', key: 'estatus_entrega', width: 16 },
       { header: 'Estatus recibo', key: 'estatus_recibo', width: 16 },
       { header: 'Observaciones', key: 'observaciones', width: 50 },
-      // (No añadimos columnas de horas para no cambiar el layout actual)
     ];
     rows.forEach(r => {
       ws.addRow({
@@ -288,6 +347,10 @@ router.get('/export', async (req, res) => {
         volumen: r.volumen ?? '',
         folioDesde: r.folioDesde ?? '',
         folioHasta: r.folioHasta ?? '',
+        totalImpuestos:  r.totalImpuestos  ?? '',
+        valorAvaluo:     r.valorAvaluo     ?? '',
+        totalGastosExtra: r.totalGastosExtra ?? '',
+        totalHonorarios:  r.totalHonorarios  ?? '',
         estatus_entrega: r.estatus_entrega ?? '',
         estatus_recibo: r.estatus_recibo ?? '',
         observaciones: r.observaciones || ''
@@ -322,6 +385,12 @@ router.post('/import', upload.single('file'), async (req, res) => {
         const folioDesde = normFolio(r.folioDesde || r['Folio desde'] || r.folio_inicio || r.folioStart);
         const folioHasta = normFolio(r.folioHasta || r['Folio hasta'] || r.folio_fin || r.folioEnd);
 
+        // Montos desde Excel/CSV (acepta headers alternos)
+        const mTotalImpuestos  = numOrNull(r.totalImpuestos  ?? r['Total impuestos']  ?? r.total_impuestos);
+        const mValorAvaluo     = numOrNull(r.valorAvaluo     ?? r['Valor avalúo']     ?? r.valor_avaluo);
+        const mGastosExtra     = numOrNull(r.totalGastosExtra ?? r['Gastos extra']     ?? r.total_gastos_extra);
+        const mHonorarios      = numOrNull(r.totalHonorarios  ?? r['Honorarios']       ?? r.total_honorarios);
+
         const data = {
           numeroControl,
           tipoTramite: String(r.tipoTramite || r.tipo || r['Tipo de trámite'] || '—'),
@@ -331,7 +400,11 @@ router.post('/import', upload.single('file'), async (req, res) => {
           observaciones: String(r.observaciones || ''),
           volumen,
           folioDesde,
-          folioHasta
+          folioHasta,
+          ...(mTotalImpuestos  !== undefined ? { totalImpuestos: mTotalImpuestos }   : {}),
+          ...(mValorAvaluo     !== undefined ? { valorAvaluo: mValorAvaluo }         : {}),
+          ...(mGastosExtra     !== undefined ? { totalGastosExtra: mGastosExtra }     : {}),
+          ...(mHonorarios      !== undefined ? { totalHonorarios: mHonorarios }       : {}),
         };
         if (!data.numeroControl || !data.tipoTramite || !data.cliente || !data.fecha || !data.abogado) {
           throw new Error('Fila incompleta');
@@ -424,37 +497,47 @@ router.post('/', async (req, res) => {
     }
 
     // >>> TESTAMENTO — guardar rango de lectura si aplica (con alias)
-const tipo = String(req.body.tipoTramite ?? base.tipoTramite ?? '').toLowerCase();
-if (tipo.includes('testamento')) {
-  const inicioRaw =
-    req.body.horaLecturaInicio ??
-    req.body.horaLectura ??   // compat viejo
-    req.body.horaInicio ??    // alias camel
-    req.body.hora_inicio ??   // alias snake
-    null;
+    const tipo = String(req.body.tipoTramite ?? base.tipoTramite ?? '').toLowerCase();
+    if (tipo.includes('testamento')) {
+      const inicioRaw =
+        req.body.horaLecturaInicio ??
+        req.body.horaLectura ??   // compat viejo
+        req.body.horaInicio ??    // alias camel
+        req.body.hora_inicio ??   // alias snake
+        null;
 
-  const finRaw =
-    req.body.horaLecturaFin ??
-    req.body.horaFin ??       // alias camel
-    req.body.hora_fin ??      // alias snake
-    null;
+      const finRaw =
+        req.body.horaLecturaFin ??
+        req.body.horaFin ??       // alias camel
+        req.body.hora_fin ??      // alias snake
+        null;
 
-  const inicio = (typeof inicioRaw === 'string') ? inicioRaw.trim() : inicioRaw;
-  const fin    = (typeof finRaw === 'string') ? finRaw.trim() : finRaw;
+      const inicio = (typeof inicioRaw === 'string') ? inicioRaw.trim() : inicioRaw;
+      const fin    = (typeof finRaw === 'string') ? finRaw.trim() : finRaw;
 
-  if (inicio && fin) {
-    if (!validRangeHHMM(inicio, fin)) {
-      return res.status(400).json({ mensaje: 'Rango de lectura inválido (HH:mm)' });
+      if (inicio && fin) {
+        if (!validRangeHHMM(inicio, fin)) {
+          return res.status(400).json({ mensaje: 'Rango de lectura inválido (HH:mm)' });
+        }
+        base.horaLecturaInicio = inicio;
+        base.horaLecturaFin    = fin;
+      } else if (inicio && !fin) {
+        // Acepta hora única para no romper flujos antiguos
+        base.horaLecturaInicio = inicio;
+      }
     }
-    base.horaLecturaInicio = inicio;
-    base.horaLecturaFin    = fin;
-  } else if (inicio && !fin) {
-    // Acepta hora única para no romper flujos antiguos
-    base.horaLecturaInicio = inicio;
-  }
-}
-// <<< TESTAMENTO
+    // <<< TESTAMENTO
 
+    // Montos (acepta camelCase y snake_case)
+    const totalImpuestos = numOrNull(req.body.totalImpuestos ?? req.body.total_impuestos);
+    const valorAvaluo = numOrNull(req.body.valorAvaluo ?? req.body.valor_avaluo);
+    const totalGastosExtra = numOrNull(req.body.totalGastosExtra ?? req.body.total_gastos_extra);
+    const totalHonorarios = numOrNull(req.body.totalHonorarios ?? req.body.total_honorarios);
+
+    if (totalImpuestos !== undefined) base.totalImpuestos = totalImpuestos;
+    if (valorAvaluo !== undefined) base.valorAvaluo = valorAvaluo;
+    if (totalGastosExtra !== undefined) base.totalGastosExtra = totalGastosExtra;
+    if (totalHonorarios !== undefined) base.totalHonorarios = totalHonorarios;
 
     const created = await Escritura.create(base);
     res.status(201).json(created);
@@ -670,58 +753,75 @@ router.put('/:id', async (req, res) => {
     }
     // === FIN Volumen/Folios ===
 
-   // === Horas Testamento ===
-const isTestamento = /testamento/i.test((merged.tipoTramite || '').toString());
-if (isTestamento) {
-  // considerar todos los alias que puede enviar el frontend
-  const inicioRaw =
-    body.horaLecturaInicio ??
-    body.horaLectura ??     // compat viejo
-    body.horaInicio ??      // alias camel
-    body.hora_inicio ??     // alias snake
-    null;
+    // === Horas Testamento ===
+    const isTestamento = /testamento/i.test((merged.tipoTramite || '').toString());
+    if (isTestamento) {
+      // considerar todos los alias que puede enviar el frontend
+      const inicioRaw =
+        body.horaLecturaInicio ??
+        body.horaLectura ??     // compat viejo
+        body.horaInicio ??      // alias camel
+        body.hora_inicio ??     // alias snake
+        null;
 
-  const finRaw =
-    body.horaLecturaFin ??
-    body.horaFin ??         // alias camel
-    body.hora_fin ??        // alias snake
-    null;
+      const finRaw =
+        body.horaLecturaFin ??
+        body.horaFin ??         // alias camel
+        body.hora_fin ??        // alias snake
+        null;
 
-  // tocar horas sólo si llegó al menos uno de los campos
-  const touchedHours =
-    ('horaLecturaInicio' in body) || ('horaLecturaFin' in body) || ('horaLectura' in body) ||
-    ('horaInicio' in body) || ('horaFin' in body) || ('hora_inicio' in body) || ('hora_fin' in body);
+      // tocar horas sólo si llegó al menos uno de los campos
+      const touchedHours =
+        ('horaLecturaInicio' in body) || ('horaLecturaFin' in body) || ('horaLectura' in body) ||
+        ('horaInicio' in body) || ('horaFin' in body) || ('hora_inicio' in body) || ('hora_fin' in body);
 
-  if (touchedHours) {
-    let ini = (typeof inicioRaw === 'string') ? inicioRaw.trim() : inicioRaw;
-    let fin = (typeof finRaw === 'string') ? finRaw.trim() : finRaw;
+      if (touchedHours) {
+        let ini = (typeof inicioRaw === 'string') ? inicioRaw.trim() : inicioRaw;
+        let fin = (typeof finRaw === 'string') ? finRaw.trim() : finRaw;
 
-    if (ini === '') ini = null;
-    if (fin === '') fin = null;
+        if (ini === '') ini = null;
+        if (fin === '') fin = null;
 
-    if (ini && fin) {
-      const okHHMM = (s) => /^([01]\d|2[0-3]):([0-5]\d)$/.test(String(s));
-      const toMin = (s) => { const [h, m] = String(s).split(':'); return (+h) * 60 + (+m); };
-      if (!okHHMM(ini) || !okHHMM(fin) || !(toMin(ini) < toMin(fin))) {
-        return res.status(400).json({ mensaje: 'Rango de lectura inválido (HH:mm)' });
+        if (ini && fin) {
+          const okHHMM = (s) => /^([01]\d|2[0-3]):([0-5]\d)$/.test(String(s));
+          const toMin = (s) => { const [h, m] = String(s).split(':'); return (+h) * 60 + (+m); };
+          if (!okHHMM(ini) || !okHHMM(fin) || !(toMin(ini) < toMin(fin))) {
+            return res.status(400).json({ mensaje: 'Rango de lectura inválido (HH:mm)' });
+          }
+        }
+
+        // asignar (permitimos inicio solo, o ambos)
+        out.horaLecturaInicio = ini ?? null;
+        out.horaLecturaFin    = fin ?? null;
+      }
+    } else {
+      // si dejó de ser testamento y llegaron campos de hora, limpiarlos
+      if (('horaLecturaInicio' in body) || ('horaLecturaFin' in body) || ('horaLectura' in body) ||
+          ('horaInicio' in body) || ('horaFin' in body) || ('hora_inicio' in body) || ('hora_fin' in body)) {
+        out.horaLecturaInicio = null;
+        out.horaLecturaFin = null;
       }
     }
+    // === FIN Horas Testamento ===
 
-    // asignar (permitimos inicio solo, o ambos)
-    out.horaLecturaInicio = ini ?? null;
-    out.horaLecturaFin    = fin ?? null;
-  }
-} else {
-  // si dejó de ser testamento y llegaron campos de hora, limpiarlos
-  if (('horaLecturaInicio' in body) || ('horaLecturaFin' in body) || ('horaLectura' in body) ||
-      ('horaInicio' in body) || ('horaFin' in body) || ('hora_inicio' in body) || ('hora_fin' in body)) {
-    out.horaLecturaInicio = null;
-    out.horaLecturaFin = null;
-  }
-}
-// === FIN Horas Testamento ===
+    // === Montos ===
+    const touchedMontos =
+      ('totalImpuestos' in body) || ('total_impuestos' in body) ||
+      ('valorAvaluo' in body) || ('valor_avaluo' in body) ||
+      ('totalGastosExtra' in body) || ('total_gastos_extra' in body) ||
+      ('totalHonorarios' in body) || ('total_honorarios' in body);
 
+    if (touchedMontos) {
+      const mTotalImpuestos  = numOrNull(body.totalImpuestos  ?? body.total_impuestos);
+      const mValorAvaluo     = numOrNull(body.valorAvaluo     ?? body.valor_avaluo);
+      const mGastosExtra     = numOrNull(body.totalGastosExtra ?? body.total_gastos_extra);
+      const mHonorarios      = numOrNull(body.totalHonorarios  ?? body.total_honorarios);
 
+      out.totalImpuestos   = mTotalImpuestos;
+      out.valorAvaluo      = mValorAvaluo;
+      out.totalGastosExtra = mGastosExtra;
+      out.totalHonorarios  = mHonorarios;
+    }
 
     // aplicar cambios: construir $set final con merged + out
     await Escritura.updateOne(
@@ -739,6 +839,10 @@ if (isTestamento) {
           ...(out.folioHasta  !== undefined ? { folioHasta: out.folioHasta } : {}),
           ...(out.horaLecturaInicio !== undefined ? { horaLecturaInicio: out.horaLecturaInicio } : {}),
           ...(out.horaLecturaFin    !== undefined ? { horaLecturaFin: out.horaLecturaFin } : {}),
+          ...(out.totalImpuestos   !== undefined ? { totalImpuestos: out.totalImpuestos } : {}),
+          ...(out.valorAvaluo      !== undefined ? { valorAvaluo: out.valorAvaluo } : {}),
+          ...(out.totalGastosExtra !== undefined ? { totalGastosExtra: out.totalGastosExtra } : {}),
+          ...(out.totalHonorarios  !== undefined ? { totalHonorarios: out.totalHonorarios } : {}),
         }
       }
     );
@@ -749,8 +853,6 @@ if (isTestamento) {
     return res.status(500).json({ mensaje: 'Error actualizando escritura', detalle: e.message });
   }
 });
-
-
 
 // DELETE /escrituras/:id
 router.delete('/:id', async (req, res) => {

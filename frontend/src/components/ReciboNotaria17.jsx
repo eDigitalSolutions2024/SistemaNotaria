@@ -33,19 +33,26 @@ export default function ReciboNotaria17() {
   const [loadingAbogados, setLoadingAbogados] = useState(false);
   const [abogadoId, setAbogadoId] = useState("");
 
-  // protocolitos
+  // protocolitos (select)
   const [numsLoading, setNumsLoading] = useState(false);
   const [numsError, setNumsError] = useState("");
   const [protocolitos, setProtocolitos] = useState([]);
   const [numeroSel, setNumeroSel] = useState("");
   const loadedOnce = useRef(false);
 
+  // escrituras (select)
+  const [escLoading, setEscLoading] = useState(false);
+  const [escError, setEscError] = useState("");
+  const [escrituras, setEscrituras] = useState([]);
+  const [escNumeroSel, setEscNumeroSel] = useState("");
+  const loadedOnceEsc = useRef(false);
+
   // estado guardado
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
   const [savedId, setSavedId] = useState("");
 
-  // Autocomplete Escrituras + Historial
+  // Autocomplete Escrituras + Historial (se mantiene por si escriben manualmente)
   const [escSugs, setEscSugs] = useState([]);
   const [hist, setHist] = useState(null);
   const escSearchTimer = useRef(null);
@@ -158,6 +165,67 @@ export default function ReciboNotaria17() {
       })
       .finally(() => setNumsLoading(false));
   }, [f.tipoTramite]);
+
+  /* ---------------- ESCRITURAS: lista (igual que protocolito) ---------------- */
+
+  useEffect(() => {
+    if (f.tipoTramite !== "Escritura") return;
+    if (loadedOnceEsc.current) return;
+    setEscLoading(true);
+    setEscError("");
+    axios
+      .get(`${API}/recibos/escrituras/numeros`)
+      .then(({ data }) => {
+        const list = Array.isArray(data?.data) ? data.data : [];
+        // Esperado: [{ numeroControl, cliente, abogado, tipoTramite, fecha? }]
+        setEscrituras(list);
+        loadedOnceEsc.current = true;
+      })
+      .catch((e) => {
+        const msg = e.response?.data?.msg || e.message || "Network Error";
+        setEscError(msg);
+      })
+      .finally(() => setEscLoading(false));
+  }, [f.tipoTramite]);
+
+  async function handleSelectEscritura(value) {
+    setEscNumeroSel(value);
+    if (!value) return;
+
+    // value = numeroControl
+    const selected =
+      escrituras.find((x) => String(x.numeroControl) === String(value)) || null;
+
+    setF((prev) => {
+      const motivoPlano =
+        selected?.tipoTramite || "Escritura";
+      const conceptoPlantilla = `Pago de ${motivoPlano} con número de Escritura #${value}`;
+
+      const keepUserConcept =
+        conceptoTouched && String(prev.concepto || "").trim().length > 0;
+
+      return {
+        ...prev,
+        tipoTramite: "Escritura",
+        control: String(value),
+        fecha: selected?.fecha ? String(selected.fecha).slice(0, 10) : prev.fecha,
+        recibiDe: selected?.cliente || prev.recibiDe,
+        abogado: selected?.abogado || prev.abogado,
+        concepto: keepUserConcept ? prev.concepto : conceptoPlantilla,
+      };
+    });
+
+    if (selected?.abogado) {
+      const found = catalogAbogados.find(
+        (a) => (a.nombre || "").trim() === (selected.abogado || "").trim()
+      );
+      if (found) setAbogadoId(String(found.id));
+    }
+
+    // carga pendiente + historial para autocompletar totales/abonos
+    await loadEscrituraPendiente();
+    await loadEscrituraHistorial();
+  }
 
   /* ---------------- autollenado de concepto ---------------- */
 
@@ -333,21 +401,20 @@ export default function ReciboNotaria17() {
 
   /* ---------------- control label/placeholder ---------------- */
 
-  const controlLabel =
-    f.tipoTramite === "Protocolito"
-      ? "# Trámite *"
-      : isEscritura
-      ? "Número de Escritura"
-      : "Control";
+  const isProto = f.tipoTramite === "Protocolito";
+  const controlLabel = isProto
+    ? "# Trámite *"
+    : isEscritura
+    ? "Número de Escritura *"
+    : "Control";
 
-  const controlPlaceholder =
-    f.tipoTramite === "Protocolito"
-      ? "Ej. 11232"
-      : isEscritura
-      ? "Ej. 2024/0001"
-      : "";
+  const controlPlaceholder = isProto
+    ? "Ej. 11232"
+    : isEscritura
+    ? "Ej. 2024/0001"
+    : "";
 
-  /* ---------------- autocomplete escrituras ---------------- */
+  /* ---------------- autocomplete escrituras (se mantiene) ---------------- */
 
   useEffect(() => {
     if (!isEscritura) {
@@ -401,6 +468,7 @@ export default function ReciboNotaria17() {
                   const next = e.target.value;
                   setF((prev) => resetFormForType(next, prev.fecha));
                   setNumeroSel("");
+                  setEscNumeroSel("");
                   setConceptoTouched(false);
                   setSavedId("");
                   setSaveError("");
@@ -416,6 +484,7 @@ export default function ReciboNotaria17() {
               </select>
             </Field>
 
+            {/* ======= SELECT: Protocolito ======= */}
             {f.tipoTramite === "Protocolito" && (
               <Field label="Número de Protocolito" className="span-2">
                 <select
@@ -435,6 +504,30 @@ export default function ReciboNotaria17() {
                 </select>
                 {numsError && (
                   <small style={{ color: "#ff6b6b" }}>{numsError}</small>
+                )}
+              </Field>
+            )}
+
+            {/* ======= SELECT: Escritura (nuevo, igual que Protocolito) ======= */}
+            {f.tipoTramite === "Escritura" && (
+              <Field label="Número de Escritura" className="span-2">
+                <select
+                  value={escNumeroSel}
+                  onChange={(e) => handleSelectEscritura(e.target.value)}
+                >
+                  <option value="">
+                    {escLoading ? "Cargando..." : "Selecciona..."}
+                  </option>
+                  {escrituras.map((e1) => (
+                    <option key={e1.numeroControl} value={e1.numeroControl}>
+                      #{e1.numeroControl} — {e1.cliente ?? "Sin cliente"}
+                      {e1.abogado ? ` · ${e1.abogado}` : ""}
+                      {e1.tipoTramite ? ` · ${e1.tipoTramite}` : ""}
+                    </option>
+                  ))}
+                </select>
+                {escError && (
+                  <small style={{ color: "#ff6b6b" }}>{escError}</small>
                 )}
               </Field>
             )}
@@ -480,6 +573,7 @@ export default function ReciboNotaria17() {
               />
             </Field>
 
+            {/* Campo manual (se mantiene); con datalist y blur para cargar hist */}
             <Field label={controlLabel} error={errors.control}>
               <input
                 value={f.control}

@@ -19,11 +19,22 @@ const emptyRow = {
   tipoTramite: '',
   cliente: '',
   fecha: '',
-  abogado: ''
+  abogado: '',
+  // nuevos campos monetarios
+  totalImpuestos: null,
+  valorAvaluo: null,
+  totalGastosExtra: null,
+  totalHonorarios: null,
 };
 
 const same = (a, b) => String(a ?? '') === String(b ?? '');
 const fmtRange = (d, h) => (d && h ? `${d} a ${h}` : '—');
+
+// formato dinero simple
+const fmtMoney = (v) => {
+  const n = Number(v);
+  return Number.isFinite(n) ? n.toFixed(2) : '0.00';
+};
 
 function formatDateInput(d) {
   if (!d) return '';
@@ -199,8 +210,6 @@ const onlyDateDMY2 = (raw) => {
   return `${dd}/${mm}/${yy}`;
 };
 
-
-
 // ---- Horario (testamento) helpers ----
 const hhmmOrNull = (s) => (isHHMM(s) ? s : null);
 const getHoraInicio = (r) =>
@@ -223,7 +232,6 @@ const formatHorarioCell = (row) => {
   if (i) return i;   // legacy: solo inicio
   return '—';
 };
-
 
 // ----- componente -----
 export default function Escrituras({ onOpenRecibo }) {
@@ -254,13 +262,13 @@ export default function Escrituras({ onOpenRecibo }) {
   const [newFolioDesde, setNewFolioDesde] = useState('');
   const [newFolioHasta, setNewFolioHasta] = useState('');
 
-
   const [volumenEditable, setVolumenEditable] = useState(false);
   // TESTAMENTO (alta)
   const [newHoraInicio, setNewHoraInicio] = useState('');
   const [newHoraFin, setNewHoraFin] = useState('');
 
   // Picker clientes
+ 
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pickerQ, setPickerQ] = useState('');
   const [pickerLoading, setPickerLoading] = useState(false);
@@ -412,6 +420,67 @@ export default function Escrituras({ onOpenRecibo }) {
       setMsg({ type: 'error', text: e?.response?.data?.mensaje || 'No se pudo vincular.' });
     }
   };
+
+
+  // ---- Validaciones de "alta" (new) ----
+const isNonEmpty = (v) => String(v ?? '').trim().length > 0;
+
+function isNewCoreComplete(newRow) {
+  return (
+    isNonEmpty(newRow?.tipoTramite) &&
+    isNonEmpty(newRow?.cliente) &&
+    isNonEmpty(newRow?.fecha) &&
+    isNonEmpty(newRow?.abogado)
+  );
+}
+
+
+
+const isNum = (v) => v !== '' && v !== null && v !== undefined && !Number.isNaN(Number(v));
+const isNonNeg = (v) => isNum(v) && Number(v) >= 0;
+
+function isNewMoneyComplete(row) {
+  return (
+    isNonNeg(row?.totalImpuestos) &&
+    isNonNeg(row?.valorAvaluo) &&
+    isNonNeg(row?.totalGastosExtra) &&
+    isNonNeg(row?.totalHonorarios)
+  );
+}
+
+
+function isNewFoliosValid(volumen, desde, hasta) {
+  const hasAny = isNonEmpty(volumen) || isNonEmpty(desde) || isNonEmpty(hasta);
+  if (!hasAny) return true; // si no capturaron folios, no exigimos nada
+  const vOk   = isNonEmpty(volumen);
+  const dNum  = Number(desde), hNum = Number(hasta);
+  const nums  = Number.isFinite(dNum) && Number.isFinite(hNum) && dNum > 0 && hNum > 0;
+  const orden = dNum <= hNum;
+  return vOk && nums && orden;
+}
+
+function isNewTestamentoValid(tipo, hi, hf) {
+  if (!isTestamentoTipo(tipo)) return true;
+  if (!isHHMM(hi) || !isHHMM(hf)) return false;
+  return hi < hf;
+}
+
+function getNewFormErrors({ newRow, newVolumen, newFolioDesde, newFolioHasta, newHoraInicio, newHoraFin }) {
+  const errors = [];
+  if (!isNewCoreComplete(newRow)) errors.push('Tipo de trámite, Cliente, Fecha y Abogado son obligatorios.');
+  if (!isNewFoliosValid(newVolumen, newFolioDesde, newFolioHasta)) {
+    errors.push('Si registras folios: Volumen, “Desde” y “Hasta” son obligatorios y válidos (Desde ≤ Hasta).');
+  }
+  if (!isNewTestamentoValid(newRow?.tipoTramite, newHoraInicio, newHoraFin)) {
+    errors.push('Para testamento: Hora inicio/fin en formato HH:mm y fin mayor a inicio.');
+  }
+  if (!isNewMoneyComplete(newRow)) {
+  errors.push('Total Impuestos, Valor Avalúo, Gastos Extra y Honorarios son obligatorios y deben ser números ≥ 0.');
+}
+
+  return errors;
+}
+
 
   // --- Filas visibles por rol ---
   const visibleRows = React.useMemo(() => {
@@ -641,6 +710,11 @@ export default function Escrituras({ onOpenRecibo }) {
         // TESTAMENTO (compat legacy y nuevo)
         horaLecturaInicio: row.horaLecturaInicio || row.horaLectura || '',
         horaLecturaFin: row.horaLecturaFin || '',
+        // montos
+        totalImpuestos: row.totalImpuestos ?? row.total_impuestos ?? null,
+        valorAvaluo: row.valorAvaluo ?? row.valor_avaluo ?? null,
+        totalGastosExtra: row.totalGastosExtra ?? row.total_gastos_extra ?? null,
+        totalHonorarios: row.totalHonorarios ?? row.total_honorarios ?? null,
       }
     }));
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -680,6 +754,31 @@ export default function Escrituras({ onOpenRecibo }) {
   };
 
   const onSaveNew = async () => {
+     // Validación de campos obligatorios
+  const errs = getNewFormErrors({
+    newRow,
+    newVolumen,
+    newFolioDesde,
+    newFolioHasta,
+    newHoraInicio,
+    newHoraFin
+  });
+  if (errs.length) {
+    return setMsg({ type: 'warn', text: errs.join(' ') });
+  }
+
+  // Si es testamento, validamos disponibilidad (como ya lo hacías):
+  if (isTestamentoTipo(newRow.tipoTramite)) {
+    const disponible = await checkHorarioTestamento({
+      apiBase: API,
+      fecha: newRow.fecha,
+      inicio: newHoraInicio,
+      fin: newHoraFin
+    });
+    if (!disponible) {
+      return setMsg({ type: 'error', text: 'La hora de lectura seleccionada ya está ocupada para ese día.' });
+    }
+  }
     const cid = selectedCliente?._id || selectedCliente?.id;
     if (!cid) return setMsg({ type: 'warn', text: 'Selecciona un cliente primero' });
 
@@ -750,21 +849,27 @@ export default function Escrituras({ onOpenRecibo }) {
       }
 
       // PUT de aseguramiento por si el backend ignora esos campos en POST
-      if (createdId && (finalTipo || newVolumen || newFolioDesde || newFolioHasta || isTestamentoTipo(finalTipo))) {
+      if (createdId) {
         const payloadPut = {
-          numeroControl: Number(createdNumero || 0),
-          tipoTramite: finalTipo || undefined,
-          cliente: String(newRow.cliente || ''),
-          fecha: newRow.fecha,
-          abogado: String(newRow.abogado || ''),
-          ...(newVolumen ? { volumen: newVolumen } : {}),
-          ...(newFolioDesde ? { folioDesde: Number(newFolioDesde) } : {}),
-          ...(newFolioHasta ? { folioHasta: Number(newFolioHasta) } : {}),
-          ...(isTestamentoTipo(finalTipo) ? {
-            horaLecturaInicio: newHoraInicio,
-            horaLecturaFin: newHoraFin
-          } : {})
-        };
+            numeroControl: Number(createdNumero || 0),
+            tipoTramite: finalTipo || undefined,
+            cliente: String(newRow.cliente || ''),
+            fecha: newRow.fecha,
+            abogado: String(newRow.abogado || ''),
+            ...(newVolumen ? { volumen: newVolumen } : {}),
+            ...(newFolioDesde ? { folioDesde: Number(newFolioDesde) } : {}),
+            ...(newFolioHasta ? { folioHasta: Number(newFolioHasta) } : {}),
+            ...(isTestamentoTipo(finalTipo) ? {
+              horaLecturaInicio: newHoraInicio,
+              horaLecturaFin: newHoraFin
+            } : {}),
+
+            // ✅ obligatorios y numéricos
+            totalImpuestos: Number(newRow.totalImpuestos),
+            valorAvaluo: Number(newRow.valorAvaluo),
+            totalGastosExtra: Number(newRow.totalGastosExtra),
+            totalHonorarios: Number(newRow.totalHonorarios),
+          };
         const { data: updated } = await axios.put(`${API}/escrituras/${createdId}`, payloadPut);
 
         const volDespues = updated?.volumen ?? newVolumen ?? '';
@@ -849,12 +954,10 @@ export default function Escrituras({ onOpenRecibo }) {
     }
 
     try {
-
       const horasEdit =
-  isTestamentoTipo(draft.tipoTramite) && isHHMM(draft.horaLecturaInicio) && isHHMM(draft.horaLecturaFin)
-    ? { horaLecturaInicio: draft.horaLecturaInicio, horaLecturaFin: draft.horaLecturaFin }
-    : {}; // no toques horas si no son válidas
-
+        isTestamentoTipo(draft.tipoTramite) && isHHMM(draft.horaLecturaInicio) && isHHMM(draft.horaLecturaFin)
+          ? { horaLecturaInicio: draft.horaLecturaInicio, horaLecturaFin: draft.horaLecturaFin }
+          : {}; // no toques horas si no son válidas
 
       const payload = {
         numeroControl: Number(draft.numeroControl),
@@ -866,8 +969,12 @@ export default function Escrituras({ onOpenRecibo }) {
         ...(draft.folioDesde != null && draft.folioDesde !== '' ? { folioDesde: Number(draft.folioDesde) } : {}),
         ...(draft.folioHasta != null && draft.folioHasta !== '' ? { folioHasta: Number(draft.folioHasta) } : {}),
         ...(isAdmin ? { observaciones: (draft.observaciones || '').trim() } : {}),
-        ...horasEdit
-        
+        ...horasEdit,
+        // montos
+       totalImpuestos: Number(draft.totalImpuestos),
+  valorAvaluo: Number(draft.valorAvaluo),
+  totalGastosExtra: Number(draft.totalGastosExtra),
+  totalHonorarios: Number(draft.totalHonorarios),
       };
 
       const { data: updated } = await axios.put(`${API}/escrituras/${id}`, payload);
@@ -928,18 +1035,18 @@ export default function Escrituras({ onOpenRecibo }) {
       const vol = await fetchVolumenActual(API);
       if (vol != null) {
         setNewVolumen(String(vol));
-        setVolumenEditable(false); 
+        setVolumenEditable(false);
         const sugerido = await suggestNextFolioFor(API, vol);
         if (sugerido != null) {
           setNewFolioDesde(String(sugerido));
           setNewFolioHasta((prev) => prev || String(sugerido));
         }
       } else {
-        setVolumenEditable(true); 
+        setVolumenEditable(true);
         setMsg({ type: 'warn', text: 'No fue posible determinar el volumen actual.' });
       }
     } catch {
-      setVolumenEditable(true);  
+      setVolumenEditable(true);
       setMsg({ type: 'warn', text: 'No fue posible determinar el volumen actual.' });
     }
   };
@@ -1038,7 +1145,7 @@ export default function Escrituras({ onOpenRecibo }) {
   // Indicador Recibo
   const ReciboIndicator = ({ row }) => {
     const numero = row?.numeroControl;
-    const estatus = row?.estatus_recibo;
+       const estatus = row?.estatus_recibo;
     const [estado, setEstado] = React.useState('loading');
 
     React.useEffect(() => {
@@ -1110,75 +1217,111 @@ export default function Escrituras({ onOpenRecibo }) {
   };
 
   // columnas tabla principal
-  // columnas tabla principal
-const baseColumns = [
-  { field: 'numeroControl', headerName: 'Núm. de Escritura', width: 150, minWidth: 130, type: 'number' },
-  {
-    field: 'fecha',
-    headerName: 'Fecha',
-    width: 110, minWidth: 100,
-    renderCell: (params) => onlyDateDMY2(params?.row?.fecha),
-    sortComparator: (_v1, _v2, a, b) => {
-      const ta = Date.parse(a?.row?.fecha);
-      const tb = Date.parse(b?.row?.fecha);
-      return (Number.isNaN(ta) ? 0 : ta) - (Number.isNaN(tb) ? 0 : tb);
+  const baseColumns = [
+    { field: 'numeroControl', headerName: 'Núm. de Escritura', width: 150, minWidth: 130, type: 'number' },
+    {
+      field: 'fecha',
+      headerName: 'Fecha',
+      width: 110, minWidth: 100,
+      renderCell: (params) => onlyDateDMY2(params?.row?.fecha),
+      sortComparator: (_v1, _v2, a, b) => {
+        const ta = Date.parse(a?.row?.fecha);
+        const tb = Date.parse(b?.row?.fecha);
+        return (Number.isNaN(ta) ? 0 : ta) - (Number.isNaN(tb) ? 0 : tb);
+      },
     },
-  },
-  {
-    field: 'folio',
-    headerName: 'Número de Folio',
-    width: 160, minWidth: 150,
-    valueGetter: (p, row) => {
-      const r = p?.row ?? row ?? {};
-      const d = r.folioDesde ?? r.folio_inicio ?? r.folioStart;
-      const h = r.folioHasta ?? r.folio_fin ?? r.folioEnd;
-      if (Number.isFinite(Number(d)) && Number.isFinite(Number(h))) return `${d} a ${h}`;
-      return r.folio ?? r.numeroFolio ?? r.noFolio ?? r.folioEscritura ?? '—';
-    }
-  },
-  {
-    field: 'volumen',
-    headerName: 'Volumen',
-    width: 120, minWidth: 110,
-    valueGetter: (p, row) => {
-      const r = p?.row ?? row ?? {};
-      return r.volumen ?? r.libro ?? r.numLibro ?? r.numeroLibro ?? '—';
-    }
-  },
-  { field: 'cliente', headerName: 'Otorgante', flex: 1.2, minWidth: 220 },
-  {
-    field: 'tipoTramite',
-    headerName: 'Tipo de trámite',
-    flex: 1, minWidth: 160,
-    valueGetter: (p, row) => {
-      const r = p?.row ?? row ?? {};
-      return r.tipoTramite || r.motivo || r.servicio || r.accion || '—';
-    }
-  },
-  // >>> NUEVA COLUMNA: Horario (después de Tipo de trámite)
-  {
-    field: 'horario',
-    headerName: 'Horario',
-    width: 140,
-    minWidth: 120,
-    sortable: true,
-    valueGetter: (p, row) => formatHorarioCell(p?.row ?? row ?? {}),
-    sortComparator: (_v1, _v2, a, b) => {
-      const ha = formatHorarioCell(a?.row ?? {});
-      const hb = formatHorarioCell(b?.row ?? {});
-      return String(ha).localeCompare(String(hb));
+    {
+      field: 'folio',
+      headerName: 'Número de Folio',
+      width: 160, minWidth: 150,
+      valueGetter: (p, row) => {
+        const r = p?.row ?? row ?? {};
+        const d = r.folioDesde ?? r.folio_inicio ?? r.folioStart;
+        const h = r.folioHasta ?? r.folio_fin ?? r.folioEnd;
+        if (Number.isFinite(Number(d)) && Number.isFinite(Number(h))) return `${d} a ${h}`;
+        return r.folio ?? r.numeroFolio ?? r.noFolio ?? r.folioEscritura ?? '—';
+      }
     },
-  },
-  // Abogado con valueGetter flexible (arregla que saliera “—”)
-  {
-    field: 'abogado',
-    headerName: 'Abogado responsable',
-    width: 180,
-    minWidth: 160,
-   
-  },
-];
+    {
+      field: 'volumen',
+      headerName: 'Volumen',
+      width: 120, minWidth: 110,
+      valueGetter: (p, row) => {
+        const r = p?.row ?? row ?? {};
+        return r.volumen ?? r.libro ?? r.numLibro ?? r.numeroLibro ?? '—';
+      }
+    },
+    { field: 'cliente', headerName: 'Otorgante', flex: 1.2, minWidth: 220 },
+    {
+      field: 'tipoTramite',
+      headerName: 'Tipo de trámite',
+      flex: 1, minWidth: 160,
+      valueGetter: (p, row) => {
+        const r = p?.row ?? row ?? {};
+        return r.tipoTramite || r.motivo || r.servicio || r.accion || '—';
+      }
+    },
+    // >>> NUEVA COLUMNA: Horario (después de Tipo de trámite)
+    {
+      field: 'horario',
+      headerName: 'Horario',
+      width: 140,
+      minWidth: 120,
+      sortable: true,
+      valueGetter: (p, row) => formatHorarioCell(p?.row ?? row ?? {}),
+      sortComparator: (_v1, _v2, a, b) => {
+        const ha = formatHorarioCell(a?.row ?? {});
+        const hb = formatHorarioCell(b?.row ?? {});
+        return String(ha).localeCompare(String(hb));
+      },
+    },
+    // Abogado
+    {
+      field: 'abogado',
+      headerName: 'Abogado responsable',
+      width: 180,
+      minWidth: 160,
+    },
+  ];
 
+  // columnas de montos
+  const moneyCols = [
+    {
+      field: 'totalImpuestos',
+      headerName: 'Total Impuestos',
+      width: 140, minWidth: 130,
+      valueGetter: (p, row) => {
+        const r = p?.row ?? row ?? {};
+        return r.totalImpuestos ?? r.total_impuestos ?? null;
+      },
+      renderCell: (p) => `$ ${fmtMoney(p.value)}`,
+      sortComparator: (a, b) => Number(a ?? 0) - Number(b ?? 0),
+    },
+    {
+      field: 'valorAvaluo',
+      headerName: 'Valor Avalúo',
+      width: 140, minWidth: 130,
+      valueGetter: (p, row) => (p?.row ?? row ?? {}).valorAvaluo ?? (p?.row ?? row ?? {}).valor_avaluo ?? null,
+      renderCell: (p) => `$ ${fmtMoney(p.value)}`,
+      sortComparator: (a, b) => Number(a ?? 0) - Number(b ?? 0),
+    },
+    {
+      field: 'totalGastosExtra',
+      headerName: 'Gastos Extra',
+      width: 140, minWidth: 130,
+      valueGetter: (p, row) => (p?.row ?? row ?? {}).totalGastosExtra ?? (p?.row ?? row ?? {}).total_gastos_extra ?? null,
+      renderCell: (p) => `$ ${fmtMoney(p.value)}`,
+      sortComparator: (a, b) => Number(a ?? 0) - Number(b ?? 0),
+    },
+    {
+      field: 'totalHonorarios',
+      headerName: 'Honorarios',
+      width: 140, minWidth: 130,
+      valueGetter: (p, row) => (p?.row ?? row ?? {}).totalHonorarios ?? (p?.row ?? row ?? {}).total_honorarios ?? null,
+      renderCell: (p) => `$ ${fmtMoney(p.value)}`,
+      sortComparator: (a, b) => Number(a ?? 0) - Number(b ?? 0),
+    },
+  ];
 
   const plantillasColumn = {
     field: 'plantillas',
@@ -1309,6 +1452,7 @@ const baseColumns = [
   const showActionsColumn = isAdmin || canDeliver;
   const columns = [
     ...baseColumns,
+    ...moneyCols,
     plantillasColumn,
     ...(showActionsColumn ? [actionsColumn] : []),
     ...(isAdmin ? [observacionesColumn] : []),
@@ -1448,22 +1592,22 @@ const baseColumns = [
           <input type="text" value={newRow.fecha} readOnly disabled placeholder="Fecha" />
           <input type="text" value={newRow.abogado} readOnly disabled placeholder="Abogado responsable" />
 
-          {/* NUEVO: Volumen (auto) y Folios */}
+          {/* Volumen y Folios */}
           <div style={{ gridColumn: '1 / -1', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             <input
-                type="text"
-                placeholder="Volumen (libro)"
-                value={newVolumen}
-                onChange={(e) => setNewVolumen(e.target.value)}
-                readOnly={!volumenEditable}
-                disabled={!volumenEditable}
-                title={volumenEditable ? 'Escribe el volumen' : 'Seleccionado automáticamente por el sistema'}
-                style={{
-                  minWidth: 160,
-                  background: volumenEditable ? undefined : '#f3f4f6',
-                  cursor: volumenEditable ? 'text' : 'not-allowed'
-                }}
-              />
+              type="text"
+              placeholder="Volumen (libro)"
+              value={newVolumen}
+              onChange={(e) => setNewVolumen(e.target.value)}
+              readOnly={!volumenEditable}
+              disabled={!volumenEditable}
+              title={volumenEditable ? 'Escribe el volumen' : 'Seleccionado automáticamente por el sistema'}
+              style={{
+                minWidth: 160,
+                background: volumenEditable ? undefined : '#f3f4f6',
+                cursor: volumenEditable ? 'text' : 'not-allowed'
+              }}
+            />
             <input
               type="number"
               placeholder="Folio desde"
@@ -1482,7 +1626,7 @@ const baseColumns = [
               onChange={(e) => setNewFolioHasta(e.target.value)}
               style={{ minWidth: 140 }}
             />
-           <Button
+            <Button
               variant="outlined"
               onClick={async () => {
                 if (!newVolumen) return;
@@ -1492,13 +1636,13 @@ const baseColumns = [
                   if (!newFolioHasta) setNewFolioHasta(String(sugerido));
                 }
               }}
-              disabled={!newVolumen}   // <— importante
+              disabled={!newVolumen}
             >
               Siguiente disponible
             </Button>
           </div>
 
-          {/* NUEVO: Testamento - Horas */}
+          {/* Testamento - Horas */}
           {isTestamentoTipo(newRow.tipoTramite) && (
             <div style={{ gridColumn: '1 / -1', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
               <TextField
@@ -1521,10 +1665,54 @@ const baseColumns = [
             </div>
           )}
 
-          <div style={{ whiteSpace: 'nowrap' }}>
-            <button onClick={onSaveNew} disabled={!selectedCliente}>Guardar</button>
-            <button onClick={() => onCancel('new')} style={{ marginLeft: 8 }}>Cancelar</button>
+          {/* Montos del recibo (opcionales) */}
+          <div style={{ gridColumn: '1 / -1', display: 'grid', gridTemplateColumns: 'repeat(4, minmax(180px, 1fr))', gap: 8 }}>
+            <TextField
+              label="Total Impuestos (sistema)"
+              type="number"
+              size="small"
+              value={newRow.totalImpuestos ?? ''}
+              onChange={(e) => setNewRow(prev => ({ ...prev, totalImpuestos: e.target.value }))}
+            />
+            <TextField
+              label="Valor Avalúo (sistema)"
+              type="number"
+              size="small"
+              value={newRow.valorAvaluo ?? ''}
+              onChange={(e) => setNewRow(prev => ({ ...prev, valorAvaluo: e.target.value }))}
+            />
+            <TextField
+              label="Total Gastos Extra (sistema)"
+              type="number"
+              size="small"
+              value={newRow.totalGastosExtra ?? ''}
+              onChange={(e) => setNewRow(prev => ({ ...prev, totalGastosExtra: e.target.value }))}
+            />
+            <TextField
+              label="Total Honorarios (sistema)"
+              type="number"
+              size="small"
+              value={newRow.totalHonorarios ?? ''}
+              onChange={(e) => setNewRow(prev => ({ ...prev, totalHonorarios: e.target.value }))}
+            />
           </div>
+
+          <div style={{ whiteSpace: 'nowrap' }}>
+  <button
+    onClick={onSaveNew}
+    disabled={
+      !isNewCoreComplete(newRow) ||
+      !isNewFoliosValid(newVolumen, newFolioDesde, newFolioHasta) ||
+      !isNewTestamentoValid(newRow?.tipoTramite, newHoraInicio, newHoraFin) ||
+      !selectedCliente ||
+  !isNewMoneyComplete(newRow)
+    }
+  >
+    Guardar
+  </button>
+  <button onClick={() => onCancel('new')} style={{ marginLeft: 8 }}>Cancelar</button>
+</div>
+
         </div>
       )}
 
@@ -1583,7 +1771,7 @@ const baseColumns = [
             placeholder="Abogado responsable"
           />
 
-          {/* NUEVO: Volumen (auto, bloqueado) y Folios edición */}
+          {/* Volumen y Folios */}
           <div style={{ gridColumn: '1 / -1', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             <input
               type="text"
@@ -1623,7 +1811,7 @@ const baseColumns = [
             </Button>
           </div>
 
-          {/* NUEVO: Testamento - Horas */}
+          {/* Testamento - Horas */}
           {isTestamentoTipo(drafts[editingId]?.tipoTramite) && (
             <div style={{ gridColumn: '1 / -1', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
               <TextField
@@ -1645,6 +1833,38 @@ const baseColumns = [
               />
             </div>
           )}
+
+          {/* Montos del recibo (opcionales) */}
+          <div style={{ gridColumn: '1 / -1', display: 'grid', gridTemplateColumns: 'repeat(4, minmax(180px, 1fr))', gap: 8 }}>
+            <TextField
+              label="Total Impuestos (sistema)"
+              type="number"
+              size="small"
+              value={drafts[editingId]?.totalImpuestos ?? ''}
+              onChange={(e) => onChangeDraft(editingId, 'totalImpuestos', e.target.value)}
+            />
+            <TextField
+              label="Valor Avalúo (sistema)"
+              type="number"
+              size="small"
+              value={drafts[editingId]?.valorAvaluo ?? ''}
+              onChange={(e) => onChangeDraft(editingId, 'valorAvaluo', e.target.value)}
+            />
+            <TextField
+              label="Total Gastos Extra (sistema)"
+              type="number"
+              size="small"
+              value={drafts[editingId]?.totalGastosExtra ?? ''}
+              onChange={(e) => onChangeDraft(editingId, 'totalGastosExtra', e.target.value)}
+            />
+            <TextField
+              label="Total Honorarios (sistema)"
+              type="number"
+              size="small"
+              value={drafts[editingId]?.totalHonorarios ?? ''}
+              onChange={(e) => onChangeDraft(editingId, 'totalHonorarios', e.target.value)}
+            />
+          </div>
 
           {isAdmin && (
             <div style={{ gridColumn: '1 / -1' }}>
