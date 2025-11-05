@@ -366,21 +366,27 @@ router.post('/', async (req, res) => {
 
 
 /* ============================ PUT /:id ============================ */
+// routes/protocolitos.js  (en el handler PUT /:id)
 router.put('/:id', async (req, res) => {
   try {
-    const { numeroTramite, tipoTramite, cliente, fecha, abogado } = req.body;
+    const { numeroTramite, tipoTramite, cliente, fecha, abogado, observaciones } = req.body;
 
     const fechaOk = fecha ? (parseYMDLocal(fecha) || parseFechaLoose(fecha) || new Date(fecha)) : undefined;
 
+    const update = {
+      // estos suelen venir siempre desde tu UI de edición
+      ...(numeroTramite != null ? { numeroTramite } : {}),
+      ...(tipoTramite    ? { tipoTramite } : {}),
+      ...(cliente        ? { cliente } : {}),
+      ...(fechaOk        ? { fecha: fechaOk } : {}),
+      ...(abogado        ? { abogado } : {}),
+      // === NUEVO === (solo si viene string)
+      ...(typeof observaciones === 'string' ? { observaciones: observaciones.trim() } : {}),
+    };
+
     const updated = await Protocolito.findByIdAndUpdate(
       req.params.id,
-      {
-        numeroTramite,
-        tipoTramite,
-        cliente,
-        ...(fechaOk ? { fecha: fechaOk } : {}),
-        ...(abogado ? { abogado } : {}),
-      },
+      update,
       { new: true, runValidators: true }
     );
 
@@ -394,6 +400,7 @@ router.put('/:id', async (req, res) => {
     res.status(500).json({ mensaje: 'Error al actualizar', error: err.message });
   }
 });
+
 
 /* ============================ DELETE /:id ============================ */
 router.delete('/:id', async (req, res) => {

@@ -971,10 +971,10 @@ function getNewFormErrors({ newRow, newVolumen, newFolioDesde, newFolioHasta, ne
         ...(isAdmin ? { observaciones: (draft.observaciones || '').trim() } : {}),
         ...horasEdit,
         // montos
-       totalImpuestos: Number(draft.totalImpuestos),
-  valorAvaluo: Number(draft.valorAvaluo),
-  totalGastosExtra: Number(draft.totalGastosExtra),
-  totalHonorarios: Number(draft.totalHonorarios),
+        totalImpuestos: Number(draft.totalImpuestos),
+        valorAvaluo: Number(draft.valorAvaluo),
+        totalGastosExtra: Number(draft.totalGastosExtra),
+        totalHonorarios: Number(draft.totalHonorarios),
       };
 
       const { data: updated } = await axios.put(`${API}/escrituras/${id}`, payload);

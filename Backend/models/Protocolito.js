@@ -26,6 +26,7 @@ const protocolitoSchema = new mongoose.Schema({
     required: true,
     trim: true
   },
+  observaciones: { type: String, trim: true, default: '' },
   estatus_entrega: { type: String, default: 'Pendiente' },
   fecha_entrega: { type: Date },
   notas: { type: String, trim: true },
