@@ -12,20 +12,76 @@ function money(n) {
   })}`;
 }
 
-function formatFechaES(d) {
-  if (!d) return '';
+// Zona horaria por defecto para los PDF
+const DEFAULT_TZ = process.env.TZ_PDF || 'America/Ciudad_Juarez';
+
+/** Convierte lo que venga (Date | string) a Date local sin desfasar el día.
+ *  Casos resueltos:
+ *  - 'YYYY-MM-DD'  → new Date(y, m-1, d)  (medianoche LOCAL)
+ *  - ISO con hora:
+ *      * Si es exactamente medianoche UTC (hh:mm:ss.ms = 00:00:00.000Z),
+ *        se interpreta como fecha-calendario y se reconstruye en LOCAL:
+ *        new Date(UTCy, UTCm, UTCd)  (medianoche LOCAL del mismo día calendario)
+ *      * En cualquier otro caso, se usa tal cual new Date(...)
+ */
+function toLocalDate(d) {
+  if (!d) return null;
+
+  if (typeof d === 'string') {
+    const s = d.trim();
+
+    // Caso 1: sólo fecha, la tratamos como fecha local pura
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+      const [y, m, dd] = s.split('-').map(Number);
+      return new Date(y, m - 1, dd); // medianoche LOCAL
+    }
+
+    // Caso 2: ISO con hora
+    const iso = new Date(s);
+    if (!isNaN(iso)) {
+      // Si es exactamente medianoche UTC, lo tratamos como "fecha pura"
+      if (
+        iso.getUTCHours() === 0 &&
+        iso.getUTCMinutes() === 0 &&
+        iso.getUTCSeconds() === 0 &&
+        iso.getUTCMilliseconds() === 0
+      ) {
+        // Reconstruye como medianoche LOCAL del mismo día calendario (usando UTC y-m-d)
+        return new Date(iso.getUTCFullYear(), iso.getUTCMonth(), iso.getUTCDate());
+      }
+      return iso;
+    }
+    return null;
+  }
+
+  // Si ya es Date
   const dt = new Date(d);
-  if (isNaN(dt)) return '';
-  // Ajusta la zona horaria si te conviene
-  return dt.toLocaleDateString('es-MX', {
-    weekday: 'long',   // lunes, martes…
-    year: 'numeric',   // 2025
-    month: 'long',     // septiembre
-    day: '2-digit',    // 28
-    timeZone: 'America/Mexico_City',
-  });
+  if (isNaN(dt)) return null;
+
+  // Mismo tratamiento: si viene en medianoche UTC exacta, asume "fecha pura"
+  if (
+    dt.getUTCHours() === 0 &&
+    dt.getUTCMinutes() === 0 &&
+    dt.getUTCSeconds() === 0 &&
+    dt.getUTCMilliseconds() === 0
+  ) {
+    return new Date(dt.getUTCFullYear(), dt.getUTCMonth(), dt.getUTCDate());
+  }
+
+  return dt;
 }
 
+function formatFechaES(d, tz = DEFAULT_TZ) {
+  const dt = toLocalDate(d);
+  if (!dt) return '';
+  return dt.toLocaleDateString('es-MX', {
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: '2-digit',
+    timeZone: tz,
+  });
+}
 
 function shortId(id) {
   if (!id) return '';
@@ -172,7 +228,6 @@ function drawHeaderBar(
   return y + barH + 20;
 }
 
-
 function drawRowLine(doc, x1, x2, y) {
   doc
     .lineWidth(0.5)
@@ -199,11 +254,9 @@ async function drawBloque(doc, data, etiqueta, assets) {
   let y = doc.y;
 
   const folioText = data.folio || shortId(data._id);
-  // HEADER con logo en la barra
 
   // Obtener nombre del notario: prioriza data.notarioNombre, si no usa env
   const notarioNombre = data?.notarioNombre || process.env.NOTARIO_NOMBRE || 'Lic. Carlos Javier Espinoza Leyva';
-
 
   y = drawHeaderBar(
     doc,
@@ -235,7 +288,6 @@ async function drawBloque(doc, data, etiqueta, assets) {
   let yy = y;
 
   yy = drawLabelValue(doc, 'Fecha', formatFechaES(data.fecha), x1, yy, 110, wContent - 110);
-
   drawRowLine(doc, x1, x2, yy - 2);
 
   yy = drawLabelValue(doc, 'Tipo de trámite', data.tipoTramite || '—', x1, yy, 120, wContent - 120);
@@ -265,7 +317,7 @@ async function drawBloque(doc, data, etiqueta, assets) {
   yy = drawLabelValue(doc, 'Total del Trámite', money(data.totalTramite), x1, yy, 120, 140);
   drawRowLine(doc, x1, x2, yy - 2);
 
-  // 👇 NUEVO: abono visible cuando > 0
+  // Abono visible cuando > 0
   if (Number(data.abono || 0) > 0) {
     yy = drawLabelValue(doc, 'Abono (este recibo)', money(data.abono), x1, yy, 120, 140);
     drawRowLine(doc, x1, x2, yy - 2);
@@ -281,7 +333,7 @@ async function drawBloque(doc, data, etiqueta, assets) {
   drawRowLine(doc, x1, x2, yy - 2);
 
   // Firmas
-  yy += 22; // << un poco más de espacio antes de firmas
+  yy += 22;
   const lineLen = 170;
   const gap = 60;
   const signX1 = x1;
@@ -307,44 +359,39 @@ async function drawBloque(doc, data, etiqueta, assets) {
     .text('Recibí conforme', signX1, yy, { width: lineLen, align: 'center' })
     .text('Notaría 17', signX2, yy, { width: lineLen, align: 'center' });
 
-
-    // --- NUEVO: nota al pie del recibo ---
-   const notaPie = 'ESTE DOCUMENTO NO TIENE EFECTOS FISCALES Y AMPARA EL IMPORTE QUE ' +
+  // Nota al pie
+  const notaPie = 'ESTE DOCUMENTO NO TIENE EFECTOS FISCALES Y AMPARA EL IMPORTE QUE ' +
                   'HABRA DE PAGARSE A LAS DIVERSAS DEPENDENCIAS QUIENES EXPEDIRAN LOS ' +
                   'COMPROBANTES FISCALES A NOMBRE DEL INTERESADO';
 
-
-                   // Un poco de espacio y nota en letra pequeña
   yy += 16;
   doc
     .font('Helvetica-Oblique')
     .fontSize(8)
     .fillColor('#666')
     .text(notaPie, x1, yy, { width: wContent, align: 'justify' });
-  // -------------------------------------
 
-  // más espacio de cierre del bloque
-  doc.y = Math.max(yy + 28, y + 250); // << antes 150
+  // cierre del bloque
+  doc.y = Math.max(yy + 28, y + 250);
 }
 
 function drawSeparator(doc) {
   const left = doc.page.margins.left;
   const right = doc.page.width - doc.page.margins.right;
-  const y = doc.y + 16; // << más espacio antes de la línea
+  const y = doc.y + 16;
   doc
     .lineWidth(0.8)
     .strokeColor('#e5e5e5')
     .moveTo(left, y)
     .lineTo(right, y)
     .stroke();
-  doc.y = y + 24; // << más espacio después de la línea
+  doc.y = y + 24;
 }
 
 async function buildReciboPDF(res, data) {
   const doc = new PDFDocument({
     size: 'LETTER',
-    // márgenes más amplios en toda la página
-    margins: { top: 64, bottom: 64, left: 64, right: 64 }, // << antes 36
+    margins: { top: 64, bottom: 64, left: 64, right: 64 },
   });
 
   res.setHeader('Content-Type', 'application/pdf');
@@ -360,7 +407,7 @@ async function buildReciboPDF(res, data) {
   // ORIGINAL
   await drawBloque(doc, data, 'ORIGINAL', assets);
 
-  // separador con amplio margen
+  // separador
   drawSeparator(doc);
 
   // COPIA
