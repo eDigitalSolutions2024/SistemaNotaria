@@ -162,7 +162,9 @@ const TablaClientes = forwardRef((props, ref) => {
                 rows="1"
                 placeholder={meta.placeholder}
                 value={motivos[row.id] || ''}
-                onChange={(e) => setMotivos((prev) => ({ ...prev, [row.id]: e.target.value }))}
+                onChange={(e) => setMotivos((prev) => ({ ...prev, [row.id]: e.target.value.toUpperCase(),
+
+                 }))}
               />
             ) : (
               <input
@@ -170,7 +172,7 @@ const TablaClientes = forwardRef((props, ref) => {
                 type={meta.type}
                 placeholder={meta.placeholder}
                 value={motivos[row.id] || ''}
-                onChange={(e) => setMotivos((prev) => ({ ...prev, [row.id]: e.target.value }))}
+                onChange={(e) => setMotivos((prev) => ({ ...prev, [row.id]: e.target.value.toUpperCase() }))}
               />
             )}
           </div>
@@ -217,7 +219,7 @@ const TablaClientes = forwardRef((props, ref) => {
     },
     {
       name: 'Motivo',
-      selector: (row) => row.motivo || '---',
+      selector: (row) => (row.motivo ? row.motivo.toUpperCase() : '---'),
       wrap: true,
       width: '170px',
       minWidth: '200px',
@@ -285,7 +287,7 @@ const TablaClientes = forwardRef((props, ref) => {
         Fecha: fecha ? fecha.toLocaleString() : '',
         Sala: c.sala?.nombre || c.sala || '',
         Abogado: c.abogado || 'Ninguno',
-        Motivo: c.motivo || '',
+        Motivo: (c.motivo || '').toUpperCase(),
       };
     });
 
