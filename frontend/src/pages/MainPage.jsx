@@ -7,6 +7,8 @@ import Protocolito from '../components/Protocolito';
 import Recibo from '../components/ReciboNotaria17';
 import ConsultarRecibos from '../components/ConsultarRecibos'; // ← NUEVO
 import Escrituras from '../components/Escrituras';
+import RegistrarGenerales from '../components/RegistrarGenerales';
+import ConsultarGenerales from '../components/ConsultarGenerales';
 
 import { useAuth } from '../auth/AuthContext';
 import Login from '../components/Login';
@@ -39,6 +41,8 @@ function AuthedApp() {
     switch (seccion) {
       case 'registrar-cliente': return <RegistrarCliente />;
       case 'registrar-abogado': return <FormAbogado />;
+      case 'registrar-generales': return <RegistrarGenerales />;
+      case 'consultar-generales': return <ConsultarGenerales />;
       case 'protocolito':
         return (
           <Protocolito
@@ -143,6 +147,13 @@ function AuthedApp() {
                 <li style={{ ...itemStyle, padding: '8px 6px' }} onClick={() => go('registrar-cliente')}>
                   <span style={iconStyle}>👤</span><span>Registrar Cliente</span>
                 </li>
+                <li style={{ ...itemStyle, padding: '8px 6px' }} onClick={() => go('registrar-generales')}>
+                  <span style={iconStyle}>📚</span><span>Registrar Generales</span>
+                </li>
+                  <li style={{ ...itemStyle, padding: '8px 6px' }} onClick={() => go('consultar-generales')}>
+                    <span style={iconStyle}>🔎</span><span>Consultar Generales</span>
+                  </li>
+
                 {user?.role === 'admin' && (
                   <li style={{ ...itemStyle, padding: '8px 6px' }} onClick={() => go('registrar-abogado')}>
                     <span style={iconStyle}>👨‍⚖️</span><span>Registrar Abogado</span>

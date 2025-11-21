@@ -1,0 +1,145 @@
+.consultar-generales-container {
+  width: 100%;
+  max-width: 1400px;
+  margin: 0 auto;
+  min-height: 100vh;
+  padding: 30px 40px;
+  background: #f8f9fa;
+  box-sizing: border-box;
+}
+
+.consultar-generales-container h2 {
+  color: #1a202c;
+  font-size: 28px;
+  font-weight: 600;
+  margin-bottom: 24px;
+  text-align: center;
+  border-bottom: 3px solid #3b82f6;
+  padding-bottom: 12px;
+}
+
+/* Tarjetas */
+.cg-card {
+  background: #ffffff;
+  border-radius: 10px;
+  padding: 20px 22px;
+  margin-bottom: 18px;
+  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.08);
+}
+
+/* Grupo formulario */
+.form-group label {
+  display: block;
+  font-weight: 600;
+  color: #374151;
+  margin-bottom: 6px;
+  font-size: 14px;
+}
+
+.help-text {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  color: #6b7280;
+  font-style: italic;
+}
+
+/* Resumen de cliente */
+.cg-resumen h3 {
+  margin-bottom: 10px;
+  font-size: 18px;
+}
+
+.cg-resumen-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px 20px;
+  margin-top: 8px;
+}
+
+.cg-resumen-grid > div {
+  font-size: 14px;
+}
+
+.cg-label {
+  font-weight: 600;
+  margin-right: 4px;
+}
+
+/* Tabla de personas */
+.cg-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.cg-card-header h3 {
+  font-size: 18px;
+}
+
+.cg-btn-pdf {
+  padding: 8px 14px;
+  border: none;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 600;
+  background: #2563eb;
+  color: #ffffff;
+  cursor: pointer;
+  transition: background 0.2s ease, transform 0.1s ease;
+}
+
+.cg-btn-pdf:hover:enabled {
+  background: #1d4ed8;
+  transform: translateY(-1px);
+}
+
+.cg-btn-pdf:disabled {
+  background: #9ca3af;
+  cursor: not-allowed;
+  transform: none;
+}
+
+
+/* Tabla */
+.cg-table-wrapper {
+  overflow-x: auto;
+}
+
+.cg-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.cg-table th,
+.cg-table td {
+  border: 1px solid #e5e7eb;
+  padding: 8px 10px;
+  text-align: left;
+}
+
+.cg-table th {
+  background: #f3f4f6;
+  font-weight: 600;
+  color: #374151;
+}
+
+.mensaje-error {
+  color: #b91c1c;
+  font-weight: 500;
+  margin-top: 6px;
+}
+
+/* Responsivo */
+@media (max-width: 900px) {
+  .consultar-generales-container {
+    padding: 16px;
+  }
+
+  .cg-resumen-grid {
+    grid-template-columns: 1fr;
+  }
+}

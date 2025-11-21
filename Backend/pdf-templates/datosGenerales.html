@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <title>Datos generales del cliente</title>
+
+  <style>
+    /* ====== RESET BÁSICO ====== */
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    html, body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      font-size: 11pt;
+      color: #111827;
+      background: #ffffff;
+    }
+
+    body {
+      padding: 10mm 8mm;
+    }
+
+    h1, h2, h3, h4 {
+      font-weight: 600;
+      color: #111827;
+    }
+
+    p, td, th {
+      line-height: 1.4;
+    }
+
+    /* ====== ENCABEZADO ====== */
+
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 8mm;
+      border-bottom: 1px solid #d1d5db;
+      padding-bottom: 4mm;
+    }
+
+    .header-left {
+      max-width: 60%;
+    }
+
+    /* Logo de la notaría */
+    .notaria-logo {
+        height: 40px;
+        object-fit: contain;
+        margin-bottom: 4mm;
+     }
+
+    .notaria-nombre {
+      font-size: 18pt;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 2mm;
+    }
+
+    .notaria-direccion,
+    .notaria-telefono {
+      font-size: 9pt;
+      color: #4b5563;
+    }
+
+    .header-right {
+      text-align: right;
+      max-width: 40%;
+    }
+
+    .documento-titulo {
+      font-size: 13pt;
+      text-transform: uppercase;
+      margin-bottom: 2mm;
+    }
+
+    .documento-fecha {
+      font-size: 9pt;
+      color: #4b5563;
+    }
+
+    /* ====== SECCIONES ====== */
+
+    .section {
+      margin-top: 8mm;
+    }
+
+    .section-title {
+      font-size: 11.5pt;
+      margin-bottom: 3mm;
+      border-bottom: 1px solid #e5e7eb;
+      padding-bottom: 1.5mm;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+    }
+
+    .fecha-registro {
+      font-size: 9.5pt;
+      color: #4b5563;
+      margin-bottom: 3mm;
+    }
+
+    /* ====== TABLAS DE INFORMACIÓN ====== */
+
+    .info-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 4mm;
+      table-layout: fixed;
+    }
+
+    .info-table th,
+    .info-table td {
+      border: 1px solid #d1d5db;
+      padding: 3px 5px;
+      vertical-align: top;
+      font-size: 9.5pt;
+    }
+
+    .info-table th {
+      width: 30%;
+      background: #f3f4f6;
+      font-weight: 600;
+      text-align: left;
+      color: #374151;
+    }
+
+    .info-table td {
+      width: 70%;
+    }
+
+    .info-table-cliente {
+      margin-top: 2mm;
+    }
+
+    /* ====== PERSONAS ====== */
+
+    .persona-block {
+      margin-top: 6mm;
+      border: 1px solid #d1d5db;
+      border-radius: 3px;
+      padding: 4mm;
+      page-break-inside: avoid;
+    }
+
+    .persona-titulo {
+      font-size: 11pt;
+      margin-bottom: 3mm;
+      color: #111827;
+    }
+
+    .persona-table th,
+    .persona-table td {
+      font-size: 9.5pt;
+    }
+
+    /* ====== FIRMAS / PIE ====== */
+
+    .footer {
+      margin-top: 14mm;
+      border-top: 1px solid #e5e7eb;
+      padding-top: 5mm;
+      font-size: 9pt;
+      color: #4b5563;
+      page-break-inside: avoid;
+    }
+
+    .footer-firmas {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 6mm;
+      gap: 10mm;
+    }
+
+    .firma-bloque {
+      width: 50%;
+      text-align: center;
+    }
+
+    .firma-bloque p:first-child {
+      margin-bottom: 2mm;
+    }
+
+    .footer-nota {
+      text-align: justify;
+    }
+
+    /* ====== MANEJO DE SALTOS DE PÁGINA ====== */
+
+    @page {
+      margin: 15mm 12mm 18mm 12mm;
+    }
+
+    .section-generales {
+      page-break-before: auto;
+    }
+
+    .persona-block + .persona-block {
+      margin-top: 5mm;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ENCABEZADO -->
+  <header class="header">
+    <div class="header-left">
+      <img src="{{LOGO_SRC}}" alt="Logo Notaría 17" class="notaria-logo" />
+      <h1 class="notaria-nombre">{{notaria.nombre}}</h1>
+      <p class="notaria-direccion">{{notaria.direccion}}</p>
+      <p class="notaria-telefono">Tel: {{notaria.telefono}}</p>
+    </div>
+    <div class="header-right">
+      <h2 class="documento-titulo">DATOS GENERALES DEL CLIENTE</h2>
+      <p class="documento-fecha">
+        Fecha de generación: {{generadoEl}}
+      </p>
+    </div>
+  </header>
+
+  <!-- SECCIÓN: DATOS DEL CLIENTE -->
+  <section class="section section-cliente">
+    <h3 class="section-title">Datos del cliente</h3>
+
+    <table class="info-table info-table-cliente">
+      <tbody>
+        <tr>
+          <th>ID cliente</th>
+          <td>{{cliente.id}}</td>
+        </tr>
+        <tr>
+          <th>Nombre</th>
+          <td>{{cliente.nombre}}</td>
+        </tr>
+        <tr>
+          <th>Teléfono</th>
+          <td>{{cliente.numero_telefono}}</td>
+        </tr>
+        <tr>
+          <th>Estado</th>
+          <td>{{cliente.estado}}</td>
+        </tr>
+        <tr>
+          <th>Servicio</th>
+          <td>{{cliente.servicio}}</td>
+        </tr>
+        <tr>
+          <th>Tiene cita</th>
+          <td>{{cliente.tieneCitaTexto}}</td>
+        </tr>
+        <tr>
+          <th>Hora de llegada</th>
+          <td>{{cliente.hora_llegada}}</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- SECCIÓN: DATOS GENERALES / PERSONAS -->
+  <section class="section section-generales">
+    <h3 class="section-title">Datos generales registrados</h3>
+
+    <p class="fecha-registro">
+      Fecha de registro de datos generales: {{generales.fechaRegistro}}
+    </p>
+
+    <!-- Aquí se inyectan todos los bloques de personas -->
+    {{PERSONAS_BLOQUES}}
+
+  </section>
+</body>
+</html>
