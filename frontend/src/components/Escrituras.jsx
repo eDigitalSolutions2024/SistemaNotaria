@@ -36,14 +36,28 @@ const fmtMoney = (v) => {
   return Number.isFinite(n) ? n.toFixed(2) : '0.00';
 };
 
-function formatDateInput(d) {
-  if (!d) return '';
-  const date = new Date(d);
+function formatDateInput(raw) {
+  if (!raw) return '';
+
+  // Si viene como string con formato "YYYY-MM-DD" o "YYYY-MM-DDTHH:mm:ss",
+  // tomamos SOLO la parte de fecha sin crear un Date (evitamos el cambio por huso horario)
+  if (typeof raw === 'string') {
+    const m = raw.match(/^(\d{4}-\d{2}-\d{2})/);
+    if (m) {
+      return m[1]; // "YYYY-MM-DD"
+    }
+  }
+
+  // Para objetos Date (por ejemplo: new Date() para hoy) sí usamos la zona local del navegador
+  const date = raw instanceof Date ? raw : new Date(raw);
+  if (Number.isNaN(date.getTime())) return '';
+
   const yyyy = date.getFullYear();
   const mm = String(date.getMonth() + 1).padStart(2, '0');
   const dd = String(date.getDate()).padStart(2, '0');
   return `${yyyy}-${mm}-${dd}`;
 }
+
 const norm = (s) =>
   String(s || '')
     .normalize('NFD')
@@ -71,6 +85,26 @@ async function checkHorarioTestamento({ apiBase, fecha, inicio, fin, excludeId }
 
 const isTestamentoTipo = (tipo) => /testamento/i.test(String(tipo || ''));
 
+const TIPOS_MONTOS_KEYWORDS = [
+  'ESCRITURA',
+  'COMPRA VENTA',
+  'COMPRAVENTA',
+  'PROTOCOLIZACION',
+  'DONACION',
+];
+
+// 💰 Solo estos tipos de trámite llevan montos (impuestos, avalúo, etc.)
+const isTramiteConMontos = (tipo) => {
+  const t = norm(tipo);
+  if (!t) return false;
+
+  // Nunca aplicar montos a testamentos
+  if (isTestamentoTipo(tipo)) return false;
+
+  return TIPOS_MONTOS_KEYWORDS.some((k) => t.includes(norm(k)));
+};
+
+
 const timeOf = (r) => {
   const v = r?.hora_llegada ?? r?.horaLlegada ?? r?.createdAt ?? r?.fecha;
   const t = v ? new Date(v).getTime() : 0;
@@ -83,6 +117,8 @@ const tipoFromRow = (r) =>
 const incluye = (txt, needle) => norm(txt).includes(norm(needle));
 
 // ---------- Volumen y folios (helpers alineados a tus rutas) ----------
+// Límite máximo de folios por libro/volumen
+const MAX_FOLIO_POR_LIBRO = 300;
 
 // Incrementa etiquetas de volumen “Libro 3” -> “Libro 4” o “5” -> “6”
 function incVolumenTag(vol) {
@@ -190,25 +226,26 @@ const pickRowFromVG = (p, row) => (p && p.row) ? p.row : (row || p || {});
 // dd/mm/aa
 const onlyDateDMY2 = (raw) => {
   if (!raw) return '—';
-  const d = raw instanceof Date ? raw : new Date(raw);
-  if (Number.isNaN(d.getTime())) {
-    const m = String(raw).match(/\d{4}-\d{2}-\d{2}/);
+
+  // 1) Si es string con "YYYY-MM-DD" (con o sin hora), tomamos solo la parte de fecha
+  if (typeof raw === 'string') {
+    const m = raw.match(/^(\d{4}-\d{2}-\d{2})/);
     if (m) {
-      const [y, mo, da] = m[0].split('-');
-      return `${da}/${mo}/${String(y).slice(-2)}`;
+      const [y, mo, da] = m[1].split('-');
+      return `${da}/${mo}/${String(y).slice(-2)}`; // dd/mm/yy
     }
-    const i = String(raw).indexOf('T');
-    if (i > 0) {
-      const [y, mo, da] = String(raw).slice(0, i).split('-');
-      if (y && mo && da) return `${da}/${mo}/${String(y).slice(-2)}`;
-    }
-    return '—';
   }
+
+  // 2) Si es Date (por ejemplo algo que tú mismo creaste con new Date())
+  const d = raw instanceof Date ? raw : new Date(raw);
+  if (Number.isNaN(d.getTime())) return '—';
+
   const dd = String(d.getDate()).padStart(2, '0');
   const mm = String(d.getMonth() + 1).padStart(2, '0');
   const yy = String(d.getFullYear()).slice(-2);
   return `${dd}/${mm}/${yy}`;
 };
+
 
 // ---- Horario (testamento) helpers ----
 const hhmmOrNull = (s) => (isHHMM(s) ? s : null);
@@ -234,15 +271,46 @@ const formatHorarioCell = (row) => {
 };
 
 // ----- componente -----
+// ----- componente -----
 export default function Escrituras({ onOpenRecibo }) {
   const { user } = useAuth();
-  const isAdmin = user?.role === 'admin';
-  const canExport = ['ADMIN', 'PROTOCOLITO', 'RECEPCION', 'admin', 'protocolito', 'recepcion'].includes(user?.role);
-  const canDeliver = ['ADMIN', 'RECEPCION', 'admin', 'recepcion'].includes(user?.role);
-  const canSeeAll = ['ADMIN','RECEPCION','admin','recepcion'].includes(user?.role);
 
-  const currentUserName =
-    user?.nombre || user?.name || user?.fullName || user?.username || '';
+  // 🔹 Helpers de usuario
+  const getUserName = (u) =>
+    (u?.nombre || u?.name || u?.fullName || u?.username || '').trim();
+
+  const getUserRoles = (u) => {
+    const roles = [];
+    if (Array.isArray(u?.roles)) roles.push(...u.roles);
+    if (u?.role) roles.push(u.role);
+    if (u?.rol) roles.push(u.rol);
+    return roles.map((r) => String(r).toLocaleUpperCase('es-MX'));
+  };
+
+  const getUserId = (u) =>
+    u?.id ?? u?._id ?? u?.ID ?? u?.userId ?? u?.numeroEmpleado ?? null;
+
+  // 🔹 Datos del usuario actual
+  const currentUserId = getUserId(user);
+  const currentUserName = getUserName(user);
+  const roles = getUserRoles(user);
+
+  const isAdmin = roles.includes('ADMIN');
+  const isSpecialViewer = String(currentUserId) === '1008';
+
+  // 🔹 Permisos
+  const canExport =
+    isSpecialViewer ||
+    roles.some((r) => ['ADMIN', 'PROTOCOLITO', 'RECEPCION'].includes(r));
+
+  const canDeliver =
+    !isSpecialViewer &&
+    roles.some((r) => ['ADMIN', 'RECEPCION'].includes(r));
+
+  const canSeeAll =
+    isSpecialViewer ||
+    roles.some((r) => ['ADMIN', 'RECEPCION'].includes(r));
+
 
   const [rows, setRows] = useState([]);
   const [editingId, setEditingId] = useState(null);
@@ -440,6 +508,9 @@ const isNum = (v) => v !== '' && v !== null && v !== undefined && !Number.isNaN(
 const isNonNeg = (v) => isNum(v) && Number(v) >= 0;
 
 function isNewMoneyComplete(row) {
+  // Si el trámite NO es de los que llevan montos, consideramos esto como "ok"
+  if (!isTramiteConMontos(row?.tipoTramite)) return true;
+
   return (
     isNonNeg(row?.totalImpuestos) &&
     isNonNeg(row?.valorAvaluo) &&
@@ -449,15 +520,21 @@ function isNewMoneyComplete(row) {
 }
 
 
+
 function isNewFoliosValid(volumen, desde, hasta) {
   const hasAny = isNonEmpty(volumen) || isNonEmpty(desde) || isNonEmpty(hasta);
   if (!hasAny) return true; // si no capturaron folios, no exigimos nada
+
   const vOk   = isNonEmpty(volumen);
   const dNum  = Number(desde), hNum = Number(hasta);
   const nums  = Number.isFinite(dNum) && Number.isFinite(hNum) && dNum > 0 && hNum > 0;
   const orden = dNum <= hNum;
-  return vOk && nums && orden;
+  const dentroDeLibro = hNum <= MAX_FOLIO_POR_LIBRO;  // 👈 aquí se aplica el límite
+
+  return vOk && nums && orden && dentroDeLibro;
 }
+
+
 
 function isNewTestamentoValid(tipo, hi, hf) {
   if (!isTestamentoTipo(tipo)) return true;
@@ -469,14 +546,18 @@ function getNewFormErrors({ newRow, newVolumen, newFolioDesde, newFolioHasta, ne
   const errors = [];
   if (!isNewCoreComplete(newRow)) errors.push('Tipo de trámite, Cliente, Fecha y Abogado son obligatorios.');
   if (!isNewFoliosValid(newVolumen, newFolioDesde, newFolioHasta)) {
-    errors.push('Si registras folios: Volumen, “Desde” y “Hasta” son obligatorios y válidos (Desde ≤ Hasta).');
-  }
+  errors.push(
+    `Si registras folios: Volumen, “Desde” y “Hasta” son obligatorios, válidos (Desde ≤ Hasta) y el folio máximo permitido es ${MAX_FOLIO_POR_LIBRO} por volumen.`
+  );
+}
+
   if (!isNewTestamentoValid(newRow?.tipoTramite, newHoraInicio, newHoraFin)) {
     errors.push('Para testamento: Hora inicio/fin en formato HH:mm y fin mayor a inicio.');
   }
-  if (!isNewMoneyComplete(newRow)) {
-  errors.push('Total Impuestos, Valor Avalúo, Gastos Extra y Honorarios son obligatorios y deben ser números ≥ 0.');
-}
+  if (isTramiteConMontos(newRow?.tipoTramite) && !isNewMoneyComplete(newRow)) {
+    errors.push('Total Impuestos, Valor Avalúo, Gastos Extra y Honorarios son obligatorios y deben ser números ≥ 0 para este tipo de trámite.');
+  }
+
 
   return errors;
 }
@@ -490,17 +571,7 @@ function getNewFormErrors({ newRow, newVolumen, newFolioDesde, newFolioHasta, ne
     return rows.filter(r => norm(r?.abogado).includes(me));
   }, [rows, canSeeAll, currentUserName]);
 
-  // Helpers usuarios
-  const getUserName = (u) =>
-    (u?.nombre || u?.name || u?.fullName || u?.username || '').trim();
-
-  const getUserRoles = (u) => {
-    const roles = [];
-    if (Array.isArray(u?.roles)) roles.push(...u.roles);
-    if (u?.role) roles.push(u.role);
-    if (u?.rol) roles.push(u.rol);
-    return roles.map((r) => String(r).toLocaleUpperCase('es-MX'));
-  };
+  
 
   // Cargar catálogo de abogados (para export)
   const loadAbogadosFromRegistry = async () => {
@@ -783,18 +854,25 @@ function getNewFormErrors({ newRow, newVolumen, newFolioDesde, newFolioHasta, ne
     if (!cid) return setMsg({ type: 'warn', text: 'Selecciona un cliente primero' });
 
     // Validación local de folio si se indicó alguno
-    if (newVolumen || newFolioDesde || newFolioHasta) {
-      const d = Number(newFolioDesde), h = Number(newFolioHasta);
-      if (!newVolumen && newVolumen !== 0) {
-        return setMsg({ type: 'warn', text: 'Volumen es obligatorio si registras folios' });
-      }
-      if (!Number.isFinite(d) || !Number.isFinite(h) || d <= 0 || h <= 0) {
-        return setMsg({ type: 'warn', text: 'Folio inválido: usa números positivos' });
-      }
-      if (d > h) {
-        return setMsg({ type: 'warn', text: 'Folio inválido: "desde" no puede ser mayor que "hasta"' });
-      }
-    }
+if (newVolumen || newFolioDesde || newFolioHasta) {
+  const d = Number(newFolioDesde), h = Number(newFolioHasta);
+  if (!newVolumen && newVolumen !== 0) {
+    return setMsg({ type: 'warn', text: 'Volumen es obligatorio si registras folios' });
+  }
+  if (!Number.isFinite(d) || !Number.isFinite(h) || d <= 0 || h <= 0) {
+    return setMsg({ type: 'warn', text: 'Folio inválido: usa números positivos' });
+  }
+  if (d > h) {
+    return setMsg({ type: 'warn', text: 'Folio inválido: "desde" no puede ser mayor que "hasta"' });
+  }
+  if (h > MAX_FOLIO_POR_LIBRO) {
+    return setMsg({
+      type: 'warn',
+      text: `El folio "hasta" (${h}) supera el máximo permitido (${MAX_FOLIO_POR_LIBRO}) por volumen.`
+    });
+  }
+}
+
 
     // TESTAMENTO: validación de horas si aplica
     if (isTestamentoTipo(newRow.tipoTramite)) {
@@ -847,29 +925,32 @@ function getNewFormErrors({ newRow, newVolumen, newFolioDesde, newFolioHasta, ne
           }
         } catch {}
       }
+      
+const aplicaMontos = isTramiteConMontos(finalTipo);
 
       // PUT de aseguramiento por si el backend ignora esos campos en POST
       if (createdId) {
         const payloadPut = {
-            numeroControl: Number(createdNumero || 0),
-            tipoTramite: finalTipo || undefined,
-            cliente: String(newRow.cliente || ''),
-            fecha: newRow.fecha,
-            abogado: String(newRow.abogado || ''),
-            ...(newVolumen ? { volumen: newVolumen } : {}),
-            ...(newFolioDesde ? { folioDesde: Number(newFolioDesde) } : {}),
-            ...(newFolioHasta ? { folioHasta: Number(newFolioHasta) } : {}),
-            ...(isTestamentoTipo(finalTipo) ? {
-              horaLecturaInicio: newHoraInicio,
-              horaLecturaFin: newHoraFin
-            } : {}),
+  numeroControl: Number(createdNumero || 0),
+  tipoTramite: finalTipo || undefined,
+  cliente: String(newRow.cliente || ''),
+  fecha: newRow.fecha,
+  abogado: String(newRow.abogado || ''),
+  ...(newVolumen ? { volumen: newVolumen } : {}),
+  ...(newFolioDesde ? { folioDesde: Number(newFolioDesde) } : {}),
+  ...(newFolioHasta ? { folioHasta: Number(newFolioHasta) } : {}),
+  ...(isTestamentoTipo(finalTipo) ? {
+    horaLecturaInicio: newHoraInicio,
+    horaLecturaFin: newHoraFin
+  } : {}),
+  ...(aplicaMontos ? {
+    totalImpuestos: Number(newRow.totalImpuestos),
+    valorAvaluo: Number(newRow.valorAvaluo),
+    totalGastosExtra: Number(newRow.totalGastosExtra),
+    totalHonorarios: Number(newRow.totalHonorarios),
+  } : {}),
+};
 
-            // ✅ obligatorios y numéricos
-            totalImpuestos: Number(newRow.totalImpuestos),
-            valorAvaluo: Number(newRow.valorAvaluo),
-            totalGastosExtra: Number(newRow.totalGastosExtra),
-            totalHonorarios: Number(newRow.totalHonorarios),
-          };
         const { data: updated } = await axios.put(`${API}/escrituras/${createdId}`, payloadPut);
 
         const volDespues = updated?.volumen ?? newVolumen ?? '';
@@ -903,17 +984,29 @@ function getNewFormErrors({ newRow, newVolumen, newFolioDesde, newFolioHasta, ne
   const onSaveEdit = async (id) => {
     const draft = drafts[id];
 
-    // Validación local de folio si hay cambios en esos campos
-    if (draft?.volumen || draft?.folioDesde || draft?.folioHasta) {
-      const d = Number(draft.folioDesde), h = Number(draft.folioHasta);
-      if (!draft.volumen && draft.volumen !== 0) {
-        return setMsg({ type: 'warn', text: 'Volumen es obligatorio si registras folios' });
-      }
-      if (!Number.isFinite(d) || !Number.isFinite(h) || d <= 0 || h <= 0) {
-        return setMsg({ type: 'warn', text: 'Folio inválido: usa números positivos' });
-      }
-      if (d > h) return setMsg({ type: 'warn', text: 'Folio inválido: "desde" no puede ser mayor que "hasta"' });
-    }
+    const aplicaMontos = isTramiteConMontos(draft?.tipoTramite);
+
+
+   // Validación local de folio si hay cambios en esos campos
+if (draft?.volumen || draft?.folioDesde || draft?.folioHasta) {
+  const d = Number(draft.folioDesde), h = Number(draft.folioHasta);
+  if (!draft.volumen && draft.volumen !== 0) {
+    return setMsg({ type: 'warn', text: 'Volumen es obligatorio si registras folios' });
+  }
+  if (!Number.isFinite(d) || !Number.isFinite(h) || d <= 0 || h <= 0) {
+    return setMsg({ type: 'warn', text: 'Folio inválido: usa números positivos' });
+  }
+  if (d > h) {
+    return setMsg({ type: 'warn', text: 'Folio inválido: "desde" no puede ser mayor que "hasta"' });
+  }
+  if (h > MAX_FOLIO_POR_LIBRO) {
+    return setMsg({
+      type: 'warn',
+      text: `El folio "hasta" (${h}) supera el máximo permitido (${MAX_FOLIO_POR_LIBRO}) por volumen.`
+    });
+  }
+}
+
 
     // Validación: no reutilizar folios ya ocupados (local)
     if ((draft?.folioDesde || draft?.folioHasta)) {
@@ -960,22 +1053,23 @@ function getNewFormErrors({ newRow, newVolumen, newFolioDesde, newFolioHasta, ne
           : {}; // no toques horas si no son válidas
 
       const payload = {
-        numeroControl: Number(draft.numeroControl),
-        tipoTramite: draft.tipoTramite.trim(),
-        cliente: draft.cliente.trim(),
-        fecha: draft.fecha,
-        abogado: draft.abogado.trim(),
-        ...(draft.volumen != null && draft.volumen !== '' ? { volumen: draft.volumen } : {}),
-        ...(draft.folioDesde != null && draft.folioDesde !== '' ? { folioDesde: Number(draft.folioDesde) } : {}),
-        ...(draft.folioHasta != null && draft.folioHasta !== '' ? { folioHasta: Number(draft.folioHasta) } : {}),
-        ...(isAdmin ? { observaciones: (draft.observaciones || '').trim() } : {}),
-        ...horasEdit,
-        // montos
-        totalImpuestos: Number(draft.totalImpuestos),
-        valorAvaluo: Number(draft.valorAvaluo),
-        totalGastosExtra: Number(draft.totalGastosExtra),
-        totalHonorarios: Number(draft.totalHonorarios),
-      };
+  numeroControl: Number(draft.numeroControl),
+  tipoTramite: draft.tipoTramite.trim(),
+  cliente: draft.cliente.trim(),
+  fecha: draft.fecha,
+  abogado: draft.abogado.trim(),
+  ...(draft.volumen != null && draft.volumen !== '' ? { volumen: draft.volumen } : {}),
+  ...(draft.folioDesde != null && draft.folioDesde !== '' ? { folioDesde: Number(draft.folioDesde) } : {}),
+  ...(draft.folioHasta != null && draft.folioHasta !== '' ? { folioHasta: Number(draft.folioHasta) } : {}),
+  ...(isAdmin ? { observaciones: (draft.observaciones || '').trim() } : {}),
+  ...horasEdit,
+  ...(aplicaMontos ? {
+    totalImpuestos: Number(draft.totalImpuestos),
+    valorAvaluo: Number(draft.valorAvaluo),
+    totalGastosExtra: Number(draft.totalGastosExtra),
+    totalHonorarios: Number(draft.totalHonorarios),
+  } : {}),
+};
 
       const { data: updated } = await axios.put(`${API}/escrituras/${id}`, payload);
 
@@ -1513,17 +1607,26 @@ function getNewFormErrors({ newRow, newVolumen, newFolioDesde, newFolioHasta, ne
       <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
         <button className="btn btn-primary" onClick={startAdd} disabled={adding || editingId}>+ Agregar escritura</button>
 
-        {/* Importar Excel */}
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept=".xlsx,.xls,.csv"
-          style={{ display: 'none' }}
-          onChange={handleSelectFile}
-        />
-        <button className="btn btn-primary btn-excel" onClick={() => fileInputRef.current?.click()} disabled={importing}>
-          {importing ? 'Importando…' : 'Importar Excel'}
-        </button>
+       {/* Importar Excel (solo admin) */}
+          {isAdmin && (
+            <>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".xlsx,.xls,.csv"
+                style={{ display: 'none' }}
+                onChange={handleSelectFile}
+              />
+              <button
+                className="btn btn-primary btn-excel"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={importing}
+              >
+                {importing ? 'Importando…' : 'Importar Excel'}
+              </button>
+            </>
+          )}
+
 
         {/* Exportar */}
         {canExport && (
@@ -1665,51 +1768,55 @@ function getNewFormErrors({ newRow, newVolumen, newFolioDesde, newFolioHasta, ne
             </div>
           )}
 
-          {/* Montos del recibo (opcionales) */}
-          <div style={{ gridColumn: '1 / -1', display: 'grid', gridTemplateColumns: 'repeat(4, minmax(180px, 1fr))', gap: 8 }}>
-            <TextField
-              label="Total Impuestos (sistema)"
-              type="number"
-              size="small"
-              value={newRow.totalImpuestos ?? ''}
-              onChange={(e) => setNewRow(prev => ({ ...prev, totalImpuestos: e.target.value }))}
-            />
-            <TextField
-              label="Valor Avalúo (sistema)"
-              type="number"
-              size="small"
-              value={newRow.valorAvaluo ?? ''}
-              onChange={(e) => setNewRow(prev => ({ ...prev, valorAvaluo: e.target.value }))}
-            />
-            <TextField
-              label="Total Gastos Extra (sistema)"
-              type="number"
-              size="small"
-              value={newRow.totalGastosExtra ?? ''}
-              onChange={(e) => setNewRow(prev => ({ ...prev, totalGastosExtra: e.target.value }))}
-            />
-            <TextField
-              label="Total Honorarios (sistema)"
-              type="number"
-              size="small"
-              value={newRow.totalHonorarios ?? ''}
-              onChange={(e) => setNewRow(prev => ({ ...prev, totalHonorarios: e.target.value }))}
-            />
-          </div>
+          {/* Montos del recibo (solo para escrituras / compra venta / protocolización / donación) */}
+{isTramiteConMontos(newRow.tipoTramite) && (
+  <div style={{ gridColumn: '1 / -1', display: 'grid', gridTemplateColumns: 'repeat(4, minmax(180px, 1fr))', gap: 8 }}>
+    <TextField
+      label="Total Impuestos (sistema)"
+      type="number"
+      size="small"
+      value={drafts[editingId]?.totalImpuestos ?? ''}
+      onChange={(e) => onChangeDraft(editingId, 'totalImpuestos', e.target.value)}
+    />
+    <TextField
+      label="Valor Avalúo (sistema)"
+      type="number"
+      size="small"
+      value={drafts[editingId]?.valorAvaluo ?? ''}
+      onChange={(e) => onChangeDraft(editingId, 'valorAvaluo', e.target.value)}
+    />
+    <TextField
+      label="Total Gastos Extra (sistema)"
+      type="number"
+      size="small"
+      value={drafts[editingId]?.totalGastosExtra ?? ''}
+      onChange={(e) => onChangeDraft(editingId, 'totalGastosExtra', e.target.value)}
+    />
+    <TextField
+      label="Total Honorarios (sistema)"
+      type="number"
+      size="small"
+      value={drafts[editingId]?.totalHonorarios ?? ''}
+      onChange={(e) => onChangeDraft(editingId, 'totalHonorarios', e.target.value)}
+    />
+  </div>
+)}
+
 
           <div style={{ whiteSpace: 'nowrap' }}>
   <button
-    onClick={onSaveNew}
-    disabled={
-      !isNewCoreComplete(newRow) ||
-      !isNewFoliosValid(newVolumen, newFolioDesde, newFolioHasta) ||
-      !isNewTestamentoValid(newRow?.tipoTramite, newHoraInicio, newHoraFin) ||
-      !selectedCliente ||
-  !isNewMoneyComplete(newRow)
-    }
-  >
-    Guardar
-  </button>
+      onClick={onSaveNew}
+      disabled={
+        !isNewCoreComplete(newRow) ||
+        !isNewFoliosValid(newVolumen, newFolioDesde, newFolioHasta) ||
+        !isNewTestamentoValid(newRow?.tipoTramite, newHoraInicio, newHoraFin) ||
+        !selectedCliente ||
+        (isTramiteConMontos(newRow?.tipoTramite) && !isNewMoneyComplete(newRow))
+      }
+    >
+  Guardar
+</button>
+
   <button onClick={() => onCancel('new')} style={{ marginLeft: 8 }}>Cancelar</button>
 </div>
 
@@ -1835,36 +1942,40 @@ function getNewFormErrors({ newRow, newVolumen, newFolioDesde, newFolioHasta, ne
           )}
 
           {/* Montos del recibo (opcionales) */}
-          <div style={{ gridColumn: '1 / -1', display: 'grid', gridTemplateColumns: 'repeat(4, minmax(180px, 1fr))', gap: 8 }}>
-            <TextField
-              label="Total Impuestos (sistema)"
-              type="number"
-              size="small"
-              value={drafts[editingId]?.totalImpuestos ?? ''}
-              onChange={(e) => onChangeDraft(editingId, 'totalImpuestos', e.target.value)}
-            />
-            <TextField
-              label="Valor Avalúo (sistema)"
-              type="number"
-              size="small"
-              value={drafts[editingId]?.valorAvaluo ?? ''}
-              onChange={(e) => onChangeDraft(editingId, 'valorAvaluo', e.target.value)}
-            />
-            <TextField
-              label="Total Gastos Extra (sistema)"
-              type="number"
-              size="small"
-              value={drafts[editingId]?.totalGastosExtra ?? ''}
-              onChange={(e) => onChangeDraft(editingId, 'totalGastosExtra', e.target.value)}
-            />
-            <TextField
-              label="Total Honorarios (sistema)"
-              type="number"
-              size="small"
-              value={drafts[editingId]?.totalHonorarios ?? ''}
-              onChange={(e) => onChangeDraft(editingId, 'totalHonorarios', e.target.value)}
-            />
-          </div>
+          {/* Montos del recibo (solo para escrituras / compra venta / protocolización / donación) */}
+{isTramiteConMontos(drafts[editingId]?.tipoTramite) && (
+  <div style={{ gridColumn: '1 / -1', display: 'grid', gridTemplateColumns: 'repeat(4, minmax(180px, 1fr))', gap: 8 }}>
+    <TextField
+      label="Total Impuestos (sistema)"
+      type="number"
+      size="small"
+      value={newRow.totalImpuestos ?? ''}
+      onChange={(e) => setNewRow(prev => ({ ...prev, totalImpuestos: e.target.value }))}
+    />
+    <TextField
+      label="Valor Avalúo (sistema)"
+      type="number"
+      size="small"
+      value={newRow.valorAvaluo ?? ''}
+      onChange={(e) => setNewRow(prev => ({ ...prev, valorAvaluo: e.target.value }))}
+    />
+    <TextField
+      label="Total Gastos Extra (sistema)"
+      type="number"
+      size="small"
+      value={newRow.totalGastosExtra ?? ''}
+      onChange={(e) => setNewRow(prev => ({ ...prev, totalGastosExtra: e.target.value }))}
+    />
+    <TextField
+      label="Total Honorarios (sistema)"
+      type="number"
+      size="small"
+      value={newRow.totalHonorarios ?? ''}
+      onChange={(e) => setNewRow(prev => ({ ...prev, totalHonorarios: e.target.value }))}
+    />
+  </div>
+)}
+
 
           {isAdmin && (
             <div style={{ gridColumn: '1 / -1' }}>

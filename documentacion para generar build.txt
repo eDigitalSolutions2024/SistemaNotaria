@@ -1,0 +1,11 @@
+
+
+en el servidor en la carpeta PS C:\Users\notar\Desktop\SistemaNotaria\frontend> 
+
+
+escribir "npm run build"
+
+esperar a que se termine de generar el build
+
+
+luego de eso solo ejecutar el .bat  "iniciar servidor" en el escritorio  

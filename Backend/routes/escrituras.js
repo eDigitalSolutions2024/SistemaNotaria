@@ -562,7 +562,7 @@ router.get('/:id', async (req, res) => {
 // PUT /escrituras/:id
 router.put('/:id', async (req, res) => {
   try {
-    const MAX_FOLIOS_POR_VOLUMEN = 1300;
+    const MAX_FOLIOS_POR_VOLUMEN = 300;
 
     // --- helpers locales ---
     const normVol = (v) => {
