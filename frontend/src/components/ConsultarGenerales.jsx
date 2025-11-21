@@ -67,11 +67,24 @@ const ConsultarGenerales = () => {
     }
   };
 
+  const clientesOrdenados = [...clientes].sort((a, b) => {
+    const idA = Number(a.id || a._id || 0);
+    const idB = Number(b.id || b._id || 0);
+    return idB - idA;
+  });
+
   // Options para react-select
-  const clienteOptions = clientes.map((c) => ({
-    value: c.id,
-    label: `${c.nombre} - ${c.numero_telefono} (${c.estado})`,
-  }));
+  const clienteOptions = clientesOrdenados.map((c) => {
+    const idCliente = c._id ?? c.id;
+    const motivo = c.motivo && c.motivo.trim() !== '' ? c.motivo : 'Sin motivo';
+    const telefono = c.numero_telefono || '';
+
+    return {
+      value: idCliente,
+      label: `${c.nombre} - ${motivo} (${idCliente})`,
+    };
+  });
+
 
   // Manejar cambio en el select
   const handleChangeCliente = (option) => {

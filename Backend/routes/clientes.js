@@ -105,7 +105,9 @@ router.post('/', async (req, res) => {
 //Regresa datos de clientes con abogados asignados
 router.get('/', async (req, res) => {
   try {
-    const clientes = await Cliente.find().populate('abogado_asignado');
+    const clientes = await Cliente.find()
+    .sort({_id: 1 })
+    .populate('abogado_asignado');
 
     const abogados = await Abogado.find({}, { _id: 1, nombre: 1 });
     const mapaAbogados = {};
