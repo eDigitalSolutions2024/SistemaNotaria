@@ -18,10 +18,12 @@ export default function MainPage() {
   return isAuthenticated ? <AuthedApp /> : <Login />;
 }
 
+
 function AuthedApp() {
   const { user, logout } = useAuth();
+  const role = user?.role || '';
 
-  const [seccion, setSeccion] = useState('registrar-cliente');
+  const [seccion, setSeccion] = useState(role === 'PROTOCOLITO' ? 'registrar-generales' : 'registrar-cliente');
   const [mostrarSubmenu, setMostrarSubmenu] = useState(false);
   const [mostrarSubmenuRecibos, setMostrarSubmenuRecibos] = useState(false); // ← NUEVO
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -38,6 +40,11 @@ function AuthedApp() {
   };
 
   const renderContenido = () => {
+    // 🔒 Si el usuario es PROTOCOLITO, SIEMPRE ve RegistrarGenerales
+    if (role === 'PROTOCOLITO') {
+      return <RegistrarGenerales />;
+    }
+
     switch (seccion) {
       case 'registrar-cliente': return <RegistrarCliente />;
       case 'registrar-abogado': return <FormAbogado />;
@@ -52,7 +59,7 @@ function AuthedApp() {
             }}
           />
         );
-        case 'Escrituras':
+      case 'Escrituras':
         return (
           <Escrituras
             onOpenRecibo={(row) => {
@@ -63,7 +70,7 @@ function AuthedApp() {
         );
       case 'recibo':
         return <Recibo row={reciboRow} onBack={() => setSeccion('protocolito')} />;
-      case 'recibos-consultar': // ← NUEVO
+      case 'recibos-consultar':
         return (
           <ConsultarRecibos
             onOpenRecibo={(row) => { setReciboRow(row); setSeccion('recibo'); }}
@@ -72,6 +79,7 @@ function AuthedApp() {
       default: return <RegistrarCliente />;
     }
   };
+
 
   const sidebarStyle = useMemo(() => ({
     background: '#1f2937',
@@ -129,74 +137,87 @@ function AuthedApp() {
 
         <div style={{ overflowY: 'auto' }}>
           <ul style={{ padding: 0, margin: 0 }}>
-            {/* Registrar (submenu) */}
-            <li
-              style={itemStyle}
-              className="submenu"
-              title="Registrar"
-              onClick={() => {
-                if (!sidebarOpen) { setSidebarOpen(true); return; }
-                setMostrarSubmenu(v => !v);
-              }}
-            >
-              <span className="icon" style={iconStyle}>📋</span>
-              {sidebarOpen && <span>Registrar ▾</span>}
-            </li>
-            {sidebarOpen && mostrarSubmenu && (
-              <ul style={{ listStyle: 'none', paddingLeft: 40, marginTop: 4, marginBottom: 8 }}>
-                <li style={{ ...itemStyle, padding: '8px 6px' }} onClick={() => go('registrar-cliente')}>
-                  <span style={iconStyle}>👤</span><span>Registrar Cliente</span>
+            {role === 'PROTOCOLITO' ? (
+              // 🔒 MENÚ ESPECIAL PARA PROTOCOLITO
+              <li
+                style={itemStyle}
+                title="Registrar Generales"
+                onClick={() => go('registrar-generales')}
+              >
+                <span style={iconStyle}>📚</span>
+                {sidebarOpen && <span>Registrar Generales</span>}
+              </li>
+            ) : (
+              // 🌐 MENÚ NORMAL PARA ADMIN Y DEMÁS ROLES
+              <>
+                {/* Registrar (submenu) */}
+                <li
+                  style={itemStyle}
+                  className="submenu"
+                  title="Registrar"
+                  onClick={() => {
+                    if (!sidebarOpen) { setSidebarOpen(true); return; }
+                    setMostrarSubmenu(v => !v);
+                  }}
+                >
+                  <span className="icon" style={iconStyle}>📋</span>
+                  {sidebarOpen && <span>Registrar ▾</span>}
                 </li>
-                <li style={{ ...itemStyle, padding: '8px 6px' }} onClick={() => go('registrar-generales')}>
-                  <span style={iconStyle}>📚</span><span>Registrar Generales</span>
-                </li>
-                  <li style={{ ...itemStyle, padding: '8px 6px' }} onClick={() => go('consultar-generales')}>
-                    <span style={iconStyle}>🔎</span><span>Consultar Generales</span>
-                  </li>
+                {sidebarOpen && mostrarSubmenu && (
+                  <ul style={{ listStyle: 'none', paddingLeft: 40, marginTop: 4, marginBottom: 8 }}>
+                    <li style={{ ...itemStyle, padding: '8px 6px' }} onClick={() => go('registrar-cliente')}>
+                      <span style={iconStyle}>👤</span><span>Registrar Cliente</span>
+                    </li>
+                    <li style={{ ...itemStyle, padding: '8px 6px' }} onClick={() => go('registrar-generales')}>
+                      <span style={iconStyle}>📚</span><span>Registrar Generales</span>
+                    </li>
+                    <li style={{ ...itemStyle, padding: '8px 6px' }} onClick={() => go('consultar-generales')}>
+                      <span style={iconStyle}>🔎</span><span>Consultar Generales</span>
+                    </li>
 
-                {user?.role === 'admin' && (
-                  <li style={{ ...itemStyle, padding: '8px 6px' }} onClick={() => go('registrar-abogado')}>
-                    <span style={iconStyle}>👨‍⚖️</span><span>Registrar Abogado</span>
-                  </li>
+                    {role === 'admin' && (
+                      <li style={{ ...itemStyle, padding: '8px 6px' }} onClick={() => go('registrar-abogado')}>
+                        <span style={iconStyle}>👨‍⚖️</span><span>Registrar Abogado</span>
+                      </li>
+                    )}
+                  </ul>
                 )}
-              </ul>
-            )}
 
-          
-
-            {/* Recibos (submenu) — NUEVO */}
-            <li
-              style={itemStyle}
-              className="submenu"
-              title="Recibos"
-              onClick={() => {
-                if (!sidebarOpen) { setSidebarOpen(true); return; }
-                setMostrarSubmenuRecibos(v => !v);
-              }}
-            >
-              <span style={iconStyle}>📄</span>
-              {sidebarOpen && <span>Recibos ▾</span>}
-            </li>
-            {sidebarOpen && mostrarSubmenuRecibos && (
-              <ul style={{ listStyle: 'none', paddingLeft: 40, marginTop: 4, marginBottom: 8 }}>
-                <li style={{ ...itemStyle, padding: '8px 6px' }} onClick={() => go('recibo')}>
-                  <span style={iconStyle}>➕</span><span>Generar recibo</span>
+                {/* Recibos (submenu) */}
+                <li
+                  style={itemStyle}
+                  className="submenu"
+                  title="Recibos"
+                  onClick={() => {
+                    if (!sidebarOpen) { setSidebarOpen(true); return; }
+                    setMostrarSubmenuRecibos(v => !v);
+                  }}
+                >
+                  <span style={iconStyle}>📄</span>
+                  {sidebarOpen && <span>Recibos ▾</span>}
                 </li>
-                <li style={{ ...itemStyle, padding: '8px 6px' }} onClick={() => go('recibos-consultar')}>
-                  <span style={iconStyle}>🗂️</span><span>Consultar recibos</span>
+                {sidebarOpen && mostrarSubmenuRecibos && (
+                  <ul style={{ listStyle: 'none', paddingLeft: 40, marginTop: 4, marginBottom: 8 }}>
+                    <li style={{ ...itemStyle, padding: '8px 6px' }} onClick={() => go('recibo')}>
+                      <span style={iconStyle}>➕</span><span>Generar recibo</span>
+                    </li>
+                    <li style={{ ...itemStyle, padding: '8px 6px' }} onClick={() => go('recibos-consultar')}>
+                      <span style={iconStyle}>🗂️</span><span>Consultar recibos</span>
+                    </li>
+                  </ul>
+                )}
+
+                {/* Protocolito */}
+                <li title="Protocolito" style={itemStyle} onClick={() => go('protocolito')}>
+                  <span style={iconStyle}>📑</span>{sidebarOpen && <span>Protocolito</span>}
                 </li>
-              </ul>
+
+                {/* Escrituras */}
+                <li title="Escrituras" style={itemStyle} onClick={() => go('Escrituras')}>
+                  <span style={iconStyle}>🔍</span>{sidebarOpen && <span>Escrituras</span>}
+                </li>
+              </>
             )}
-
-            {/* Protocolito */}
-            <li title="Protocolito" style={itemStyle} onClick={() => go('protocolito')}>
-              <span style={iconStyle}>📑</span>{sidebarOpen && <span>Protocolito</span>}
-            </li>
-
-              {/* Escrituras */}
-            <li title="Escrituras" style={itemStyle} onClick={() => go('Escrituras')}>
-              <span style={iconStyle}>🔍</span>{sidebarOpen && <span>Escrituras</span>}
-            </li>
           </ul>
         </div>
 
