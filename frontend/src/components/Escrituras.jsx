@@ -1775,29 +1775,37 @@ if (draft?.volumen || draft?.folioDesde || draft?.folioHasta) {
       label="Total Impuestos (sistema)"
       type="number"
       size="small"
-      value={drafts[editingId]?.totalImpuestos ?? ''}
-      onChange={(e) => onChangeDraft(editingId, 'totalImpuestos', e.target.value)}
+      value={newRow.totalImpuestos ?? ''}
+      onChange={(e) =>
+        setNewRow(prev => ({ ...prev, totalImpuestos: e.target.value }))
+      }
     />
     <TextField
       label="Valor Avalúo (sistema)"
       type="number"
       size="small"
-      value={drafts[editingId]?.valorAvaluo ?? ''}
-      onChange={(e) => onChangeDraft(editingId, 'valorAvaluo', e.target.value)}
+      value={newRow.valorAvaluo ?? ''}
+       onChange={(e) =>
+        setNewRow(prev => ({ ...prev, valorAvaluo: e.target.value }))
+      }
     />
     <TextField
       label="Total Gastos Extra (sistema)"
       type="number"
       size="small"
-      value={drafts[editingId]?.totalGastosExtra ?? ''}
-      onChange={(e) => onChangeDraft(editingId, 'totalGastosExtra', e.target.value)}
+      value={newRow.totalGastosExtra ?? ''}
+      onChange={(e) =>
+        setNewRow(prev => ({ ...prev, totalGastosExtra: e.target.value }))
+      }
     />
     <TextField
       label="Total Honorarios (sistema)"
       type="number"
       size="small"
-      value={drafts[editingId]?.totalHonorarios ?? ''}
-      onChange={(e) => onChangeDraft(editingId, 'totalHonorarios', e.target.value)}
+      value={newRow.totalHonorarios ?? ''}
+      onChange={(e) =>
+        setNewRow(prev => ({ ...prev, totalHonorarios: e.target.value }))
+      }
     />
   </div>
 )}
@@ -1949,32 +1957,33 @@ if (draft?.volumen || draft?.folioDesde || draft?.folioHasta) {
       label="Total Impuestos (sistema)"
       type="number"
       size="small"
-      value={newRow.totalImpuestos ?? ''}
-      onChange={(e) => setNewRow(prev => ({ ...prev, totalImpuestos: e.target.value }))}
+      value={drafts[editingId]?.totalImpuestos ?? ''}
+      onChange={(e) => onChangeDraft(editingId, 'totalImpuestos', e.target.value)}
     />
     <TextField
       label="Valor Avalúo (sistema)"
       type="number"
       size="small"
-      value={newRow.valorAvaluo ?? ''}
-      onChange={(e) => setNewRow(prev => ({ ...prev, valorAvaluo: e.target.value }))}
+      value={drafts[editingId]?.valorAvaluo ?? ''}
+      onChange={(e) => onChangeDraft(editingId, 'valorAvaluo', e.target.value)}
     />
     <TextField
       label="Total Gastos Extra (sistema)"
       type="number"
       size="small"
-      value={newRow.totalGastosExtra ?? ''}
-      onChange={(e) => setNewRow(prev => ({ ...prev, totalGastosExtra: e.target.value }))}
+      value={drafts[editingId]?.totalGastosExtra ?? ''}
+      onChange={(e) => onChangeDraft(editingId, 'totalGastosExtra', e.target.value)}
     />
     <TextField
       label="Total Honorarios (sistema)"
       type="number"
       size="small"
-      value={newRow.totalHonorarios ?? ''}
-      onChange={(e) => setNewRow(prev => ({ ...prev, totalHonorarios: e.target.value }))}
+      value={drafts[editingId]?.totalHonorarios ?? ''}
+      onChange={(e) => onChangeDraft(editingId, 'totalHonorarios', e.target.value)}
     />
   </div>
 )}
+
 
 
           {isAdmin && (
