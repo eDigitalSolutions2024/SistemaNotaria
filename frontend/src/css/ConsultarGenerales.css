@@ -112,6 +112,7 @@
   width: 100%;
   border-collapse: collapse;
   font-size: 14px;
+  table-layout: fixed;
 }
 
 .cg-table th,
@@ -119,6 +120,11 @@
   border: 1px solid #e5e7eb;
   padding: 8px 10px;
   text-align: left;
+
+  white-space: normal;
+  word-break: break-word;      /* rompe palabras muy largas */
+  overflow-wrap: anywhere;     /* por si son cadenas sin espacios */
+  vertical-align: top;         /* que el texto se alinee arriba si hay varias líneas */
 }
 
 .cg-table th {

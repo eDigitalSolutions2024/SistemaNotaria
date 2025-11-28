@@ -5,6 +5,15 @@ import Select from "react-select";
 import API_URL from "../api";
 import "../css/ConsultarGenerales.css";
 
+// 🔹 Helper para mostrar fecha_nacimiento sin desfase
+const formatDate = (date) => {
+  if (!date) return "";
+  const d = new Date(date);
+  const iso = d.toISOString().slice(0, 10); // "YYYY-MM-DD"
+  const [year, month, day] = iso.split("-");
+  return `${day}/${month}/${year}`;
+};
+
 const ConsultarGenerales = () => {
   const [clientes, setClientes] = useState([]);
   const [loadingClientes, setLoadingClientes] = useState(true);
@@ -253,10 +262,17 @@ const ConsultarGenerales = () => {
                   <tr>
                     <th>#</th>
                     <th>Nombre completo</th>
+                    <th>Lugar de nacimiento</th>
+                    <th>Fecha de nacimiento</th>
+                    <th>Ocupación</th>
+                    <th>Estado civil</th>
+                    <th>Domicilio</th>
+                    <th>Colonia</th>
+                    <th>Teléfono principal</th>
+                    <th>Teléfono secundario</th>
+                    <th>Correo electrónico</th>
                     <th>CURP</th>
                     <th>RFC</th>
-                    <th>Teléfono principal</th>
-                    <th>Correo electrónico</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -264,14 +280,22 @@ const ConsultarGenerales = () => {
                     <tr key={p._id || idx}>
                       <td>{idx + 1}</td>
                       <td>{p.nombre_completo}</td>
+                      <td>{p.lugar_nacimiento}</td>
+                      <td>{formatDate(p.fecha_nacimiento)}</td>
+                      <td>{p.ocupacion}</td>
+                      <td>{p.estado_civil}</td>
+                      <td>{p.domicilio}</td>
+                      <td>{p.colonia}</td>
+                      <td>{p.telefono_principal}</td>
+                      <td>{p.telefono_secundario || ""}</td>
+                      <td>{p.correo_electronico}</td>
                       <td>{p.curp}</td>
                       <td>{p.rfc}</td>
-                      <td>{p.telefono_principal}</td>
-                      <td>{p.correo_electronico}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
+
             </div>
           )}
         </div>

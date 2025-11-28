@@ -206,7 +206,6 @@ export default function RegistrarGenerales() {
       };
 
 
-      await axios.post(`${API_URL}/clientes-generales`, payload);
       console.log("clienteSeleccionado:", clienteSeleccionado, "tipo:", typeof clienteSeleccionado);
       console.log("payload a enviar:", payload);
       await axios.post(`${API_URL}/clientes-generales`, payload);

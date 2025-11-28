@@ -12,13 +12,16 @@ function escapeHtml(text = '') {
     .replace(/'/g, '&#039;');
 }
 
-// Helper para formatear fecha (puedes luego cambiar el formato)
+// Helper para formatear fecha sin desfase de zona horaria
 function formatDate(date) {
   if (!date) return '';
+
   const d = new Date(date);
-  const dia = String(d.getDate()).padStart(2, '0');
-  const mes = String(d.getMonth() + 1).padStart(2, '0');
-  const anio = d.getFullYear();
+
+  // toISOString siempre es en UTC → "YYYY-MM-DDTHH:mm:ss.sssZ"
+  const iso = d.toISOString().slice(0, 10); // "YYYY-MM-DD"
+  const [anio, mes, dia] = iso.split('-');  // ["2000", "11", "02"]
+
   return `${dia}/${mes}/${anio}`;
 }
 
