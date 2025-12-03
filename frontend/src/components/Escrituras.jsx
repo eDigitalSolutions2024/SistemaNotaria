@@ -311,6 +311,14 @@ export default function Escrituras({ onOpenRecibo }) {
     isSpecialViewer ||
     roles.some((r) => ['ADMIN', 'RECEPCION'].includes(r));
 
+      // 🔹 Quién puede ver el botón de Recibo
+  const canSeeReciboBtn =
+    isSpecialViewer ||
+    roles.some((r) => ['ADMIN', 'RECEPCION', 'ABOGADO'].includes(r));
+
+  // 🔹 Quién puede HACER cosas con recibos (generar, adjuntar, justificar)
+  const canModifyRecibos =
+    roles.some((r) => ['ADMIN', 'RECEPCION'].includes(r));
 
   const [rows, setRows] = useState([]);
   const [editingId, setEditingId] = useState(null);
@@ -572,6 +580,30 @@ function getNewFormErrors({ newRow, newVolumen, newFolioDesde, newFolioHasta, ne
   }, [rows, canSeeAll, currentUserName]);
 
   
+  // --- Candado: máximo 2 escrituras sin recibo por abogado ---
+  const hasReciboLocal = (row) => {
+    const estatus = String(row?.estatus_recibo || '').toUpperCase();
+    // CON_RECIBO = tiene recibo
+    // JUSTIFICADO = tiene justificante autorizado
+    if (estatus === 'CON_RECIBO' || estatus === 'JUSTIFICADO') return true;
+    // Por si el backend aún no pone estatus pero ya hay justificante
+    if (row?.justificante_text) return true;
+    return false;
+  };
+
+  const mySinReciboCount = React.useMemo(() => {
+    const me = norm(currentUserName);
+    if (!me) return 0;
+    return rows.filter((r) =>
+      norm(r?.abogado).includes(me) && !hasReciboLocal(r)
+    ).length;
+  }, [rows, currentUserName]);
+
+  // Candado solo para abogados / asistentes (no para ADMIN)
+  const bloqueoPorRecibo = !isAdmin && mySinReciboCount >= 2;
+
+
+
 
   // Cargar catálogo de abogados (para export)
   const loadAbogadosFromRegistry = async () => {
@@ -1112,7 +1144,16 @@ if (draft?.volumen || draft?.folioDesde || draft?.folioHasta) {
     }
   };
 
-  const startAdd = async () => {
+    const startAdd = async () => {
+    // Candado por recibos pendientes
+    if (bloqueoPorRecibo) {
+      setMsg({
+        type: 'warn',
+        text: `No puedes tomar un nuevo número de escritura: tienes ${mySinReciboCount} escritura(s) sin recibo o justificante.`
+      });
+      return;
+    }
+
     setAdding(true);
     setNewRow(emptyRow);
     setSelectedCliente(null);
@@ -1144,6 +1185,7 @@ if (draft?.volumen || draft?.folioDesde || draft?.folioHasta) {
       setMsg({ type: 'warn', text: 'No fue posible determinar el volumen actual.' });
     }
   };
+
 
   const handleSelectFile = async (e) => {
     const file = e.target.files?.[0];
@@ -1237,9 +1279,9 @@ if (draft?.volumen || draft?.folioDesde || draft?.folioHasta) {
   };
 
   // Indicador Recibo
-  const ReciboIndicator = ({ row }) => {
+    const ReciboIndicator = ({ row }) => {
     const numero = row?.numeroControl;
-       const estatus = row?.estatus_recibo;
+    const estatus = row?.estatus_recibo;
     const [estado, setEstado] = React.useState('loading');
 
     React.useEffect(() => {
@@ -1259,6 +1301,7 @@ if (draft?.volumen || draft?.folioDesde || draft?.folioHasta) {
       return () => { alive = false; };
     }, [numero, estatus]);
 
+    // ✅ Hay recibo → cualquiera que tenga canSeeReciboBtn puede abrir el PDF
     if (estado === 'si') {
       return (
         <button
@@ -1270,6 +1313,8 @@ if (draft?.volumen || draft?.folioDesde || draft?.folioHasta) {
         </button>
       );
     }
+
+    // ✅ Justificado → botón solo para ver el texto del justificante
     if (estado === 'justificado') {
       return (
         <button
@@ -1290,25 +1335,52 @@ if (draft?.volumen || draft?.folioDesde || draft?.folioHasta) {
         </button>
       );
     }
-    return (
-      <button
-        type="button"
-        onClick={() => openMissing(row)}
-        style={{
-          padding: '6px 10px',
-          fontSize: 13,
-          background: '#e9ecef',
-          border: '1px solid #dcdcdc',
-          borderRadius: 6,
-          lineHeight: 1.2,
-          cursor: 'pointer'
-        }}
-        title="Opciones para generar/adjuntar justificante"
-      >
-        No tiene recibo
-      </button>
-    );
+
+    // ⛔ NO hay recibo:
+    //    - Si NO puede modificar recibos → SOLO ve texto "Sin recibo" (no clic)
+    //    - Si SÍ puede modificar → botón "No tiene recibo" que abre el modal
+    if (estado === 'no') {
+      if (!canModifyRecibos) {
+        return (
+          <span
+            style={{
+              padding: '6px 10px',
+              fontSize: 13,
+              color: '#6b7280',
+              borderRadius: 6,
+              border: '1px solid #dcdcdc',
+              background: '#f9fafb'
+            }}
+            title="Sin recibo registrado"
+          >
+            Sin recibo
+          </span>
+        );
+      }
+
+      return (
+        <button
+          type="button"
+          onClick={() => openMissing(row)}
+          style={{
+            padding: '6px 10px',
+            fontSize: 13,
+            background: '#e9ecef',
+            border: '1px solid #dcdcdc',
+            borderRadius: 6,
+            lineHeight: 1.2,
+            cursor: 'pointer'
+          }}
+          title="Opciones para generar/adjuntar justificante"
+        >
+          No tiene recibo
+        </button>
+      );
+    }
+
+    return null;
   };
+
 
   // columnas tabla principal
   const baseColumns = [
@@ -1463,7 +1535,8 @@ if (draft?.volumen || draft?.folioDesde || draft?.folioHasta) {
               </button>
             </>
           )}
-          {canDeliver && <ReciboIndicator row={r} />}
+          {canSeeReciboBtn && <ReciboIndicator row={r} />}
+
 
           {canDeliver && (
             <button
@@ -1543,7 +1616,7 @@ if (draft?.volumen || draft?.folioDesde || draft?.folioHasta) {
     }
   };
 
-  const showActionsColumn = isAdmin || canDeliver;
+  const showActionsColumn = isAdmin || canDeliver|| canSeeReciboBtn;
   const columns = [
     ...baseColumns,
     ...moneyCols,
@@ -1605,7 +1678,23 @@ if (draft?.volumen || draft?.folioDesde || draft?.folioHasta) {
 
       {/* Barra de acciones */}
       <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
-        <button className="btn btn-primary" onClick={startAdd} disabled={adding || editingId}>+ Agregar escritura</button>
+        <button
+          className="btn btn-primary"
+          onClick={startAdd}
+          disabled={adding || editingId || bloqueoPorRecibo}
+        >
+          + Agregar escritura
+        </button>
+
+{bloqueoPorRecibo && (
+  <span style={{ fontSize: 12, color: '#b45309' }}>
+    No puedes tomar un nuevo número de escritura: tienes{' '}
+    {mySinReciboCount} escritura(s) sin recibo o sin justificante.
+    Genera/adjunta el recibo o captura justificante en alguna de ellas
+    para poder tomar una nueva.
+  </span>
+)}
+
 
        {/* Importar Excel (solo admin) */}
           {isAdmin && (

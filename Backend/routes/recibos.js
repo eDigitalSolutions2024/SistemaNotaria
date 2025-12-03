@@ -1,13 +1,12 @@
 // routes/recibos.js
 const express = require('express');
 const router = express.Router();
-// routes/recibos.js (arriba de todo con tus otros imports)
-const Abogado = require('../models/Abogado'); // 👈 usa tu path real
+
+const Abogado = require('../models/Abogado'); 
 const Recibo = require('../models/Recibo');
 const ReciboLink = require('../models/ReciboLink');
 const Protocolito = require('../models/Protocolito');
-// routes/recibos.js (arriba junto con los otros models)
-const Escritura = require('../models/Escritura');   // 👈 faltaba
+const Escritura = require('../models/Escritura');
 
 const { buildReciboPDF } = require('../utils/pdfRecibo');
 const XLSX = require('xlsx');
@@ -17,7 +16,26 @@ function escapeRegex(s = '') {
   return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+// --- Helpers de usuario / roles ---
+function getUserRolesFromReq(req) {
+  const u = req.user || {};
+  const roles = [];
+  if (Array.isArray(u.roles)) roles.push(...u.roles);
+  if (u.rol) roles.push(u.rol);
+  if (u.role) roles.push(u.role);
+  return roles.map(r => String(r).toUpperCase());
+}
 
+function canModifyRecibos(req) {
+  const roles = getUserRolesFromReq(req);
+  return roles.some(r => ['ADMIN', 'CAJA', 'RECEPCION'].includes(r));
+}
+
+function canViewRecibos(req) {
+  const roles = getUserRolesFromReq(req);
+  // quienes sí pueden ver: admin, caja, recepción, abogado, asistente
+  return roles.some(r => ['ADMIN', 'CAJA', 'RECEPCION', 'ABOGADO', 'ASISTENTE'].includes(r));
+}
 
 function buildFilter(query = {}) {
   const { q, desde, hasta, abogados, abogadoQ, estatus } = query;
@@ -61,7 +79,6 @@ function buildFilter(query = {}) {
   return filter;
 }
 
-
 /** Mapea recibo para Excel/listado */
 function mapToExcelRow(r) {
   return {
@@ -74,9 +91,17 @@ function mapToExcelRow(r) {
         ? Number(r.total)
         : (r.totalPagado != null ? Number(r.totalPagado) : 0),
     Abogado: r.abogado || '',
-    Estatus: r.estatus || 'Activo', 
+    Estatus: r.estatus || 'Activo',
   };
 }
+
+// 🔐 Candado general: solo ciertos roles pueden VER recibos
+router.use((req, res, next) => {
+  if (!canViewRecibos(req)) {
+    return res.status(403).json({ ok: false, msg: 'No tienes permiso para ver recibos' });
+  }
+  next();
+});
 
 /* -------------------------- Protocolitos API -------------------------- */
 /**
@@ -118,11 +143,11 @@ router.get('/protocolitos/:numero', async (req, res) => {
   }
 });
 
+/* --------------------- Escrituras relacionadas --------------------- */
 
-// GET /escrituras/numeros
+// GET /api/recibos/escrituras/numeros
 // Devuelve lista para el <select> del front:
 // [{ numeroControl, cliente, abogado, tipoTramite, fecha }]
-// GET /api/recibos/escrituras/numeros
 router.get('/escrituras/numeros', async (req, res) => {
   try {
     const { only } = req.query;
@@ -143,23 +168,27 @@ router.get('/escrituras/numeros', async (req, res) => {
   }
 });
 
-
-
-// GET /escrituras/search?q=texto
-// Sugerencias (datalist) devolviendo SOLO los números de escritura (strings)
+// GET /api/recibos/escrituras/search?q=texto
+// Sugerencias (datalist) devolviendo SOLO los números de escritura (strings) desde la colección Escrituras
 router.get('/escrituras/search', async (req, res) => {
   try {
     const q = String(req.query.q || '').trim();
     if (!q) return res.json({ data: [] });
 
-    // Búsqueda por prefijo/contiene en numeroControl convirtiéndolo a string,
-    // y también por cliente/abogado si hace falta.
     const findFilter = {
       $and: [
         { tipoTramite: { $regex: 'escritura', $options: 'i' } },
         {
           $or: [
-            { $expr: { $regexMatch: { input: { $toString: '$numeroControl' }, regex: q, options: 'i' } } },
+            {
+              $expr: {
+                $regexMatch: {
+                  input: { $toString: '$numeroControl' },
+                  regex: q,
+                  options: 'i'
+                }
+              }
+            },
             { cliente: { $regex: q, $options: 'i' } },
             { abogado: { $regex: q, $options: 'i' } },
           ]
@@ -172,7 +201,6 @@ router.get('/escrituras/search', async (req, res) => {
       .limit(50)
       .lean();
 
-    // devolver como array de strings para el datalist
     const list = [...new Set(rows.map(r => String(r.numeroControl)))];
     res.json({ data: list });
   } catch (e) {
@@ -185,9 +213,13 @@ router.get('/escrituras/search', async (req, res) => {
  * POST /api/recibos
  * Crear un recibo nuevo
  */
-// POST /api/recibos
 router.post('/', async (req, res) => {
   try {
+    // 🔒 Solo admin/caja/recepción pueden CREAR recibos
+    if (!canModifyRecibos(req)) {
+      return res.status(403).json({ ok: false, msg: 'No tienes permiso para crear recibos' });
+    }
+
     let {
       fecha,
       tipoTramite,
@@ -198,7 +230,7 @@ router.post('/', async (req, res) => {
       control,
       totalTramite,
       totalPagado,         // en Escritura: viene = abono (si lo mandas así desde el front)
-      abono,               // 👈 NUEVO: explícito
+      abono,               // explícito
       totalImpuestos = 0,
       valorAvaluo = 0,
       totalGastosExtra = 0,
@@ -276,7 +308,7 @@ router.post('/', async (req, res) => {
       control: control || null,
       totalTramite,
       totalPagado,   // en Escritura: es el abono del recibo
-      abono,         // 👈 guarda explícito
+      abono,
       restante,
       totalImpuestos,
       valorAvaluo,
@@ -298,11 +330,6 @@ router.post('/', async (req, res) => {
   }
 });
 
-
-/**
- * GET /api/recibos/by-control/:control/latest
- * Devuelve el último recibo cuyo "control" == :control
- */
 /**
  * GET /api/recibos/by-control/:control/latest
  * Devuelve el último recibo con ese control (directo o por vínculo)
@@ -340,7 +367,6 @@ router.get('/by-control/:control/latest', async (req, res) => {
     return res.status(500).json({ ok: false, msg: 'Error buscando recibo' });
   }
 });
-
 
 /**
  * GET /api/recibos/:id/pdf
@@ -421,21 +447,19 @@ router.get('/export', async (req, res) => {
   }
 });
 
-
 // GET /api/recibos/abogados
 router.get('/abogados', async (_req, res) => {
   try {
-    // Filtra por roles válidos (en mayúsculas) y, opcional, solo disponibles
     const rows = await Abogado.find({
       role: { $in: ['ABOGADO', 'ASISTENTE'] },
-      // disponible: true, // <- si quieres limitar a los disponibles
+      // disponible: true,
     })
       .select('_id nombre role disponible orden ubicacion')
       .sort({ nombre: 1, orden: 1 })
       .lean();
 
     const data = rows.map(a => ({
-      id: a._id,              // <- es Number (tu schema)
+      id: a._id,
       nombre: a.nombre,
       role: a.role,
       disponible: a.disponible,
@@ -449,12 +473,15 @@ router.get('/abogados', async (_req, res) => {
   }
 });
 
-
-// PATCH /recibos/:id/cancel
+// PATCH /api/recibos/:id/cancel
 // body: { motivo: string }
-// ✅ Después
 router.patch('/:id/cancel', async (req, res) => {
   try {
+    // 🔒 Solo admin/caja/recepción pueden cancelar
+    if (!canModifyRecibos(req)) {
+      return res.status(403).json({ ok: false, msg: 'No tienes permiso para cancelar recibos' });
+    }
+
     const { id } = req.params;
     const { motivo } = req.body;
     if (!motivo || !motivo.trim()) {
@@ -466,7 +493,7 @@ router.patch('/:id/cancel', async (req, res) => {
       cancelacion: {
         motivo: motivo.trim(),
         fecha: new Date(),
-        usuarioId: req.user?.id || undefined,       // si tienes auth
+        usuarioId: req.user?.id || undefined,
         usuarioNombre: req.user?.nombre || undefined
       }
     };
@@ -481,9 +508,6 @@ router.patch('/:id/cancel', async (req, res) => {
   }
 });
 
-
-
-// routes/recibos.js  (agrega esto abajo de tus otros endpoints)
 // GET /api/recibos/escrituras/:numero/pending
 router.get('/escrituras/:numero/pending', async (req, res) => {
   try {
@@ -491,43 +515,44 @@ router.get('/escrituras/:numero/pending', async (req, res) => {
     if (!numero) return res.status(400).json({ ok: false, msg: 'Número de Escritura requerido' });
 
     const pipeline = [
-      { $match: {
-        tipoTramite: 'Escritura',
-        control: numero,
-        estatus: { $ne: 'Cancelado' }    // ignorar cancelados
-      }},
-      { $sort: { createdAt: -1, _id: -1 } }, // último primero
+      {
+        $match: {
+          tipoTramite: 'Escritura',
+          control: numero,
+          estatus: { $ne: 'Cancelado' }
+        }
+      },
+      { $sort: { createdAt: -1, _id: -1 } },
       {
         $group: {
           _id: '$control',
-          totalBase:  { $max: '$totalTramite' }, // base más alta registrada
-          pagadoAcum: { $sum: '$totalPagado' },  // suma de pagos
-          count:      { $sum: 1 },
-          last:       { $first: '$$ROOT' }       // el más reciente (referencia visual)
+          totalBase: { $max: '$totalTramite' },
+          pagadoAcum: { $sum: '$totalPagado' },
+          count: { $sum: 1 },
+          last: { $first: '$$ROOT' }
         }
       },
       {
         $project: {
           _id: 0,
-          control:      '$_id',
+          control: '$_id',
           totalTramite: '$totalBase',
-          pagadoAcum:   1,
-          restante:     { $max: [{ $subtract: ['$totalBase', '$pagadoAcum'] }, 0] },
-          count:        1,
-          // ⬇️ manda también los “de sistema” desde el último recibo
+          pagadoAcum: 1,
+          restante: { $max: [{ $subtract: ['$totalBase', '$pagadoAcum'] }, 0] },
+          count: 1,
           last: {
-            _id:              '$last._id',
-            fecha:            '$last.fecha',
-            recibiDe:         '$last.recibiDe',
-            abogado:          '$last.abogado',
-            concepto:         '$last.concepto',
-            totalTramite:     '$last.totalTramite',
-            totalPagado:      '$last.totalPagado',
-            restante:         '$last.restante',
-            totalImpuestos:   '$last.totalImpuestos',
-            valorAvaluo:      '$last.valorAvaluo',
+            _id: '$last._id',
+            fecha: '$last.fecha',
+            recibiDe: '$last.recibiDe',
+            abogado: '$last.abogado',
+            concepto: '$last.concepto',
+            totalTramite: '$last.totalTramite',
+            totalPagado: '$last.totalPagado',
+            restante: '$last.restante',
+            totalImpuestos: '$last.totalImpuestos',
+            valorAvaluo: '$last.valorAvaluo',
             totalGastosExtra: '$last.totalGastosExtra',
-            totalHonorarios:  '$last.totalHonorarios'
+            totalHonorarios: '$last.totalHonorarios'
           }
         }
       }
@@ -535,7 +560,11 @@ router.get('/escrituras/:numero/pending', async (req, res) => {
 
     const [row] = await Recibo.aggregate(pipeline);
     if (!row) {
-      return res.json({ ok: true, data: null, msg: 'No hay recibos para ese Número de Escritura (o todos están cancelados).' });
+      return res.json({
+        ok: true,
+        data: null,
+        msg: 'No hay recibos para ese Número de Escritura (o todos están cancelados).'
+      });
     }
 
     const liquidado = Number(row.restante || 0) <= 0;
@@ -543,13 +572,13 @@ router.get('/escrituras/:numero/pending', async (req, res) => {
     return res.json({
       ok: true,
       data: {
-        control:      row.control,
+        control: row.control,
         totalTramite: row.totalTramite,
-        pagadoAcum:   row.pagadoAcum,
-        restante:     row.restante,
-        count:        row.count,
+        pagadoAcum: row.pagadoAcum,
+        restante: row.restante,
+        count: row.count,
         liquidado,
-        last:         row.last
+        last: row.last
       }
     });
   } catch (e) {
@@ -558,17 +587,20 @@ router.get('/escrituras/:numero/pending', async (req, res) => {
   }
 });
 
-
-
-// GET /api/recibos/escrituras/search?q=2024/
-router.get('/escrituras/search', async (req, res) => {
-  const q = String(req.query.q || '').trim();
-  const rx = q ? new RegExp(escapeRegex(q), 'i') : null;
-  const filter = { tipoTramite: 'Escritura' };
-  if (rx) filter.control = rx;
-  const rows = await Recibo.find(filter)
-    .distinct('control'); // solo lista controles
-  res.json({ ok: true, data: rows.slice(0, 20) });
+// 🔎 Búsqueda de controles de Escritura pero desde RECIBOS
+// GET /api/recibos/escrituras/controls/search?q=2024/
+router.get('/escrituras/controls/search', async (req, res) => {
+  try {
+    const q = String(req.query.q || '').trim();
+    const rx = q ? new RegExp(escapeRegex(q), 'i') : null;
+    const filter = { tipoTramite: 'Escritura' };
+    if (rx) filter.control = rx;
+    const rows = await Recibo.find(filter).distinct('control');
+    res.json({ ok: true, data: rows.slice(0, 20) });
+  } catch (e) {
+    console.error('ESCRITURAS CONTROLS SEARCH ERROR:', e);
+    res.status(500).json({ ok: false, msg: 'Error buscando controles de escrituras en recibos' });
+  }
 });
 
 // GET /api/recibos/escrituras/:numero/history
@@ -585,8 +617,14 @@ router.get('/escrituras/:numero/history', async (req, res) => {
 
     const items = await Recibo.find(filter).sort({ fecha: 1, _id: 1 }).lean();
 
-    const totalTramiteBase = items.reduce((acc, r) => Math.max(acc, Number(r.totalTramite || 0)), 0);
-    const pagadoAcum = items.reduce((acc, r) => acc + Number(r.totalPagado || 0), 0);
+    const totalTramiteBase = items.reduce(
+      (acc, r) => Math.max(acc, Number(r.totalTramite || 0)),
+      0
+    );
+    const pagadoAcum = items.reduce(
+      (acc, r) => acc + Number(r.totalPagado || 0),
+      0
+    );
     const restante = Math.max(0, totalTramiteBase - pagadoAcum);
 
     const rows = items.map(r => ({
@@ -618,6 +656,11 @@ router.get('/escrituras/:numero/history', async (req, res) => {
 // body: { reciboId: string, control: number }
 router.post('/link', async (req, res) => {
   try {
+    // 🔒 Solo admin/caja/recepción pueden vincular
+    if (!canModifyRecibos(req)) {
+      return res.status(403).json({ ok: false, msg: 'No tienes permiso para vincular recibos' });
+    }
+
     const { reciboId, control } = req.body || {};
     if (!reciboId || !Number.isFinite(Number(control))) {
       return res.status(400).json({ ok: false, msg: 'Datos inválidos' });
@@ -643,6 +686,11 @@ router.post('/link', async (req, res) => {
 // body: { reciboId: string, controls: number[] }
 router.post('/link/bulk', async (req, res) => {
   try {
+    // 🔒 Solo admin/caja/recepción pueden vincular
+    if (!canModifyRecibos(req)) {
+      return res.status(403).json({ ok: false, msg: 'No tienes permiso para vincular recibos (bulk)' });
+    }
+
     const { reciboId, controls } = req.body || {};
     if (!reciboId || !Array.isArray(controls) || !controls.length) {
       return res.status(400).json({ ok: false, msg: 'Datos inválidos' });
@@ -675,6 +723,11 @@ router.post('/link/bulk', async (req, res) => {
 // body: { reciboId: string, control: number }
 router.delete('/link', async (req, res) => {
   try {
+    // 🔒 Solo admin/caja/recepción pueden DESVINCULAR recibos
+    if (!canModifyRecibos(req)) {
+      return res.status(403).json({ ok: false, msg: 'No tienes permiso para desvincular recibos' });
+    }
+
     const { reciboId, control } = req.body || {};
     if (!reciboId || !Number.isFinite(Number(control))) {
       return res.status(400).json({ ok: false, msg: 'Datos inválidos' });
@@ -700,7 +753,8 @@ router.get('/:id/links', async (req, res) => {
   }
 });
 
-// (Opcional) GET /api/recibos/links/by-control/:control  → listar todos los recibos vinculados a ese #Trámite
+// GET /api/recibos/links/by-control/:control
+// listar todos los recibos vinculados a ese #Trámite
 router.get('/links/by-control/:control', async (req, res) => {
   try {
     const control = Number(req.params.control);
@@ -723,7 +777,6 @@ router.get('/search', async (req, res) => {
   try {
     const q = String(req.query.q || '').trim();
 
-    // armar filtros básicos (cliente / concepto / abogado)
     const match = { estatus: { $ne: 'Cancelado' } };
     const or = [];
     if (q) {
@@ -744,7 +797,6 @@ router.get('/search', async (req, res) => {
 
     const pipeline = [
       { $match: match },
-      // convertir _id a string para poder matchear por sufijo (folio)
       { $addFields: { strId: { $toString: '$_id' } } },
     ];
 
@@ -756,11 +808,10 @@ router.get('/search', async (req, res) => {
       pipeline.push({ $match: { strId: { $regex: `${q}$`, $options: 'i' } } });
     }
 
-    // traer vínculos (Recibo ⇄ #Trámite)
     pipeline.push(
       {
         $lookup: {
-          from: 'recibolinks',             // nombre de la colección de ReciboLink
+          from: 'recibolinks',
           localField: '_id',
           foreignField: 'reciboId',
           as: 'links'
@@ -776,23 +827,20 @@ router.get('/search', async (req, res) => {
           abogado: 1,
           control: 1,
           total: { $ifNull: ['$total', '$totalPagado'] },
-          // folio = últimos 4 del ObjectId en mayúsculas
           folio: { $toUpper: { $substr: ['$strId', 20, 4] } },
-          // arreglo de números de trámite ya vinculados
           controls: {
             $map: { input: '$links', as: 'l', in: '$$l.control' }
           }
         }
       },
       { $sort: { fecha: -1, _id: -1 } },
-      { $limit: 50 } // límite razonable para el modal
+      { $limit: 50 }
     );
 
     const rows = await Recibo.aggregate(pipeline);
 
-    // adaptar nombres de campo a lo que espera tu DataGrid del modal
     const data = rows.map(r => ({
-      id: r._id,                // para DataGrid
+      id: r._id,
       _id: r._id,
       folio: r.folio,
       cliente: r.recibiDe || '',
@@ -807,9 +855,5 @@ router.get('/search', async (req, res) => {
     return res.status(500).json({ ok: false, msg: 'Error buscando recibos' });
   }
 });
-
-
-
-
 
 module.exports = router;

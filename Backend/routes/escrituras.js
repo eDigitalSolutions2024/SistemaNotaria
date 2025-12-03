@@ -61,6 +61,60 @@ function validRangeHHMM(inicio, fin) {
   const a = toMinutes(inicio), b = toMinutes(fin);
   return a != null && b != null && a < b;
 }
+
+
+
+// --- Helpers de usuario / recibos pendientes ---
+
+function getUserNameFromReq(req) {
+  const u = req.user || {};
+  return (
+    u.nombre ||
+    u.name ||
+    u.fullName ||
+    u.username ||
+    u.userName ||
+    ''
+  ).trim();
+}
+
+function getUserRolesFromReq(req) {
+  const u = req.user || {};
+  const roles = [];
+  if (Array.isArray(u.roles)) roles.push(...u.roles);
+  if (u.rol) roles.push(u.rol);
+  if (u.role) roles.push(u.role);
+  return roles.map(r => String(r).toUpperCase());
+}
+
+function escapeRegex(text) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Cuenta cuántas escrituras sin recibo / justificante tiene
+ * un abogado (según el campo `abogado` en la colección).
+ *
+ * Criterio "pendiente":
+ *   - estatus_recibo NO está en ['CON_RECIBO', 'JUSTIFICADO']  (o no existe)
+ */
+async function countEscriturasSinReciboPorAbogado(nombreAbogado) {
+  if (!nombreAbogado) return 0;
+
+  const regexAbogado = new RegExp(escapeRegex(nombreAbogado), 'i');
+
+  const filter = {
+    abogado: regexAbogado,
+    $or: [
+      { estatus_recibo: { $exists: false } },
+      { estatus_recibo: { $nin: ['CON_RECIBO', 'JUSTIFICADO'] } },
+    ],
+  };
+
+  return Escritura.countDocuments(filter);
+}
+
+
 // ¿traslapan rangos [a,b) y [c,d)?
 function overlapped(aIni, aFin, bIni, bFin) {
   return aIni < bFin && bIni < aFin;
@@ -74,6 +128,9 @@ const numOrNull = (v) => {
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
 };
+
+
+
 
 // Calcula el máximo folio usado en un volumen
 async function maxFolioUsado(volumen, excludeId = null) {
@@ -460,6 +517,25 @@ router.get('/folio/next', async (req, res) => {
 // POST /escrituras
 router.post('/', async (req, res) => {
   try {
+    // 🔐 Candado: máximo 2 escrituras sin recibo por abogado
+    const userName = getUserNameFromReq(req);
+    const roles = getUserRolesFromReq(req);
+    const isAdmin = roles.includes('ADMIN');
+
+    // Solo aplicamos candado a usuarios que NO son admin
+    // (puedes ajustar si quieres aplicarlo también a RECEPCION, etc.)
+    if (userName && !isAdmin) {
+      const pendientes = await countEscriturasSinReciboPorAbogado(userName);
+
+      if (pendientes >= 2) {
+        return res.status(403).json({
+          mensaje:
+            `No puedes tomar un nuevo número de escritura: ` +
+            `ya tienes ${pendientes} escrituras sin recibo o justificante a tu nombre.`,
+        });
+      }
+    }
+
     const { clienteId } = req.body || {};
     const now = new Date();
     let base = {
@@ -522,7 +598,6 @@ router.post('/', async (req, res) => {
         base.horaLecturaInicio = inicio;
         base.horaLecturaFin    = fin;
       } else if (inicio && !fin) {
-        // Acepta hora única para no romper flujos antiguos
         base.horaLecturaInicio = inicio;
       }
     }
@@ -546,6 +621,7 @@ router.post('/', async (req, res) => {
     res.status(500).json({ mensaje: 'Error creando escritura', detalle: e.message });
   }
 });
+
 
 
 // GET /escrituras/:id
