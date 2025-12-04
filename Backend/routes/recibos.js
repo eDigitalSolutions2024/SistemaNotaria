@@ -2,7 +2,7 @@
 const express = require('express');
 const router = express.Router();
 
-const Abogado = require('../models/Abogado'); 
+const Abogado = require('../models/Abogado');
 const Recibo = require('../models/Recibo');
 const ReciboLink = require('../models/ReciboLink');
 const Protocolito = require('../models/Protocolito');
@@ -26,15 +26,19 @@ function getUserRolesFromReq(req) {
   return roles.map(r => String(r).toUpperCase());
 }
 
+// quienes pueden CREAR / CANCELAR / VINCULAR recibos
 function canModifyRecibos(req) {
   const roles = getUserRolesFromReq(req);
-  return roles.some(r => ['ADMIN', 'CAJA', 'RECEPCION'].includes(r));
+  return roles.some(r => ['ADMIN', 'RECEPCION'].includes(r));
 }
 
+// quienes pueden VER recibos y catálogos relacionados
 function canViewRecibos(req) {
   const roles = getUserRolesFromReq(req);
-  // quienes sí pueden ver: admin, caja, recepción, abogado, asistente
-  return roles.some(r => ['ADMIN', 'CAJA', 'RECEPCION', 'ABOGADO', 'ASISTENTE'].includes(r));
+  // admin, caja, recepción, abogado, asistente
+  return roles.some(r =>
+    ['ADMIN', 'RECEPCION'].includes(r)
+  );
 }
 
 function buildFilter(query = {}) {
@@ -96,12 +100,12 @@ function mapToExcelRow(r) {
 }
 
 // 🔐 Candado general: solo ciertos roles pueden VER recibos
-router.use((req, res, next) => {
+/*router.use((req, res, next) => {
   if (!canViewRecibos(req)) {
     return res.status(403).json({ ok: false, msg: 'No tienes permiso para ver recibos' });
   }
   next();
-});
+});*/
 
 /* -------------------------- Protocolitos API -------------------------- */
 /**
@@ -216,12 +220,12 @@ router.get('/escrituras/search', async (req, res) => {
 router.post('/', async (req, res) => {
   try {
     // 🔒 Solo admin/caja/recepción pueden CREAR recibos
-    if (!canModifyRecibos(req)) {
+    if (canModifyRecibos(req)) {
       return res.status(403).json({ ok: false, msg: 'No tienes permiso para crear recibos' });
     }
 
     let {
-      fecha,
+      // fecha,  // la vamos a ignorar y usar ahora
       tipoTramite,
       recibiDe,
       abogado,             // fallback si escriben manual
@@ -238,7 +242,7 @@ router.post('/', async (req, res) => {
       creadoPor,
     } = req.body || {};
 
-    if (!fecha || !tipoTramite || !recibiDe) {
+    if (!tipoTramite || !recibiDe) {
       return res.status(400).json({ ok: false, msg: 'Faltan campos obligatorios' });
     }
 
@@ -299,8 +303,9 @@ router.post('/', async (req, res) => {
       restante = Math.max(0, totalTramite - totalPagado);
     }
 
+    const ahora = new Date();
     const payload = {
-      fecha,
+      fecha: ahora, // 👈 fecha en que se crea el recibo
       tipoTramite,
       recibiDe,
       abogado: abogadoNombre,
@@ -377,7 +382,13 @@ router.get('/:id/pdf', async (req, res) => {
     const rec = await Recibo.findById(req.params.id).lean();
     if (!rec) return res.status(404).json({ ok: false, msg: 'Recibo no encontrado' });
 
-    buildReciboPDF(res, rec); // stream del PDF
+    const data = {
+      ...rec,
+      // prioriza la fecha del recibo; si no hay, usa createdAt
+      fecha: rec.fecha || rec.createdAt,
+    };
+
+    buildReciboPDF(res, data); // 👈 aquí usamos data
   } catch (e) {
     console.error('RECIBO PDF ERROR:', e);
     return res.status(500).json({ ok: false, msg: 'Error generando PDF' });
