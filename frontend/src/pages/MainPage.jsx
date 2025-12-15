@@ -9,6 +9,8 @@ import ConsultarRecibos from '../components/ConsultarRecibos'; // ← NUEVO
 import Escrituras from '../components/Escrituras';
 import RegistrarGenerales from '../components/RegistrarGenerales';
 import ConsultarGenerales from '../components/ConsultarGenerales';
+import Presupuesto from '../components/Presupuesto';
+
 
 import { useAuth } from '../auth/AuthContext';
 import Login from '../components/Login';
@@ -23,7 +25,9 @@ function AuthedApp() {
   const { user, logout } = useAuth();
   const role = user?.role || '';
 
-  const [seccion, setSeccion] = useState(role === 'PROTOCOLITO' ? 'registrar-generales' : 'registrar-cliente');
+const [seccion, setSeccion] = useState(
+  role === 'PROTOCOLITO' ? 'registrar-generales' : 'registrar-cliente'
+);
   const [mostrarSubmenu, setMostrarSubmenu] = useState(false);
   const [mostrarSubmenuRecibos, setMostrarSubmenuRecibos] = useState(false); // ← NUEVO
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -45,39 +49,45 @@ function AuthedApp() {
       return <RegistrarGenerales />;
     }
 
-    switch (seccion) {
-      case 'registrar-cliente': return <RegistrarCliente />;
-      case 'registrar-abogado': return <FormAbogado />;
-      case 'registrar-generales': return <RegistrarGenerales />;
-      case 'consultar-generales': return <ConsultarGenerales />;
-      case 'protocolito':
-        return (
-          <Protocolito
-            onOpenRecibo={(row) => {
-              setReciboRow(row);
-              setSeccion('recibo');
-            }}
-          />
-        );
-      case 'Escrituras':
-        return (
-          <Escrituras
-            onOpenRecibo={(row) => {
-              setReciboRow(row);
-              setSeccion('recibo');
-            }}
-          />
-        );
-      case 'recibo':
-        return <Recibo row={reciboRow} onBack={() => setSeccion('protocolito')} />;
-      case 'recibos-consultar':
-        return (
-          <ConsultarRecibos
-            onOpenRecibo={(row) => { setReciboRow(row); setSeccion('recibo'); }}
-          />
-        );
-      default: return <RegistrarCliente />;
-    }
+
+
+      switch (seccion) {
+        case 'registrar-cliente': return <RegistrarCliente />;
+        case 'registrar-abogado': return <FormAbogado />;
+        case 'registrar-generales': return <RegistrarGenerales />;
+        case 'consultar-generales': return <ConsultarGenerales />;
+        case 'protocolito':
+          return (
+            <Protocolito
+              onOpenRecibo={(row) => {
+                setReciboRow(row);
+                setSeccion('recibo');
+              }}
+            />
+          );
+        case 'Escrituras':
+          return (
+            <Escrituras
+              onOpenRecibo={(row) => {
+                setReciboRow(row);
+                setSeccion('recibo');
+              }}
+            />
+          );
+        case 'recibo':
+          return <Recibo row={reciboRow} onBack={() => setSeccion('protocolito')} />;
+        case 'recibos-consultar':
+          return (
+            <ConsultarRecibos
+              onOpenRecibo={(row) => { setReciboRow(row); setSeccion('recibo'); }}
+            />
+          );
+        case 'presupuesto':                      // 👈 NUEVO
+          return <Presupuesto />;
+
+        default: return <RegistrarCliente />;
+      }
+
   };
 
 
@@ -216,6 +226,16 @@ function AuthedApp() {
                 <li title="Escrituras" style={itemStyle} onClick={() => go('Escrituras')}>
                   <span style={iconStyle}>🔍</span>{sidebarOpen && <span>Escrituras</span>}
                 </li>
+                 {/* Presupuesto  */}
+                <li
+                  title="Presupuesto"
+                  style={itemStyle}
+                  onClick={() => go('presupuesto')}   // 👈 minúsculas, igual al case
+                >
+                  <span style={iconStyle}>📑</span>
+                  {sidebarOpen && <span>Presupuesto</span>}
+                </li>
+
               </>
             )}
           </ul>

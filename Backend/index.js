@@ -6,16 +6,21 @@ const path = require('path');
 const dotenv = require('dotenv');
 
 const session = require('express-session');
-const MongoStore = require('connect-mongo');
+// Fix para connect-mongo (soporta default y común)
+const MongoStoreImport = require('connect-mongo');
+const MongoStore = MongoStoreImport.default || MongoStoreImport;
 
 const authRoutes = require('./routes/auth');
 const recibosRouter = require('./routes/recibos');
 const escriturasRoutes = require('./routes/escrituras');
 
 dotenv.config({
-  path: path.resolve(__dirname, process.env.NODE_ENV === 'production'
-    ? '.env.production'
-    : '.env.development')
+  path: path.resolve(
+    __dirname,
+    process.env.NODE_ENV === 'production'
+      ? '.env.production'
+      : '.env.development'
+  ),
 });
 
 // 1) Crear app y server primero
@@ -27,11 +32,15 @@ const { URL } = require('url');
 
 const extraOrigins = (process.env.CORS_EXTRA_ORIGINS || '')
   .split(',')
-  .map(s => s.trim())
+  .map((s) => s.trim())
   .filter(Boolean);
 
-/** Acepta http/https desde localhost/127.0.0.1/::1 (cualquier puerto),
- *  redes privadas 10.x, 192.168.x, 172.16–31.x y dominios extra por .env */
+/**
+ * Acepta http/https desde:
+ * - localhost / 127.0.0.1 / ::1 (cualquier puerto)
+ * - redes privadas 10.x, 192.168.x, 172.16–31.x
+ * - dominios extra configurados en CORS_EXTRA_ORIGINS (con esquema)
+ */
 function isAllowedOrigin(origin) {
   if (!origin) return true; // curl/Postman o same-origin sin header
   try {
@@ -39,6 +48,7 @@ function isAllowedOrigin(origin) {
     if (!/^https?:$/.test(u.protocol)) return false;
 
     const h = u.hostname;
+
     // localhost (cualquier puerto)
     if (h === 'localhost' || h === '127.0.0.1' || h === '::1') return true;
 
@@ -47,7 +57,7 @@ function isAllowedOrigin(origin) {
     if (/^192\.168\.\d+\.\d+$/.test(h)) return true;
     if (/^172\.(1[6-9]|2\d|3[0-1])\.\d+\.\d+$/.test(h)) return true;
 
-    // Dominios exactos permitidos por .env (incluye esquema)
+    // Dominios exactos permitidos por .env (incluye esquema completo)
     if (extraOrigins.includes(origin)) return true;
 
     return false;
@@ -69,10 +79,13 @@ const corsOptions = {
 
 app.use(cors(corsOptions));
 
-// Middleware de compatibilidad (mínimo cambio, ahora refleja dinámico)
+// Middleware de compatibilidad (refleja origen dinámico)
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Credentials', 'true');
-  res.header('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,PATCH,OPTIONS');
+  res.header(
+    'Access-Control-Allow-Methods',
+    'GET,POST,PUT,DELETE,PATCH,OPTIONS'
+  );
   res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
   const o = req.headers.origin;
@@ -102,40 +115,41 @@ io.on('connection', (socket) => {
   socket.on('disconnect', () => console.log('❌ Cliente desconectado'));
 });
 
-
 // 4) DB
-mongoose.connect(process.env.MONGO_URI, { useNewUrlParser: true, useUnifiedTopology: true })
+mongoose
+  .connect(process.env.MONGO_URI, {
+    useNewUrlParser: true,
+    useUnifiedTopology: true,
+  })
   .then(() => console.log('✅ MongoDB conectado correctamente'))
-  .catch(err => console.error('❌ Error al conectar MongoDB:', err));
+  .catch((err) => console.error('❌ Error al conectar MongoDB:', err));
 
 // 5) Middlewares
 app.use(express.json());
 
-
-app.use(session({
-  name: 'sid',
-  secret: process.env.SESSION_SECRET || 'cambia-esto-en-env',
-  resave: false,
-  saveUninitialized: false,
-  store: MongoStore.create({
-    // Reutiliza tu conexión ya abierta de mongoose (funciona con PM2 cluster)
-    client: mongoose.connection.getClient(),
-    ttl: 60 * 60,           // 1 hora (en segundos)
-    autoRemove: 'interval',
-    autoRemoveInterval: 10, // limpia expirados cada 10 min
-  }),
-  cookie: {
-    httpOnly: true,
-    // ⚠️ Como dices que sirves directo con PM2 (sin HTTPS/Proxy),
-    // probablemente estás en HTTP: usa secure=false en producción si no hay HTTPS.
-    secure: process.env.COOKIE_SECURE === 'true', // pon COOKIE_SECURE=true solo si usas HTTPS
-    sameSite: 'lax',
-    maxAge: 60 * 60 * 1000, // 1 hora en el navegador
-  },
-  rolling: true,            // 🔑 renueva expiración por actividad (inactividad real)
-}));
-
-
+// 5.1) Sesiones con MongoStore
+app.use(
+  session({
+    name: 'sid',
+    secret: process.env.SESSION_SECRET || 'cambia-esto-en-env',
+    resave: false,
+    saveUninitialized: false,
+    store: MongoStore.create({
+      // Reutiliza tu conexión ya abierta de mongoose
+      client: mongoose.connection.getClient(),
+      ttl: 60 * 60, // 1 hora (segundos)
+      autoRemove: 'interval',
+      autoRemoveInterval: 10, // limpia expirados cada 10 min
+    }),
+    cookie: {
+      httpOnly: true,
+      secure: process.env.COOKIE_SECURE === 'true', // pon COOKIE_SECURE=true solo si usas HTTPS
+      sameSite: 'lax',
+      maxAge: 60 * 60 * 1000, // 1 hora en el navegador
+    },
+    rolling: true, // renueva expiración por actividad
+  })
+);
 
 // 6) Rutas
 app.use('/api/auth', authRoutes);
@@ -143,18 +157,21 @@ app.use('/api/abogados', require('./routes/abogado'));
 app.use('/api/clientes', require('./routes/clientes'));
 app.use('/api/salas', require('./routes/salas'));
 app.use('/api/Protocolito', require('./routes/Protocolito'));
-app.use('/api/recibos', recibosRouter);              // ← dropdown de protocolitos
+app.use('/api/recibos', recibosRouter); // dropdown de protocolitos
 app.use('/api/plantillas', require('./routes/plantillas'));
 app.use('/api/escrituras', escriturasRoutes);
-// Si tu front usa prefijo /api: app.use('/api/escrituras', escriturasRoutes);
-
 app.use('/api/clientes-generales', require('./routes/clientesGenerales'));
+app.use('/api/presupuestos', require('./routes/presupuestos'));
 
-app.get('/', (_req, res) => res.send('🚀 Servidor de Notaría corriendo correctamente'));
+
+app.get('/', (_req, res) =>
+  res.send('🚀 Servidor de Notaría corriendo correctamente')
+);
 
 // 7) Arrancar
 const PORT = process.env.PORT || 8010;
 const HOST = process.env.HOST || '0.0.0.0';
+
 server.listen(PORT, HOST, () => {
   console.log(`✅ Backend corriendo en http://${HOST}:${PORT}`);
 });

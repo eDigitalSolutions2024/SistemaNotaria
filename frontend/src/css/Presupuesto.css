@@ -1,0 +1,271 @@
+/* Contenedor general: ocupa todo el ancho y alto disponible */
+.pres-page {
+  width: 100% !important;
+  max-width: none !important;
+  margin: 0 !important;
+  padding: 16px 24px !important;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch !important;   /* nada de centrar */
+}
+
+
+/* Encabezado */
+.pres-header h1 {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 700;
+  color: #111827;
+}
+
+.pres-header p {
+  margin: 4px 0 0;
+  color: #6b7280;
+  font-size: 14px;
+}
+
+/* Alertas */
+.pres-alert {
+  padding: 10px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+}
+.pres-alert-error {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+.pres-alert-success {
+  background: #dcfce7;
+  color: #166534;
+}
+
+/* Layout principal: FULL WIDTH */
+.pres-layout {
+  width: 100% !important;
+  max-width: none !important;
+}
+
+/* Tarjetas modernas */
+.pres-card,
+.pres-card-wide,
+.pres-grid-3,
+.pres-footer {
+  width: 100% !important;
+  max-width: none !important;
+  margin: 0 !important;
+}
+.pres-card-wide {
+  align-self: stretch !important;
+}
+.pres-card-title {
+  margin: 0 0 10px;
+  font-size: 15px;
+  font-weight: 600;
+  color: #111827;
+}
+
+.pres-subtitle {
+  margin: 6px 0 8px;
+  font-size: 13px;
+  color: #4b5563;
+}
+
+/* Filas y campos */
+.pres-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.pres-row-2 > .pres-field {
+  flex: 1 1 220px;
+}
+.pres-row-3 > .pres-field {
+  flex: 1 1 200px;
+}
+
+.pres-row-switches {
+  gap: 18px;
+  margin-top: 4px;
+}
+
+.pres-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 1 1 160px;
+  min-width: 0;
+}
+
+.pres-field-full {
+  flex: 1 1 100%;
+}
+
+.pres-field label {
+  font-size: 12px;
+  color: #4b5563;
+}
+
+.pres-field input,
+.pres-field textarea {
+  border-radius: 8px;
+  border: 1px solid #d1d5db;
+  padding: 6px 10px;
+  font-size: 13px;
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  background: #f9fafb;
+}
+
+.pres-field input:focus,
+.pres-field textarea:focus {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.3);
+  background: #ffffff;
+}
+
+.pres-field textarea {
+  resize: vertical;
+  min-height: 60px;
+}
+
+/* Switches (checkbox modernos) */
+.pres-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #374151;
+}
+
+.pres-switch input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+}
+
+/* react-select estilo compacto */
+.pres-select__control {
+  min-height: 36px !important;
+  border-radius: 8px !important;
+  border-color: #d1d5db !important;
+  box-shadow: none !important;
+}
+.pres-select__control--is-focused {
+  border-color: #2563eb !important;
+  box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.3) !important;
+}
+.pres-select__value-container {
+  padding: 0 8px !important;
+}
+.pres-select__single-value {
+  font-size: 13px;
+}
+
+/* GRID PRINCIPAL: 3 columnas grandes, FULL WIDTH */
+.pres-grid-3 {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  width: 100%;
+}
+
+/* Línea resumen dentro de tarjetas (totales) */
+.pres-summary-line {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid #e5e7eb;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 13px;
+  color: #374151;
+}
+
+.pres-summary-amount {
+  font-weight: 600;
+  color: #111827;
+}
+
+/* Footer inferior */
+.pres-footer {
+  display: flex;
+  gap: 16px;
+  align-items: stretch;
+}
+
+.pres-footer-total {
+  margin-left: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  padding: 12px 16px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #2563eb, #1d4ed8);
+  color: #ffffff;
+  min-width: 260px;
+  box-shadow: 0 10px 25px rgba(37, 99, 235, 0.35);
+}
+
+.pres-footer-label {
+  font-size: 12px;
+  opacity: 0.9;
+}
+
+.pres-footer-amount {
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.pres-btn-primary {
+  margin-top: 4px;
+  border: none;
+  padding: 8px 14px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 600;
+  background: #ffffff;
+  color: #1d4ed8;
+  cursor: pointer;
+  transition: transform 0.12s ease, box-shadow 0.12s ease, background 0.12s ease;
+}
+
+.pres-btn-primary:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.25);
+  background: #e0ebff;
+}
+
+.pres-btn-primary:disabled {
+  opacity: 0.7;
+  cursor: default;
+}
+
+/* Divider sutil */
+.pres-divider {
+  border-top: 1px dashed #e5e7eb;
+  margin: 8px 0;
+}
+
+/* Responsivo */
+@media (max-width: 1100px) {
+  .pres-grid-3 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 900px) {
+  .pres-grid-3 {
+    grid-template-columns: 1fr;
+  }
+
+  .pres-footer {
+    flex-direction: column;
+  }
+
+  .pres-footer-total {
+    align-items: flex-start;
+  }
+}
