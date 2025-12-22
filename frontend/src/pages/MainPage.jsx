@@ -5,12 +5,12 @@ import FormAbogado from '../components/FormAbogado';
 import RegistrarCliente from '../pages/Home';
 import Protocolito from '../components/Protocolito';
 import Recibo from '../components/ReciboNotaria17';
-import ConsultarRecibos from '../components/ConsultarRecibos'; // ← NUEVO
+import ConsultarRecibos from '../components/ConsultarRecibos';
 import Escrituras from '../components/Escrituras';
 import RegistrarGenerales from '../components/RegistrarGenerales';
 import ConsultarGenerales from '../components/ConsultarGenerales';
 import Presupuesto from '../components/Presupuesto';
-
+import EscrituraEstatus from '../components/EscriturasEstatus';
 
 import { useAuth } from '../auth/AuthContext';
 import Login from '../components/Login';
@@ -20,31 +20,26 @@ export default function MainPage() {
   return isAuthenticated ? <AuthedApp /> : <Login />;
 }
 
-
 function AuthedApp() {
   const { user, logout } = useAuth();
   const role = user?.role || '';
 
-  // 🔴 LIMITE DE INACTIVIDAD: 10s para pruebas
-  const INACTIVITY_LIMIT = 60*60*1000; // 10 segundos (luego lo cambias a 60*60*1000)
+  // 🔴 LIMITE DE INACTIVIDAD
+  const INACTIVITY_LIMIT = 60 * 60 * 1000;
 
   useEffect(() => {
-    // marcar actividad
     const touchActivity = () => {
       localStorage.setItem('lastActivity', String(Date.now()));
     };
 
-    // listeners de actividad
     const handler = () => touchActivity();
 
     window.addEventListener('click', handler);
     window.addEventListener('keydown', handler);
     window.addEventListener('mousemove', handler);
 
-    // inicializar al montar
     touchActivity();
 
-    // watcher que revisa cada segundo
     const intervalId = setInterval(() => {
       const raw = localStorage.getItem('lastActivity');
       const last = raw ? Number(raw) : 0;
@@ -52,22 +47,17 @@ function AuthedApp() {
 
       const diff = Date.now() - last;
 
-      // console.log('diff', diff); // para debug
-
       if (diff > INACTIVITY_LIMIT) {
         clearInterval(intervalId);
 
-        // limpiar cosas del front
         localStorage.removeItem('token');
         localStorage.removeItem('user');
         localStorage.removeItem('lastActivity');
 
-        // cerrar sesión en el contexto
         logout();
       }
     }, 1000);
 
-    // cleanup al desmontar
     return () => {
       window.removeEventListener('click', handler);
       window.removeEventListener('keydown', handler);
@@ -75,23 +65,25 @@ function AuthedApp() {
       clearInterval(intervalId);
     };
   }, [logout, INACTIVITY_LIMIT]);
-  // 👆 esto solo corre cuando AuthedApp está montado (o sea, autenticado)
 
-const [seccion, setSeccion] = useState(
-  role === 'PROTOCOLITO' ? 'registrar-generales' : 'registrar-cliente'
-);
+  const [seccion, setSeccion] = useState(
+    role === 'PROTOCOLITO' ? 'registrar-generales' : 'registrar-cliente'
+  );
   const [mostrarSubmenu, setMostrarSubmenu] = useState(false);
-  const [mostrarSubmenuRecibos, setMostrarSubmenuRecibos] = useState(false); // ← NUEVO
+  const [mostrarSubmenuRecibos, setMostrarSubmenuRecibos] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
 
   const [reciboRow, setReciboRow] = useState(null);
+
+  // ✅ NUEVO: escritura seleccionada para pantalla de estatus
+  const [escrituraEstatusRow, setEscrituraEstatusRow] = useState(null);
 
   const isMobile = () => window.innerWidth < 992;
 
   const go = (sec) => {
     setSeccion(sec);
     setMostrarSubmenu(false);
-    setMostrarSubmenuRecibos(false); // ← cerrar submenu Recibos
+    setMostrarSubmenuRecibos(false);
     if (isMobile()) setSidebarOpen(false);
   };
 
@@ -101,68 +93,100 @@ const [seccion, setSeccion] = useState(
       return <RegistrarGenerales />;
     }
 
+    switch (seccion) {
+      case 'registrar-cliente':
+        return <RegistrarCliente />;
 
+      case 'registrar-abogado':
+        return <FormAbogado />;
 
-      switch (seccion) {
-        case 'registrar-cliente': return <RegistrarCliente />;
-        case 'registrar-abogado': return <FormAbogado />;
-        case 'registrar-generales': return <RegistrarGenerales />;
-        case 'consultar-generales': return <ConsultarGenerales />;
-        case 'protocolito':
-          return (
-            <Protocolito
-              onOpenRecibo={(row) => {
-                setReciboRow(row);
-                setSeccion('recibo');
-              }}
-            />
-          );
-        case 'Escrituras':
-          return (
-            <Escrituras
-              onOpenRecibo={(row) => {
-                setReciboRow(row);
-                setSeccion('recibo');
-              }}
-            />
-          );
-        case 'recibo':
-          return <Recibo row={reciboRow} onBack={() => setSeccion('protocolito')} />;
-        case 'recibos-consultar':
-          return (
-            <ConsultarRecibos
-              onOpenRecibo={(row) => { setReciboRow(row); setSeccion('recibo'); }}
-            />
-          );
-        case 'presupuesto':                      // 👈 NUEVO
-          return <Presupuesto />;
+      case 'registrar-generales':
+        return <RegistrarGenerales />;
 
-        default: return <RegistrarCliente />;
-      }
+      case 'consultar-generales':
+        return <ConsultarGenerales />;
 
+      case 'protocolito':
+        return (
+          <Protocolito
+            onOpenRecibo={(row) => {
+              setReciboRow(row);
+              setSeccion('recibo');
+            }}
+          />
+        );
+
+      case 'Escrituras':
+        return (
+          <Escrituras
+            onOpenRecibo={(row) => {
+              setReciboRow(row);
+              setSeccion('recibo');
+            }}
+            // ✅ NUEVO: SOLO se abre al doble click (lo disparas desde Escrituras.jsx)
+            onOpenEstatus={(row) => {
+              setEscrituraEstatusRow(row);
+              setSeccion('escritura-estatus');
+            }}
+          />
+        );
+
+      // ✅ NUEVO: pantalla del estatus de escritura (se entra por doble click)
+      case 'escritura-estatus':
+        return (
+          <EscrituraEstatus
+            row={escrituraEstatusRow}
+            onBack={() => setSeccion('Escrituras')}
+          />
+        );
+
+      case 'recibo':
+        return <Recibo row={reciboRow} onBack={() => setSeccion('protocolito')} />;
+
+      case 'recibos-consultar':
+        return (
+          <ConsultarRecibos
+            onOpenRecibo={(row) => {
+              setReciboRow(row);
+              setSeccion('recibo');
+            }}
+          />
+        );
+
+      case 'presupuesto':
+        return <Presupuesto />;
+
+      default:
+        return <RegistrarCliente />;
+    }
   };
 
+  const sidebarStyle = useMemo(
+    () => ({
+      background: '#1f2937',
+      color: '#fff',
+      width: sidebarOpen ? 250 : 60,
+      transition: 'width .25s ease',
+      overflow: 'hidden',
+      padding: sidebarOpen ? '16px 16px' : '16px 8px',
+      boxSizing: 'border-box',
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 8,
+      position: 'relative',
+      minHeight: '100vh',
+    }),
+    [sidebarOpen]
+  );
 
-  const sidebarStyle = useMemo(() => ({
-    background: '#1f2937',
-    color: '#fff',
-    width: sidebarOpen ? 250 : 60,
-    transition: 'width .25s ease',
-    overflow: 'hidden',
-    padding: sidebarOpen ? '16px 16px' : '16px 8px',
-    boxSizing: 'border-box',
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 8,
-    position: 'relative',
-    minHeight: '100vh'
-  }), [sidebarOpen]);
-
-  const mainStyle = useMemo(() => ({
-    flex: 1,
-    padding: 10,
-    background: '#f6f7fb',
-  }), []);
+  const mainStyle = useMemo(
+    () => ({
+      flex: 1,
+      padding: 10,
+      background: '#f6f7fb',
+    }),
+    []
+  );
 
   const itemStyle = {
     listStyle: 'none',
@@ -171,7 +195,7 @@ const [seccion, setSeccion] = useState(
     gap: 12,
     padding: '10px 8px',
     borderRadius: 8,
-    cursor: 'pointer'
+    cursor: 'pointer',
   };
   const iconStyle = { width: 28, textAlign: 'center', fontSize: 18 };
 
@@ -183,7 +207,7 @@ const [seccion, setSeccion] = useState(
       >
         <button
           className="sidebar-handle"
-          onClick={() => setSidebarOpen(o => !o)}
+          onClick={() => setSidebarOpen((o) => !o)}
           aria-label={sidebarOpen ? 'Ocultar menú' : 'Mostrar menú'}
           aria-expanded={sidebarOpen}
           title={sidebarOpen ? 'Ocultar' : 'Mostrar'}
@@ -193,14 +217,17 @@ const [seccion, setSeccion] = useState(
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 4px' }}>
           <span style={iconStyle}>⚖️</span>
-          {sidebarOpen && <div className="sidebar-title" style={{ fontWeight: 700 }}>Notaría 17</div>}
+          {sidebarOpen && (
+            <div className="sidebar-title" style={{ fontWeight: 700 }}>
+              Notaría 17
+            </div>
+          )}
         </div>
         <hr style={{ borderColor: '#374151', margin: '6px 0' }} />
 
         <div style={{ overflowY: 'auto' }}>
           <ul style={{ padding: 0, margin: 0 }}>
             {role === 'PROTOCOLITO' ? (
-              // 🔒 MENÚ ESPECIAL PARA PROTOCOLITO
               <li
                 style={itemStyle}
                 title="Registrar Generales"
@@ -210,7 +237,6 @@ const [seccion, setSeccion] = useState(
                 {sidebarOpen && <span>Registrar Generales</span>}
               </li>
             ) : (
-              // 🌐 MENÚ NORMAL PARA ADMIN Y DEMÁS ROLES
               <>
                 {/* Registrar (submenu) */}
                 <li
@@ -218,28 +244,49 @@ const [seccion, setSeccion] = useState(
                   className="submenu"
                   title="Registrar"
                   onClick={() => {
-                    if (!sidebarOpen) { setSidebarOpen(true); return; }
-                    setMostrarSubmenu(v => !v);
+                    if (!sidebarOpen) {
+                      setSidebarOpen(true);
+                      return;
+                    }
+                    setMostrarSubmenu((v) => !v);
                   }}
                 >
-                  <span className="icon" style={iconStyle}>📋</span>
+                  <span className="icon" style={iconStyle}>
+                    📋
+                  </span>
                   {sidebarOpen && <span>Registrar ▾</span>}
                 </li>
                 {sidebarOpen && mostrarSubmenu && (
                   <ul style={{ listStyle: 'none', paddingLeft: 40, marginTop: 4, marginBottom: 8 }}>
-                    <li style={{ ...itemStyle, padding: '8px 6px' }} onClick={() => go('registrar-cliente')}>
-                      <span style={iconStyle}>👤</span><span>Registrar Cliente</span>
+                    <li
+                      style={{ ...itemStyle, padding: '8px 6px' }}
+                      onClick={() => go('registrar-cliente')}
+                    >
+                      <span style={iconStyle}>👤</span>
+                      <span>Registrar Cliente</span>
                     </li>
-                    <li style={{ ...itemStyle, padding: '8px 6px' }} onClick={() => go('registrar-generales')}>
-                      <span style={iconStyle}>📚</span><span>Registrar Generales</span>
+                    <li
+                      style={{ ...itemStyle, padding: '8px 6px' }}
+                      onClick={() => go('registrar-generales')}
+                    >
+                      <span style={iconStyle}>📚</span>
+                      <span>Registrar Generales</span>
                     </li>
-                    <li style={{ ...itemStyle, padding: '8px 6px' }} onClick={() => go('consultar-generales')}>
-                      <span style={iconStyle}>🔎</span><span>Consultar Generales</span>
+                    <li
+                      style={{ ...itemStyle, padding: '8px 6px' }}
+                      onClick={() => go('consultar-generales')}
+                    >
+                      <span style={iconStyle}>🔎</span>
+                      <span>Consultar Generales</span>
                     </li>
 
                     {role === 'admin' && (
-                      <li style={{ ...itemStyle, padding: '8px 6px' }} onClick={() => go('registrar-abogado')}>
-                        <span style={iconStyle}>👨‍⚖️</span><span>Registrar Abogado</span>
+                      <li
+                        style={{ ...itemStyle, padding: '8px 6px' }}
+                        onClick={() => go('registrar-abogado')}
+                      >
+                        <span style={iconStyle}>👨‍⚖️</span>
+                        <span>Registrar Abogado</span>
                       </li>
                     )}
                   </ul>
@@ -251,8 +298,11 @@ const [seccion, setSeccion] = useState(
                   className="submenu"
                   title="Recibos"
                   onClick={() => {
-                    if (!sidebarOpen) { setSidebarOpen(true); return; }
-                    setMostrarSubmenuRecibos(v => !v);
+                    if (!sidebarOpen) {
+                      setSidebarOpen(true);
+                      return;
+                    }
+                    setMostrarSubmenuRecibos((v) => !v);
                   }}
                 >
                   <span style={iconStyle}>📄</span>
@@ -260,34 +310,40 @@ const [seccion, setSeccion] = useState(
                 </li>
                 {sidebarOpen && mostrarSubmenuRecibos && (
                   <ul style={{ listStyle: 'none', paddingLeft: 40, marginTop: 4, marginBottom: 8 }}>
-                    <li style={{ ...itemStyle, padding: '8px 6px' }} onClick={() => go('recibo')}>
-                      <span style={iconStyle}>➕</span><span>Generar recibo</span>
+                    <li
+                      style={{ ...itemStyle, padding: '8px 6px' }}
+                      onClick={() => go('recibo')}
+                    >
+                      <span style={iconStyle}>➕</span>
+                      <span>Generar recibo</span>
                     </li>
-                    <li style={{ ...itemStyle, padding: '8px 6px' }} onClick={() => go('recibos-consultar')}>
-                      <span style={iconStyle}>🗂️</span><span>Consultar recibos</span>
+                    <li
+                      style={{ ...itemStyle, padding: '8px 6px' }}
+                      onClick={() => go('recibos-consultar')}
+                    >
+                      <span style={iconStyle}>🗂️</span>
+                      <span>Consultar recibos</span>
                     </li>
                   </ul>
                 )}
 
                 {/* Protocolito */}
                 <li title="Protocolito" style={itemStyle} onClick={() => go('protocolito')}>
-                  <span style={iconStyle}>📑</span>{sidebarOpen && <span>Protocolito</span>}
+                  <span style={iconStyle}>📑</span>
+                  {sidebarOpen && <span>Protocolito</span>}
                 </li>
 
                 {/* Escrituras */}
                 <li title="Escrituras" style={itemStyle} onClick={() => go('Escrituras')}>
-                  <span style={iconStyle}>🔍</span>{sidebarOpen && <span>Escrituras</span>}
+                  <span style={iconStyle}>🔍</span>
+                  {sidebarOpen && <span>Escrituras</span>}
                 </li>
-                 {/* Presupuesto  */}
-                <li
-                  title="Presupuesto"
-                  style={itemStyle}
-                  onClick={() => go('presupuesto')}   // 👈 minúsculas, igual al case
-                >
+
+                {/* Presupuesto */}
+                <li title="Presupuesto" style={itemStyle} onClick={() => go('presupuesto')}>
                   <span style={iconStyle}>📑</span>
                   {sidebarOpen && <span>Presupuesto</span>}
                 </li>
-
               </>
             )}
           </ul>
@@ -301,14 +357,18 @@ const [seccion, setSeccion] = useState(
             paddingTop: 10,
             display: 'flex',
             flexDirection: 'column',
-            gap: 6
+            gap: 6,
           }}
         >
           {sidebarOpen ? (
             <>
               <div style={{ fontSize: 12, opacity: 0.85 }}>
-                <div><b>ID</b> {user?._id || user?.id || '-'}</div>
-                <div><b>Rol</b> {user?.role || '-'}</div>
+                <div>
+                  <b>ID</b> {user?._id || user?.id || '-'}
+                </div>
+                <div>
+                  <b>Rol</b> {user?.role || '-'}
+                </div>
               </div>
               <button
                 onClick={logout}
@@ -318,7 +378,7 @@ const [seccion, setSeccion] = useState(
                   border: 'none',
                   padding: '8px 10px',
                   borderRadius: 8,
-                  cursor: 'pointer'
+                  cursor: 'pointer',
                 }}
               >
                 Cerrar sesión
@@ -334,7 +394,7 @@ const [seccion, setSeccion] = useState(
                 border: 'none',
                 padding: 8,
                 borderRadius: 8,
-                cursor: 'pointer'
+                cursor: 'pointer',
               }}
             >
               ⎋

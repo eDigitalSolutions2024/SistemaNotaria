@@ -10,6 +10,7 @@ const PDFDocument = require('pdfkit');
 const xlsx = require('xlsx');
 
 const Escritura = require('../models/Escritura');
+const Presupuesto = require('../models/Presupuesto');
 
 // (Opcional) si tienes modelo Cliente; si no, no pasa nada
 let Cliente = null;
@@ -718,16 +719,13 @@ router.get('/folio/next', async (req, res) => {
 // POST /escrituras
 router.post('/', async (req, res) => {
   try {
-    // 🔐 Candado: máximo 2 escrituras sin recibo por abogado
+    // 🔐 Candado: máximo 5 escrituras sin recibo por abogado
     const userName = getUserNameFromReq(req);
     const roles = getUserRolesFromReq(req);
     const isAdmin = roles.includes('ADMIN');
 
-    // Solo aplicamos candado a usuarios que NO son admin
-    // (puedes ajustar si quieres aplicarlo también a RECEPCION, etc.)
     if (userName && !isAdmin) {
       const pendientes = await countEscriturasSinReciboPorAbogado(userName);
-
       if (pendientes >= 5) {
         return res.status(403).json({
           mensaje:
@@ -737,8 +735,9 @@ router.post('/', async (req, res) => {
       }
     }
 
-    const { clienteId } = req.body || {};
+    const { clienteId, clienteNumero } = req.body || {}; // ✅ clienteNumero opcional
     const now = new Date();
+
     let base = {
       numeroControl: await nextNumeroControl(),
       tipoTramite: 'Por definir',
@@ -747,17 +746,48 @@ router.post('/', async (req, res) => {
       abogado: '—',
     };
 
+    // =========================
+    // 1) Datos desde Cliente (si viene clienteId)
+    // =========================
+    let clienteNumParaPresupuesto = null;
+
     if (clienteId && Cliente) {
       const cli = await Cliente.findById(clienteId).lean();
       if (cli) {
-        base.cliente = cli.nombre || base.cliente;
+        // ⚠️ IMPORTANTE:
+        // Para presupuesto necesitas el número de cliente (idCliente).
+        // Tu sistema hoy guarda en Escritura "cliente" como string.
+        // Aquí lo mejor es guardar el número como string para que todo sea consistente.
+        const num = Number(cli.idCliente || cli.idClienteNumero || cli.numeroCliente || cli.id);
+        if (Number.isFinite(num)) {
+          base.cliente = String(num); // ✅ queda "2679"
+          clienteNumParaPresupuesto = num;
+        } else {
+          // fallback (si no hay número en el cliente)
+          base.cliente = cli.nombre || base.cliente;
+        }
+
         base.abogado = cli.abogado || base.abogado;
-        base.tipoTramite = cli.motivo || cli.tipoTramite || cli.servicio || cli.accion || base.tipoTramite;
+        base.tipoTramite =
+          cli.motivo || cli.tipoTramite || cli.servicio || cli.accion || base.tipoTramite;
         base.fecha = cli.hora_llegada ? new Date(cli.hora_llegada) : base.fecha;
       }
     }
 
-    // Soporte de volumen/folio directo en POST (opcional)
+    // =========================
+    // 2) Si el frontend manda clienteNumero, úsalo (por si no hay Cliente model o no trae idCliente)
+    // =========================
+    if (!clienteNumParaPresupuesto && clienteNumero != null && clienteNumero !== '') {
+      const num = Number(clienteNumero);
+      if (Number.isFinite(num)) {
+        base.cliente = String(num);
+        clienteNumParaPresupuesto = num;
+      }
+    }
+
+    // =========================
+    // 3) Folios (igual que ya tenías)
+    // =========================
     const volumen = normVolumen(req.body.volumen);
     const folioDesde = normFolio(req.body.folioDesde);
     const folioHasta = normFolio(req.body.folioHasta);
@@ -768,25 +798,28 @@ router.post('/', async (req, res) => {
       }
       const clash = await Escritura.findOne(overlapQuery(volumen, folioDesde, folioHasta));
       if (clash) return res.status(409).json({ mensaje: `Traslape de folio con #${clash.numeroControl}` });
+
       base.volumen = volumen;
       base.folioDesde = folioDesde;
       base.folioHasta = folioHasta;
     }
 
-    // >>> TESTAMENTO — guardar rango de lectura si aplica (con alias)
+    // =========================
+    // 4) Testamento (igual que ya tenías)
+    // =========================
     const tipo = String(req.body.tipoTramite ?? base.tipoTramite ?? '').toLowerCase();
     if (tipo.includes('testamento')) {
       const inicioRaw =
         req.body.horaLecturaInicio ??
-        req.body.horaLectura ??   // compat viejo
-        req.body.horaInicio ??    // alias camel
-        req.body.hora_inicio ??   // alias snake
+        req.body.horaLectura ??
+        req.body.horaInicio ??
+        req.body.hora_inicio ??
         null;
 
       const finRaw =
         req.body.horaLecturaFin ??
-        req.body.horaFin ??       // alias camel
-        req.body.hora_fin ??      // alias snake
+        req.body.horaFin ??
+        req.body.hora_fin ??
         null;
 
       const inicio = (typeof inicioRaw === 'string') ? inicioRaw.trim() : inicioRaw;
@@ -797,31 +830,83 @@ router.post('/', async (req, res) => {
           return res.status(400).json({ mensaje: 'Rango de lectura inválido (HH:mm)' });
         }
         base.horaLecturaInicio = inicio;
-        base.horaLecturaFin    = fin;
+        base.horaLecturaFin = fin;
       } else if (inicio && !fin) {
         base.horaLecturaInicio = inicio;
       }
     }
-    // <<< TESTAMENTO
 
-    // Montos (acepta camelCase y snake_case)
-    const totalImpuestos = numOrNull(req.body.totalImpuestos ?? req.body.total_impuestos);
-    const valorAvaluo = numOrNull(req.body.valorAvaluo ?? req.body.valor_avaluo);
+    // =========================
+    // 5) Montos (si vienen del frontend, se respetan)
+    // =========================
+    const totalImpuestos   = numOrNull(req.body.totalImpuestos ?? req.body.total_impuestos);
+    const valorAvaluo      = numOrNull(req.body.valorAvaluo ?? req.body.valor_avaluo);
     const totalGastosExtra = numOrNull(req.body.totalGastosExtra ?? req.body.total_gastos_extra);
-    const totalHonorarios = numOrNull(req.body.totalHonorarios ?? req.body.total_honorarios);
+    const totalHonorarios  = numOrNull(req.body.totalHonorarios ?? req.body.total_honorarios);
 
-    if (totalImpuestos !== undefined) base.totalImpuestos = totalImpuestos;
-    if (valorAvaluo !== undefined) base.valorAvaluo = valorAvaluo;
-    if (totalGastosExtra !== undefined) base.totalGastosExtra = totalGastosExtra;
-    if (totalHonorarios !== undefined) base.totalHonorarios = totalHonorarios;
+    const montosYaVienen =
+      totalImpuestos !== undefined ||
+      valorAvaluo !== undefined ||
+      totalGastosExtra !== undefined ||
+      totalHonorarios !== undefined;
 
+    if (montosYaVienen) {
+      if (totalImpuestos !== undefined) base.totalImpuestos = totalImpuestos;
+      if (valorAvaluo !== undefined) base.valorAvaluo = valorAvaluo;
+      if (totalGastosExtra !== undefined) base.totalGastosExtra = totalGastosExtra;
+      if (totalHonorarios !== undefined) base.totalHonorarios = totalHonorarios;
+    }
+
+    // =========================
+    // 6) ✅ AUTO-LLENADO DESDE PRESUPUESTO (si NO vienen montos)
+    // =========================
+    if (!montosYaVienen && Number.isFinite(clienteNumParaPresupuesto)) {
+      const pres = await Presupuesto
+        .findOne({ cliente: clienteNumParaPresupuesto })
+        .sort({ createdAt: -1 })
+        .lean();
+
+      if (pres) {
+        const cargos = pres.cargos || {};
+        const honor = pres.honorariosCalc || {};
+
+        const sumKeys = (obj, keys) =>
+          keys.reduce((acc, k) => acc + (Number(obj?.[k]) || 0), 0);
+
+        const impuestosKeys = [
+          'isr','isrAdquisicion',
+          'traslacionDominio','traslacionDominio2','traslacionDominioRecargos',
+          'ivaLocalComerc','actosJuridicos',
+          'impuestoCedular','impuestoPredial',
+        ];
+
+        const gastosKeys = [
+          'registroPublico','registroPubVtaHip','registroPubPoderes','registroPubOtros','registroPublicoRecargos',
+          'solicPermiso','avisoPermiso','costoAvaluo','gastosGestiones',
+          'tramiteForaneo','otrosConceptos',
+          'certificados1','certificados2','certificados3',
+        ];
+
+        base.valorAvaluo = numOrNull(pres.avaluo ?? pres.valorOperacion ?? 0);
+        base.totalHonorarios = numOrNull(honor.totalHonorarios ?? 0);
+        base.totalImpuestos = numOrNull(sumKeys(cargos, impuestosKeys));
+        base.totalGastosExtra = numOrNull(sumKeys(cargos, gastosKeys));
+
+        // opcional: empujar tipoTramite desde el presupuesto si quieres
+        // if (pres.tipoTramite) base.tipoTramite = pres.tipoTramite;
+      }
+    }
+
+    // Crear
     const created = await Escritura.create(base);
     res.status(201).json(created);
+
   } catch (e) {
     if (e?.code === 11000) return res.status(409).json({ mensaje: 'El número de control ya existe' });
     res.status(500).json({ mensaje: 'Error creando escritura', detalle: e.message });
   }
 });
+
 
 
 

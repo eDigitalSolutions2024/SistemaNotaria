@@ -9,6 +9,7 @@ import {
 
 import { useAuth } from '../auth/AuthContext';
 import '../css/styles.css';
+import EscrituraEstatus from './EscriturasEstatus';
 
 const API = process.env.REACT_APP_API_URL || 'http://localhost:8010';
 
@@ -25,6 +26,11 @@ const emptyRow = {
   valorAvaluo: null,
   totalGastosExtra: null,
   totalHonorarios: null,
+
+  // --- ESTATUS / CHECKLIST ---
+  documentos: {},
+  anticipos: { anticipo1: '', anticipo2: '', anticipo3: '' },
+  comentariosEstatus: '',
 };
 
 const same = (a, b) => String(a ?? '') === String(b ?? '');
@@ -244,14 +250,15 @@ const stripSubtipo = (tipo) =>
     .replace(/\s+/g, ' ')
     .trim();
 
-// >>> PRIORIZA MOTIVO PARA TIPO DE TRÁMITE <<<
 function applyClienteToEscritura(cliente, prev) {
-  /*const fechaISO = cliente?.hora_llegada
-    ? formatDateInput(cliente.hora_llegada)
-    : formatDateInput(new Date());*/
+  const numero =
+    cliente?.idCliente ?? cliente?.idClienteNumero ?? cliente?.numeroCliente ?? cliente?.id ?? null;
+
   return {
     ...prev,
-    cliente: cliente?.nombre || prev.cliente,
+    // ✅ guardar número como string si existe
+    cliente: numero != null ? String(numero) : (cliente?.nombre || prev.cliente),
+
     tipoTramite:
       cliente?.motivo ||
       cliente?.tipoTramite ||
@@ -259,9 +266,9 @@ function applyClienteToEscritura(cliente, prev) {
       cliente?.accion ||
       prev.tipoTramite,
     abogado: cliente?.abogado || prev.abogado,
-   
   };
 }
+
 
 const pickRowFromVG = (p, row) => (p && p.row) ? p.row : (row || p || {});
 
@@ -316,6 +323,7 @@ const formatHorarioCell = (row) => {
 // ----- componente -----
 export default function Escrituras({ onOpenRecibo }) {
   const { user } = useAuth();
+ 
 
   // 🔹 Helpers de usuario
   const getUserName = (u) =>
@@ -413,6 +421,11 @@ export default function Escrituras({ onOpenRecibo }) {
   const [deliverPhone, setDeliverPhone] = useState('—');
   const [deliverNotes, setDeliverNotes] = useState('');
   const [deliverLoading, setDeliverLoading] = useState(false);
+
+// --- Modal Estatus (detalle) ---
+const [estatusOpen, setEstatusOpen] = useState(false);
+const [estatusRow, setEstatusRow] = useState(null);
+
 
   // Abogados (export)
   const [abogadosOpts, setAbogadosOpts] = useState([]);
@@ -766,6 +779,17 @@ function getNewFormErrors({ newRow, newVolumen, newFolioDesde, newFolioHasta, ne
     closeTplMenu();
   };
 
+  async function fetchUltimoPresupuesto(apiBase, clienteNumero) {
+  if (!clienteNumero) return null;
+  try {
+    const { data } = await axios.get(`${apiBase}/presupuestos/ultimo/cliente/${clienteNumero}`);
+    return data; // puede ser null
+  } catch (e) {
+    return null;
+  }
+}
+
+
   const fetchPicker = async (query) => {
     setPickerLoading(true);
     try {
@@ -811,22 +835,71 @@ function getNewFormErrors({ newRow, newVolumen, newFolioDesde, newFolioHasta, ne
     pickerTimer.current = setTimeout(() => fetchPicker(v), 250);
   };
 
-  const selectClienteFromPicker = (cliente) => {
-    if (!cliente) return;
-    if (pickerTarget === 'new') {
-      setSelectedCliente(cliente);
-      setNewRow((prev) => applyClienteToEscritura(cliente, prev));
-      const baseTipo =
-        cliente?.motivo || cliente?.tipoTramite || cliente?.servicio || cliente?.accion || '';
-      setNewSubtipo(getSubtipoFromTipo(baseTipo));
-    } else if (pickerTarget) {
-      setDrafts((prev) => ({
-        ...prev,
-        [pickerTarget]: applyClienteToEscritura(cliente, prev[pickerTarget] || {})
-      }));
+  const selectClienteFromPicker = async (cliente) => {
+  if (!cliente) return;
+
+  const clienteNumero =
+    cliente?.idCliente ?? cliente?.numeroCliente ?? cliente?.id ?? null;
+
+  if (pickerTarget === 'new') {
+    setSelectedCliente(cliente);
+
+    // 1) aplica datos base
+    setNewRow((prev) => {
+      const next = applyClienteToEscritura(cliente, prev);
+      return {
+        ...next,
+        // limpia montos antes de cargar (opcional)
+        totalImpuestos: null,
+        valorAvaluo: null,
+        totalGastosExtra: null,
+        totalHonorarios: null,
+      };
+    });
+
+    const baseTipo =
+      cliente?.motivo || cliente?.tipoTramite || cliente?.servicio || cliente?.accion || '';
+    setNewSubtipo(getSubtipoFromTipo(baseTipo));
+
+    // 2) si el trámite lleva montos, trae presupuesto y rellena
+    const tipoFinal =
+      (cliente?.motivo || cliente?.tipoTramite || cliente?.servicio || cliente?.accion || '').trim();
+
+    if (isTramiteConMontos(tipoFinal) && clienteNumero) {
+      const p = await fetchUltimoPresupuesto(API, clienteNumero);
+
+      if (p) {
+        setNewRow((prev) => ({
+          ...prev,
+          totalImpuestos: p.totalImpuestos ?? 0,
+          valorAvaluo: p.valorAvaluo ?? 0,
+          totalGastosExtra: p.totalGastosExtra ?? 0,
+          totalHonorarios: p.totalHonorarios ?? 0,
+          presupuestoId: p.presupuestoId ?? null, // opcional
+        }));
+      } else {
+        // si no hay presupuesto para ese cliente
+        setNewRow((prev) => ({
+          ...prev,
+          totalImpuestos: 0,
+          valorAvaluo: 0,
+          totalGastosExtra: 0,
+          totalHonorarios: 0,
+          presupuestoId: null,
+        }));
+      }
     }
-    setPickerOpen(false);
-  };
+  } else if (pickerTarget) {
+    // edición: también podrías cargar presupuesto aquí si quieres
+    setDrafts((prev) => ({
+      ...prev,
+      [pickerTarget]: applyClienteToEscritura(cliente, prev[pickerTarget] || {})
+    }));
+  }
+
+  setPickerOpen(false);
+};
+
 
   const fetchData = async () => {
     setLoading(true);
@@ -969,6 +1042,9 @@ function getNewFormErrors({ newRow, newVolumen, newFolioDesde, newFolioHasta, ne
     // 5) Crear escritura (backend genera # de control)
     const postPayload = {
       clienteId: cid,
+      // ✅ este es el que usa Presupuesto.cliente (ej. 2679)
+  clienteNumero: selectedCliente?.idCliente ?? selectedCliente?.id ?? selectedCliente?.numeroCliente ?? null,
+
       volumen: newVolumen || null,
       folioDesde: newFolioDesde ? Number(newFolioDesde) : null,
       folioHasta: newFolioHasta ? Number(newFolioHasta) : null,
@@ -998,6 +1074,11 @@ function getNewFormErrors({ newRow, newVolumen, newFolioDesde, newFolioHasta, ne
     }
 
     const aplicaMontos = isTramiteConMontos(finalTipo);
+    const userPusoMontos =
+  newRow.totalImpuestos !== '' && newRow.totalImpuestos != null &&
+  newRow.valorAvaluo !== '' && newRow.valorAvaluo != null &&
+  newRow.totalGastosExtra !== '' && newRow.totalGastosExtra != null &&
+  newRow.totalHonorarios !== '' && newRow.totalHonorarios != null;
 
     // 6) PUT de aseguramiento (por si POST ignora campos)
     if (createdId) {
@@ -1013,14 +1094,14 @@ function getNewFormErrors({ newRow, newVolumen, newFolioDesde, newFolioHasta, ne
         ...(isTestamentoTipo(finalTipo)
           ? { horaLecturaInicio: newHoraInicio, horaLecturaFin: newHoraFin }
           : {}),
-        ...(aplicaMontos
-          ? {
-              totalImpuestos: Number(newRow.totalImpuestos),
-              valorAvaluo: Number(newRow.valorAvaluo),
-              totalGastosExtra: Number(newRow.totalGastosExtra),
-              totalHonorarios: Number(newRow.totalHonorarios)
-            }
-          : {})
+        ...(aplicaMontos && userPusoMontos
+  ? {
+      totalImpuestos: Number(newRow.totalImpuestos),
+      valorAvaluo: Number(newRow.valorAvaluo),
+      totalGastosExtra: Number(newRow.totalGastosExtra),
+      totalHonorarios: Number(newRow.totalHonorarios)
+    }
+  : {})
       };
 
       const { data: updated } = await axios.put(`${API}/escrituras/${createdId}`, payloadPut);
@@ -2241,6 +2322,10 @@ if (sugerido != null) {
             sorting: { sortModel: [{ field: 'numeroControl', sort: 'desc' }] }
           }}
           disableRowSelectionOnClick
+          onRowDoubleClick={(params) => {
+            setEstatusRow(params?.row || null);
+            setEstatusOpen(true);
+          }}
           sx={{
             border: '1px solid #eee',
             '& .MuiDataGrid-columnHeaders': { backgroundColor: '#f5f5f5' },
@@ -2251,6 +2336,7 @@ if (sugerido != null) {
               whiteSpace: 'normal'
             }
           }}
+          
         />
 
         <Menu anchorEl={tplAnchorEl} open={Boolean(tplAnchorEl)} onClose={closeTplMenu}>
@@ -2478,6 +2564,35 @@ if (sugerido != null) {
           <Button onClick={() => setJustifyViewOpen(false)}>Cerrar</Button>
         </DialogActions>
       </Dialog>
+
+      <Dialog
+  open={estatusOpen}
+  onClose={() => setEstatusOpen(false)}
+  fullWidth
+  maxWidth="lg"
+>
+  <DialogTitle>
+    Estatus de escritura {estatusRow?.numeroControl ? `#${estatusRow.numeroControl}` : ''}
+  </DialogTitle>
+
+  <DialogContent dividers>
+  {estatusRow?._id ? (
+    <EscrituraEstatus
+      escrituraId={estatusRow._id}
+      row={estatusRow}
+      onClose={() => setEstatusOpen(false)}
+    />
+  ) : (
+    <div style={{ padding: 8 }}>No hay ID de escritura.</div>
+  )}
+</DialogContent>
+
+
+  <DialogActions>
+    <Button onClick={() => setEstatusOpen(false)}>Cerrar</Button>
+  </DialogActions>
+</Dialog>
+
     </div>
   );
 }

@@ -355,6 +355,60 @@ router.get('/', async (_req, res) => {
   }
 });
 
+
+router.get('/ultimo/cliente/:cliente', async (req, res) => {
+  try {
+    const clienteNum = Number(req.params.cliente);
+    if (!Number.isFinite(clienteNum)) {
+      return res.status(400).json({ message: 'Cliente inválido' });
+    }
+
+    const presupuesto = await Presupuesto.findOne({ cliente: clienteNum })
+      .sort({ createdAt: -1 });
+
+    if (!presupuesto) return res.json(null);
+
+    const cargos = presupuesto.cargos || {};
+    const honor = presupuesto.honorariosCalc || {};
+
+    const impuestosKeys = [
+      'isr','isrAdquisicion',
+      'traslacionDominio','traslacionDominio2','traslacionDominioRecargos',
+      'ivaLocalComerc','actosJuridicos',
+      'impuestoCedular','impuestoPredial',
+    ];
+
+    const gastosKeys = [
+      'registroPublico','registroPubVtaHip','registroPubPoderes','registroPubOtros','registroPublicoRecargos',
+      'solicPermiso','avisoPermiso','costoAvaluo','gastosGestiones',
+      'tramiteForaneo','otrosConceptos',
+      'certificados1','certificados2','certificados3',
+    ];
+
+    const sumKeys = (obj, keys) =>
+      keys.reduce((acc, k) => acc + (Number(obj?.[k]) || 0), 0);
+
+    res.json({
+      presupuestoId: presupuesto._id,
+      cliente: presupuesto.cliente,
+      tipoTramite: presupuesto.tipoTramite,
+      valorAvaluo: Number(presupuesto.avaluo ?? presupuesto.valorOperacion ?? 0) || 0,
+      totalHonorarios: Number(honor.totalHonorarios ?? 0) || 0,
+      totalImpuestos: sumKeys(cargos, impuestosKeys),
+      totalGastosExtra: sumKeys(cargos, gastosKeys),
+      totalPresupuesto: Number(presupuesto.totalPresupuesto || 0) || 0,
+      createdAt: presupuesto.createdAt,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Error al obtener último presupuesto', error: err.message });
+  }
+});
+
+
+
+
+
 // Obtener uno
 router.get('/:id', async (req, res) => {
   try {
