@@ -49,7 +49,7 @@ if (abogado) console.log('[LOGIN] candidato:', {
     const token = jwt.sign(
       payload,
       process.env.JWT_SECRET || 'dev_secret',
-      { expiresIn: process.env.JWT_EXPIRES || '1d' }
+      { expiresIn: process.env.JWT_EXPIRES || '1h' }
     );
 
     return res.json({ token, user: payload });

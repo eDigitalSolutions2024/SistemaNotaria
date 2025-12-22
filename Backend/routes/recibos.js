@@ -64,8 +64,20 @@ function buildFilter(query = {}) {
       { concepto: rx },
       { abogado: rx },
       { tipoTramite: rx },
-      { control: rx },
-    ];
+      // ✅ control como número exacto si q es num
+  ...(Number.isFinite(Number(q)) ? [{ control: Number(q) }] : []),
+
+  // ✅ control como string usando $expr + $toString
+  {
+    $expr: {
+      $regexMatch: {
+        input: { $toString: "$control" },
+        regex: String(q).trim(),
+        options: "i",
+      }
+    }
+  }
+];
   }
 
   // Lista exacta de abogados (CSV)
@@ -219,22 +231,21 @@ router.get('/escrituras/search', async (req, res) => {
  */
 router.post('/', async (req, res) => {
   try {
-    // 🔒 Solo admin/caja/recepción pueden CREAR recibos
-    if (canModifyRecibos(req)) {
+    // 🔒 Solo admin/recepción pueden CREAR recibos
+    if (!canModifyRecibos(req)) {
       return res.status(403).json({ ok: false, msg: 'No tienes permiso para crear recibos' });
     }
 
     let {
-      // fecha,  // la vamos a ignorar y usar ahora
       tipoTramite,
       recibiDe,
-      abogado,             // fallback si escriben manual
-      abogadoId,           // id numérico del modelo Abogado
+      abogado,
+      abogadoId,
       concepto,
       control,
       totalTramite,
-      totalPagado,         // en Escritura: viene = abono (si lo mandas así desde el front)
-      abono,               // explícito
+      totalPagado,
+      abono,
       totalImpuestos = 0,
       valorAvaluo = 0,
       totalGastosExtra = 0,
@@ -247,13 +258,16 @@ router.post('/', async (req, res) => {
     }
 
     // normaliza números
-    totalTramite   = Number(totalTramite || 0);
-    totalPagado    = Number(totalPagado  || 0);
-    abono          = Number(abono        || 0);
+    totalTramite = Number(totalTramite || 0);
+    totalPagado = Number(totalPagado || 0);
+    abono = Number(abono || 0);
     totalImpuestos = Number(totalImpuestos || 0);
-    valorAvaluo    = Number(valorAvaluo    || 0);
+    valorAvaluo = Number(valorAvaluo || 0);
     totalGastosExtra = Number(totalGastosExtra || 0);
-    totalHonorarios  = Number(totalHonorarios  || 0);
+    totalHonorarios = Number(totalHonorarios || 0);
+
+    // normaliza control a Number cuando aplique
+    const controlNum = control == null || control === '' ? null : Number(control);
 
     // resolver nombre desde abogadoId (si llega)
     let abogadoNombre = abogado || '';
@@ -265,54 +279,47 @@ router.post('/', async (req, res) => {
       }
     }
 
-    // --- VALIDACIÓN Y CÁLCULO ---
     let restante = 0;
 
     if (tipoTramite === 'Escritura') {
-      if (!control) {
-        return res.status(400).json({ ok: false, msg: 'Número de Escritura (control) requerido' });
+      if (!Number.isFinite(controlNum)) {
+        return res.status(400).json({ ok: false, msg: 'Número de Escritura (control) inválido' });
       }
 
-      // Suma histórica (excluye cancelados)
       const agg = await Recibo.aggregate([
-        { $match: { tipoTramite: 'Escritura', control: String(control), estatus: { $ne: 'Cancelado' } } },
+        { $match: { tipoTramite: 'Escritura', control: controlNum, estatus: { $ne: 'Cancelado' } } },
         { $group: { _id: null, sum: { $sum: '$totalPagado' } } }
       ]);
-      const pagadoAcum = Number(agg?.[0]?.sum || 0);
-      const maxAbono   = Math.max(0, totalTramite - pagadoAcum);
 
-      // compatibilidad: si no viene "abono", usa totalPagado como abono
+      const pagadoAcum = Number(agg?.[0]?.sum || 0);
+      const maxAbono = Math.max(0, totalTramite - pagadoAcum);
+
       if (abono <= 0 && totalPagado > 0) abono = totalPagado;
 
-      if (abono <= 0) {
-        return res.status(400).json({ ok: false, msg: 'Abono debe ser mayor a 0' });
-      }
+      if (abono <= 0) return res.status(400).json({ ok: false, msg: 'Abono debe ser mayor a 0' });
       if (abono > maxAbono) {
         return res.status(400).json({ ok: false, msg: `Abono excede el restante ($${maxAbono.toFixed(2)})` });
       }
 
-      // Lo que este recibo suma al histórico es su abono
       totalPagado = abono;
       restante = Math.max(0, totalTramite - (pagadoAcum + abono));
     } else {
-      // Otros tipos: no puede pagar más que el total del trámite
       if (totalPagado > totalTramite) {
         return res.status(400).json({ ok: false, msg: 'No puedes pagar más que el total del trámite' });
       }
-      abono = 0; // solo usamos abono en Escritura
+      abono = 0;
       restante = Math.max(0, totalTramite - totalPagado);
     }
 
-    const ahora = new Date();
     const payload = {
-      fecha: ahora, // 👈 fecha en que se crea el recibo
+      fecha: new Date(),
       tipoTramite,
       recibiDe,
       abogado: abogadoNombre,
       concepto: concepto || '',
-      control: control || null,
+      control: controlNum, // 👈 numérico consistente
       totalTramite,
-      totalPagado,   // en Escritura: es el abono del recibo
+      totalPagado,
       abono,
       restante,
       totalImpuestos,
@@ -323,6 +330,22 @@ router.post('/', async (req, res) => {
     };
 
     const doc = await Recibo.create(payload);
+
+    // ✅ Actualiza estatus_recibo del trámite relacionado (no pisa JUSTIFICADO)
+    if (Number.isFinite(controlNum)) {
+      if (tipoTramite === 'Escritura') {
+        await Escritura.updateOne(
+          { numeroControl: controlNum, estatus_recibo: { $ne: 'JUSTIFICADO' } },
+          { $set: { estatus_recibo: 'CON_RECIBO', totalImpuestos, valorAvaluo, totalGastosExtra, totalHonorarios } }
+        );
+      }
+      if (tipoTramite === 'Protocolito') {
+        await Protocolito.updateOne(
+          { numeroTramite: controlNum, estatus_recibo: { $ne: 'JUSTIFICADO' } },
+          { $set: { estatus_recibo: 'CON_RECIBO' } }
+        );
+      }
+    }
 
     return res.json({
       ok: true,
@@ -335,6 +358,7 @@ router.post('/', async (req, res) => {
   }
 });
 
+
 /**
  * GET /api/recibos/by-control/:control/latest
  * Devuelve el último recibo con ese control (directo o por vínculo)
@@ -346,7 +370,7 @@ router.get('/by-control/:control/latest', async (req, res) => {
     const asString = String(controlRaw);
 
     // A) directo en el recibo
-    let rec = await Recibo.findOne({ control: asString })
+    let rec = await Recibo.findOne({ control: controlNum })
       .sort({ createdAt: -1, _id: -1 })
       .lean();
 
@@ -522,14 +546,16 @@ router.patch('/:id/cancel', async (req, res) => {
 // GET /api/recibos/escrituras/:numero/pending
 router.get('/escrituras/:numero/pending', async (req, res) => {
   try {
-    const numero = String(req.params.numero || '').trim();
-    if (!numero) return res.status(400).json({ ok: false, msg: 'Número de Escritura requerido' });
+    const numero = Number(req.params.numero);
+    if (!Number.isFinite(numero)) {
+      return res.status(400).json({ ok: false, msg: 'Número de Escritura inválido' });
+    }
 
     const pipeline = [
       {
         $match: {
           tipoTramite: 'Escritura',
-          control: numero,
+          control: numero, // ✅ NUMBER
           estatus: { $ne: 'Cancelado' }
         }
       },
@@ -570,6 +596,7 @@ router.get('/escrituras/:numero/pending', async (req, res) => {
     ];
 
     const [row] = await Recibo.aggregate(pipeline);
+
     if (!row) {
       return res.json({
         ok: true,
@@ -598,33 +625,48 @@ router.get('/escrituras/:numero/pending', async (req, res) => {
   }
 });
 
+
 // 🔎 Búsqueda de controles de Escritura pero desde RECIBOS
 // GET /api/recibos/escrituras/controls/search?q=2024/
 router.get('/escrituras/controls/search', async (req, res) => {
   try {
     const q = String(req.query.q || '').trim();
     const rx = q ? new RegExp(escapeRegex(q), 'i') : null;
-    const filter = { tipoTramite: 'Escritura' };
-    if (rx) filter.control = rx;
-    const rows = await Recibo.find(filter).distinct('control');
-    res.json({ ok: true, data: rows.slice(0, 20) });
+
+    const pipeline = [
+      { $match: { tipoTramite: 'Escritura' } },
+      { $addFields: { controlStr: { $toString: '$control' } } },
+    ];
+
+    if (rx) pipeline.push({ $match: { controlStr: { $regex: rx } } });
+
+    pipeline.push(
+      { $group: { _id: '$control' } },
+      { $sort: { _id: -1 } },
+      { $limit: 20 }
+    );
+
+    const rows = await Recibo.aggregate(pipeline);
+    res.json({ ok: true, data: rows.map(r => r._id) });
   } catch (e) {
     console.error('ESCRITURAS CONTROLS SEARCH ERROR:', e);
     res.status(500).json({ ok: false, msg: 'Error buscando controles de escrituras en recibos' });
   }
 });
 
+
 // GET /api/recibos/escrituras/:numero/history
 router.get('/escrituras/:numero/history', async (req, res) => {
   try {
-    const numero = String(req.params.numero || '').trim();
-    if (!numero) return res.status(400).json({ ok: false, msg: 'Número de Escritura requerido' });
+    const numero = Number(req.params.numero);
+if (!Number.isFinite(numero)) return res.status(400).json({ ok:false, msg:'Número de Escritura inválido' });
 
-    const filter = {
-      tipoTramite: 'Escritura',
-      control: numero,
-      estatus: { $ne: 'Cancelado' }
-    };
+const filter = {
+  tipoTramite: 'Escritura',
+  control: numero, // ✅ NUMBER
+  estatus: { $ne: 'Cancelado' }
+};
+
 
     const items = await Recibo.find(filter).sort({ fecha: 1, _id: 1 }).lean();
 
@@ -686,6 +728,24 @@ router.post('/link', async (req, res) => {
       { upsert: true }
     );
 
+    // ✅ Después de crear el vínculo, actualiza estatus_recibo del trámite
+    const ctrl = Number(control);
+
+    // 1) intenta como Escritura
+    const r1 = await Escritura.updateOne(
+      { numeroControl: ctrl, estatus_recibo: { $ne: 'JUSTIFICADO' } },
+      { $set: { estatus_recibo: 'CON_RECIBO' } }
+    );
+
+    // 2) si no fue Escritura, intenta como Protocolito
+    if (!r1.matchedCount) {
+      await Protocolito.updateOne(
+        { numeroTramite: ctrl, estatus_recibo: { $ne: 'JUSTIFICADO' } },
+        { $set: { estatus_recibo: 'CON_RECIBO' } }
+      );
+    }
+
+
     return res.json({ ok: true });
   } catch (e) {
     console.error('LINK RECIBO ERROR:', e);
@@ -744,6 +804,33 @@ router.delete('/link', async (req, res) => {
       return res.status(400).json({ ok: false, msg: 'Datos inválidos' });
     }
     await ReciboLink.deleteOne({ reciboId, control: Number(control) });
+
+
+        const ctrl = Number(control);
+
+    // ¿aún hay algún link a ese control?
+    const linksLeft = await ReciboLink.exists({ control: ctrl });
+
+    // ¿hay algún recibo directo (para el caso de Escritura/Protocolito que se guardó directo)?
+    const directLeft = await Recibo.exists({
+      control: ctrl,
+      estatus: { $ne: "Cancelado" }
+    });
+
+    if (!linksLeft && !directLeft) {
+      const r1 = await Escritura.updateOne(
+        { numeroControl: ctrl, estatus_recibo: { $ne: "JUSTIFICADO" } },
+        { $set: { estatus_recibo: "SIN_RECIBO" } }
+      );
+
+      if (!r1.matchedCount) {
+        await Protocolito.updateOne(
+          { numeroTramite: ctrl, estatus_recibo: { $ne: "JUSTIFICADO" } },
+          { $set: { estatus_recibo: "SIN_RECIBO" } }
+        );
+      }
+    }
+
     return res.json({ ok: true });
   } catch (e) {
     console.error('UNLINK RECIBO ERROR:', e);
@@ -792,7 +879,24 @@ router.get('/search', async (req, res) => {
     const or = [];
     if (q) {
       const rx = new RegExp(escapeRegex(q), 'i');
-      or.push({ recibiDe: rx }, { concepto: rx }, { abogado: rx }, { control: rx });
+      or.push(
+  { recibiDe: rx },
+  { concepto: rx },
+  { abogado: rx },
+  // ✅ control num exacto
+  ...(Number.isFinite(Number(q)) ? [{ control: Number(q) }] : []),
+  // ✅ control convertido a string para regex
+  {
+    $expr: {
+      $regexMatch: {
+        input: { $toString: "$control" },
+        regex: q,
+        options: "i",
+      }
+    }
+  }
+);
+
     }
 
     // si parece fecha YYYY-MM-DD, filtrar por ese día

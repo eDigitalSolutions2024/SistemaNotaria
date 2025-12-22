@@ -20,6 +20,10 @@ try { Cliente = require('../models/Cliente'); } catch { /* opcional */ }
 // === Folios por volumen ===
 const MAX_FOLIOS_POR_VOLUMEN = 300;
 
+// NO se usan: 1,2,299,300  => Usables: 3..298
+const MIN_FOLIO_USABLE = 3;
+const MAX_FOLIO_USABLE = 298; // (MAX_FOLIOS_POR_VOLUMEN - 2)
+
 // Normaliza un rango (si solo mandan folio, lo tomamos como desde=hasta=folio)
 function rangoDe(r) {
   const d = r.folioDesde ?? r.folio_inicio ?? r.folioStart ?? r.folio ?? null;
@@ -144,27 +148,34 @@ async function maxFolioUsado(volumen, excludeId = null) {
   let max = 0;
   for (const d of docs) {
     const r = rangoDe(d);
-    if (r) max = Math.max(max, r.hasta);
+    if (r && r.hasta >= MIN_FOLIO_USABLE && r.hasta <= MAX_FOLIO_USABLE) {
+      max = Math.max(max, r.hasta);
+    }
   }
   return max;
 }
 
-// Da el siguiente hueco (inicio) y volumen sugerido para un tamaño “len”
 async function siguienteSlot(volumen, len = 1, excludeId = null) {
   len = Math.max(1, Number(len) || 1);
   let vol = volumen;
   if (!vol) return { volumen: null, desde: null };
 
   const maxUsado = await maxFolioUsado(vol, excludeId);
-  const candidato = maxUsado + 1;
-  if (candidato + len - 1 <= MAX_FOLIOS_POR_VOLUMEN) {
+
+  // si no hay folios o está antes del mínimo usable, arrancamos en 3
+  const candidato = Math.max(MIN_FOLIO_USABLE, maxUsado + 1);
+
+  // si cabe dentro del rango usable (3..298)
+  if (candidato + len - 1 <= MAX_FOLIO_USABLE) {
     return { volumen: vol, desde: candidato };
   }
-  // No cabe, saltamos a siguiente volumen y empezamos en 1
+
+  // no cabe, saltamos a siguiente volumen y empezamos en 3
   const next = incVolumenTag(vol);
-  if (!next) return { volumen: vol, desde: candidato }; // no sabemos incrementar, devolvemos tal cual
-  return { volumen: next, desde: 1 };
+  if (!next) return { volumen: vol, desde: candidato }; // no sabemos incrementar
+  return { volumen: next, desde: MIN_FOLIO_USABLE };
 }
+
 
 // Verifica traslape en un volumen con un rango dado
 async function hayTraslape(volumen, rango, excludeId = null) {
@@ -197,11 +208,11 @@ async function ajustarRangoAuto({ volumen, desde, hasta, excludeId }) {
   let d = slot.desde;
   let h = d + len - 1;
 
-  if (h > MAX_FOLIOS_POR_VOLUMEN) {
-    // Si aun así no cabe, empezamos en 1 del volumen siguiente
-    const next = incVolumenTag(v);
-    if (next) { v = next; d = 1; h = len; }
-  }
+  // antes: if (h > MAX_FOLIOS_POR_VOLUMEN) ...
+if (h > MAX_FOLIO_USABLE) {
+  const next = incVolumenTag(v);
+  if (next) { v = next; d = MIN_FOLIO_USABLE; h = d + len - 1; }
+}
 
   return { volumen: v, desde: d, hasta: h };
 }
@@ -233,9 +244,18 @@ function normFolio(n) {
 function hasRange(volumen, desde, hasta) {
   return volumen && desde != null && hasta != null;
 }
+
 function invalidRange(desde, hasta) {
-  return !(Number.isFinite(desde) && Number.isFinite(hasta) && desde > 0 && hasta > 0 && desde <= hasta);
+  return !(
+    Number.isFinite(desde) &&
+    Number.isFinite(hasta) &&
+    desde >= MIN_FOLIO_USABLE &&
+    hasta <= MAX_FOLIO_USABLE &&
+    desde <= hasta
+  );
 }
+
+
 function overlapQuery(volumen, desde, hasta, excludeId) {
   const q = {
     volumen,
@@ -329,52 +349,229 @@ router.get('/', async (req, res) => {
   }
 });
 
-// GET /escrituras/export
+// GET /escrituras/export?format=excel|pdf&from=YYYY-MM-DD&to=YYYY-MM-DD&cliente=...&abogado=...&volumen=...
 router.get('/export', async (req, res) => {
   try {
+    const PDFDocument = require('pdfkit');
+    const dayjs = require('dayjs');
+    const fs = require('fs');
+    const path = require('path');
+    const ExcelJS = require('exceljs');
+
     const { format = 'excel', from, to, cliente, abogado, volumen } = req.query || {};
+
+    /* ===================== FILTRO ===================== */
     const filter = {};
+
     if (from || to) {
       filter.fecha = {};
-      if (from) filter.fecha.$gte = new Date(from);
-      if (to) filter.fecha.$lte = new Date(to);
+      if (from) filter.fecha.$gte = dayjs(from).startOf('day').toDate();
+      if (to)   filter.fecha.$lte = dayjs(to).endOf('day').toDate();
     }
-    if (cliente) filter.cliente = { $regex: cliente, $options: 'i' };
-    if (abogado) filter.abogado = abogado;
-    if (volumen) filter.volumen = { $regex: String(volumen), $options: 'i' };
+    if (cliente) filter.cliente = { $regex: String(cliente).trim(), $options: 'i' };
 
-    const rows = await Escritura.find(filter).sort({numeroControl: 1 }).lean();
+    // Si tu abogado en Escritura es string, esto está bien:
+    if (abogado) filter.abogado = { $regex: String(abogado).trim(), $options: 'i' };
 
-    if (format === 'pdf') {
+    if (volumen) filter.volumen = { $regex: String(volumen).trim(), $options: 'i' };
+
+    const docs = await Escritura.find(filter).sort({ numeroControl: 1 }).lean();
+
+    /* ===================== PDF ===================== */
+    if (String(format).toLowerCase() === 'pdf') {
       res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', 'inline; filename="escrituras.pdf"');
-      const doc = new PDFDocument({ margin: 30 });
-      doc.pipe(res);
-      doc.fontSize(16).text('Reporte de Escrituras', { align: 'center' });
-      doc.moveDown();
+      res.setHeader('Content-Disposition', `inline; filename="escrituras_${dayjs().format('YYYYMMDD_HHmm')}.pdf"`);
 
-      rows.forEach((r) => {
-        const fecha = r.fecha ? new Date(r.fecha).toLocaleDateString('es-MX') : '—';
-        const folioStr = (r.folioDesde != null && r.folioHasta != null) ? `${r.folioDesde} a ${r.folioHasta}` : '—';
-        const volStr = r.volumen ?? '—';
+      const doc = new PDFDocument({ margin: 36 });
+      doc.pipe(res);
+
+      // --- logo opcional (igual a protocolito) ---
+      const LOGO_CANDIDATES = [
+        path.join(__dirname, '..', '..', 'frontend', 'public', 'logo.png'),
+        path.join(process.cwd(), 'frontend', 'public', 'logo.png'),
+      ];
+      const LOGO_PATH = LOGO_CANDIDATES.find(p => { try { return fs.existsSync(p); } catch { return false; } });
+
+      const PAGE = {
+        left: doc.page.margins.left,
+        right: doc.page.width - doc.page.margins.right,
+        top: doc.page.margins.top,
+        bottom: doc.page.height - doc.page.margins.bottom,
+        width: doc.page.width - doc.page.margins.left - doc.page.margins.right,
+      };
+
+      const PADDING_X = 4;
+      const HEADER_H = 18;
+      const CELL_FONT_SIZE = 9;
+      const HEADER_FONT_SIZE = 9;
+
+      const moneyFmt = (n) =>
+        `$${Number(n || 0).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+      // Mapeo a filas “planas” para tabla
+      const rows = docs.map(r => {
+        const fecha = r.fecha ? dayjs(r.fecha).format('DD/MM/YYYY') : '—';
+        const folioStr =
+          (r.folioDesde != null && r.folioHasta != null) ? `${r.folioDesde} a ${r.folioHasta}` : '—';
 
         const montos = [
-          r.totalImpuestos != null ? `Imp: $${Number(r.totalImpuestos).toFixed(2)}` : null,
-          r.valorAvaluo != null ? `Avalúo: $${Number(r.valorAvaluo).toFixed(2)}` : null,
-          r.totalGastosExtra != null ? `Extras: $${Number(r.totalGastosExtra).toFixed(2)}` : null,
-          r.totalHonorarios != null ? `Honor: $${Number(r.totalHonorarios).toFixed(2)}` : null,
-        ].filter(Boolean).join(' · ');
+          `Imp: ${moneyFmt(r.totalImpuestos)}`,
+          `Avalúo: ${moneyFmt(r.valorAvaluo)}`,
+          `Extras: ${moneyFmt(r.totalGastosExtra)}`,
+          `Honor: ${moneyFmt(r.totalHonorarios)}`,
+        ].join(' · ');
 
-        doc.fontSize(11).text(
-          `#${r.numeroControl} | ${fecha} | Folio: ${folioStr} | Vol: ${volStr} | ${r.cliente} | ${r.tipoTramite} | ${r.abogado}`
-        );
-        if (montos) doc.text(`  ${montos}`);
-        doc.moveDown(0.2);
+        return {
+          numeroControl: r.numeroControl ?? '',
+          fecha,
+          cliente: r.cliente ?? '',
+          tipoTramite: r.tipoTramite ?? '',
+          abogado: r.abogado ?? '',
+          volumen: r.volumen ?? '',
+          folio: folioStr,
+          montos,
+          estatus_entrega: r.estatus_entrega ?? '',
+          estatus_recibo: r.estatus_recibo ?? '',
+          observaciones: r.observaciones ?? '',
+        };
       });
+
+      // Columnas (ajusta porcentajes a tu gusto)
+      const COLS = [
+        { key: 'numeroControl', title: '# Control', width: Math.round(PAGE.width * 0.10) },
+        { key: 'fecha',         title: 'Fecha',    width: Math.round(PAGE.width * 0.10) },
+        { key: 'cliente',       title: 'Cliente',  width: Math.round(PAGE.width * 0.22) },
+        { key: 'tipoTramite',   title: 'Tipo',     width: Math.round(PAGE.width * 0.14) },
+        { key: 'abogado',       title: 'Abogado',  width: Math.round(PAGE.width * 0.14) },
+        { key: 'volumen',       title: 'Vol.',     width: Math.round(PAGE.width * 0.06) },
+        { key: 'folio',         title: 'Folio',    width: Math.round(PAGE.width * 0.10) },
+        { key: 'montos',        title: 'Montos',   width: PAGE.width }, // corrige abajo
+      ];
+      const sumExceptLast = COLS.slice(0, -1).reduce((a, c) => a + c.width, 0);
+      COLS[COLS.length - 1].width = PAGE.width - sumExceptLast;
+
+      function drawLogoLeft(yStart) {
+        const MAX_W = Math.min(140, PAGE.width * 0.22);
+        const MAX_H = 86;
+
+        try {
+          if (LOGO_PATH && fs.existsSync(LOGO_PATH)) {
+            const x = PAGE.left;
+            const y = yStart + 4;
+            doc.image(LOGO_PATH, x, y, { fit: [MAX_W, MAX_H] });
+            return { top: yStart, height: MAX_H + 8, bandWidth: MAX_W };
+          }
+        } catch (e) {
+          // noop
+        }
+        return { top: yStart, height: 0, bandWidth: MAX_W };
+      }
+
+      function drawPageHeader() {
+        const TITLE_SIZE = 20;
+        const SUB_SIZE = 11;
+
+        const logo = drawLogoLeft(PAGE.top);
+
+        const gap = 14;
+        const xRight = PAGE.left + logo.bandWidth + gap;
+        const wRight = PAGE.right - xRight;
+
+        let yRight = PAGE.top + 14;
+        doc.fillColor('black')
+          .fontSize(TITLE_SIZE)
+          .text('Reporte Escrituras', xRight, yRight, { width: wRight, align: 'left' });
+
+        const titleBottom = doc.y + 2;
+        const accentW = Math.min(90, wRight * 0.25);
+        doc.moveTo(xRight, titleBottom).lineTo(xRight + accentW, titleBottom)
+          .lineWidth(2).strokeColor('#999').stroke();
+        doc.strokeColor('black').lineWidth(1);
+
+        yRight = titleBottom + 6;
+
+        const filtroTxt1 = [
+          from ? `Desde: ${dayjs(from).format('DD/MM/YYYY')}` : null,
+          to   ? `Hasta: ${dayjs(to).format('DD/MM/YYYY')}` : null,
+        ].filter(Boolean).join('   |   ');
+
+        const filtroTxt2 = [
+          cliente ? `Cliente: ${cliente}` : null,
+          abogado ? `Abogado: ${abogado}` : null,
+          volumen ? `Volumen: ${volumen}` : null,
+        ].filter(Boolean).join('   |   ');
+
+        const emitido = `Emitido: ${dayjs().format('DD/MM/YYYY HH:mm')}`;
+
+        doc.fontSize(SUB_SIZE).fillColor('#666');
+        if (filtroTxt1) { doc.text(filtroTxt1, xRight, yRight, { width: wRight }); yRight = doc.y + 2; }
+        if (filtroTxt2) { doc.text(filtroTxt2, xRight, yRight, { width: wRight }); yRight = doc.y + 2; }
+        doc.fillColor('#888').text(emitido, xRight, yRight, { width: wRight });
+
+        const textBottom = doc.y;
+        const headerBottom = Math.max(PAGE.top + logo.height, textBottom) + 12;
+
+        doc.moveTo(PAGE.left, headerBottom).lineTo(PAGE.right, headerBottom)
+          .lineWidth(0.8).strokeColor('#bbb').stroke();
+        doc.strokeColor('black').lineWidth(1);
+
+        return headerBottom + 8;
+      }
+
+      function drawTableHeader(y) {
+        doc.fontSize(HEADER_FONT_SIZE).fillColor('#000');
+        let x = PAGE.left;
+        COLS.forEach(col => {
+          doc.rect(x, y, col.width, HEADER_H).stroke();
+          doc.text(col.title, x + PADDING_X, y + 4, { width: col.width - 2 * PADDING_X, align: 'left' });
+          x += col.width;
+        });
+        return y + HEADER_H;
+      }
+
+      function cellHeight(text, width) {
+        const h = doc.heightOfString(String(text ?? ''), {
+          width: width - 2 * PADDING_X,
+          align: 'left',
+          fontSize: CELL_FONT_SIZE,
+        });
+        return Math.max(h + 6, 16);
+      }
+
+      function drawRow(y, row) {
+        doc.fontSize(CELL_FONT_SIZE).fillColor('#000');
+
+        const rowH = Math.max(...COLS.map(col => cellHeight(row[col.key], col.width)));
+
+        if (y + rowH > PAGE.bottom) {
+          doc.addPage();
+          const yHeader = drawPageHeader();
+          y = drawTableHeader(yHeader + 8);
+        }
+
+        let x = PAGE.left;
+        COLS.forEach(col => {
+          doc.rect(x, y, col.width, rowH).stroke();
+          doc.text(String(row[col.key] ?? ''), x + PADDING_X, y + 3, {
+            width: col.width - 2 * PADDING_X,
+            align: 'left',
+          });
+          x += col.width;
+        });
+
+        return y + rowH;
+      }
+
+      // Render
+      const yHeader = drawPageHeader();
+      let y = drawTableHeader(yHeader);
+      rows.forEach(r => { y = drawRow(y, r); });
+
       doc.end();
       return;
     }
 
+    /* ===================== EXCEL (igual que ya tenías) ===================== */
     const wb = new ExcelJS.Workbook();
     const ws = wb.addWorksheet('Escrituras');
     ws.columns = [
@@ -394,7 +591,8 @@ router.get('/export', async (req, res) => {
       { header: 'Estatus recibo', key: 'estatus_recibo', width: 16 },
       { header: 'Observaciones', key: 'observaciones', width: 50 },
     ];
-    rows.forEach(r => {
+
+    docs.forEach(r => {
       ws.addRow({
         numeroControl: r.numeroControl,
         fecha: r.fecha ? new Date(r.fecha).toISOString().slice(0, 10) : '',
@@ -404,10 +602,10 @@ router.get('/export', async (req, res) => {
         volumen: r.volumen ?? '',
         folioDesde: r.folioDesde ?? '',
         folioHasta: r.folioHasta ?? '',
-        totalImpuestos:  r.totalImpuestos  ?? '',
-        valorAvaluo:     r.valorAvaluo     ?? '',
+        totalImpuestos: r.totalImpuestos ?? '',
+        valorAvaluo: r.valorAvaluo ?? '',
         totalGastosExtra: r.totalGastosExtra ?? '',
-        totalHonorarios:  r.totalHonorarios  ?? '',
+        totalHonorarios: r.totalHonorarios ?? '',
         estatus_entrega: r.estatus_entrega ?? '',
         estatus_recibo: r.estatus_recibo ?? '',
         observaciones: r.observaciones || ''
@@ -418,10 +616,13 @@ router.get('/export', async (req, res) => {
     res.setHeader('Content-Disposition', 'attachment; filename="escrituras.xlsx"');
     await wb.xlsx.write(res);
     res.end();
+
   } catch (e) {
+    console.error(e);
     res.status(500).json({ mensaje: 'Error exportando', detalle: e.message });
   }
 });
+
 
 // POST /escrituras/import
 router.post('/import', upload.single('file'), async (req, res) => {
@@ -527,7 +728,7 @@ router.post('/', async (req, res) => {
     if (userName && !isAdmin) {
       const pendientes = await countEscriturasSinReciboPorAbogado(userName);
 
-      if (pendientes >= 2) {
+      if (pendientes >= 5) {
         return res.status(403).json({
           mensaje:
             `No puedes tomar un nuevo número de escritura: ` +
@@ -640,6 +841,9 @@ router.put('/:id', async (req, res) => {
   try {
     const MAX_FOLIOS_POR_VOLUMEN = 300;
 
+    const MIN_FOLIO_USABLE = 3;
+const MAX_FOLIO_USABLE = 298;
+
     // --- helpers locales ---
     const normVol = (v) => {
       if (v === undefined) return undefined;  // no tocar
@@ -653,7 +857,9 @@ router.put('/:id', async (req, res) => {
       const x = Number(n);
       return Number.isFinite(x) && x > 0 ? x : null;
     };
-    const invalidRange = (d, h) => !(Number.isFinite(d) && Number.isFinite(h) && d > 0 && h >= d);
+    const invalidRange = (d, h) =>
+  !(Number.isFinite(d) && Number.isFinite(h) && d >= MIN_FOLIO_USABLE && h <= MAX_FOLIO_USABLE && d <= h);
+
     const toRange = (d, h) => (d && !h ? { d, h: d } : (!d && h ? { d: h, h } : { d, h }));
 
     const rangoDeDoc = (doc) => {
@@ -684,9 +890,12 @@ router.put('/:id', async (req, res) => {
       const docs = await docsDeVol(vol, excludeId);
       let max = 0;
       for (const d of docs) {
-        const r = rangoDeDoc(d);
-        if (r) max = Math.max(max, r.h);
-      }
+  const r = rangoDeDoc(d);
+  if (r && r.h >= MIN_FOLIO_USABLE && r.h <= MAX_FOLIO_USABLE) {
+    max = Math.max(max, r.h);
+  }
+}
+
       return max;
     }
     async function hayTraslape(vol, rango, excludeId) {
@@ -699,15 +908,19 @@ router.put('/:id', async (req, res) => {
       return false;
     }
     async function siguienteSlot(vol, len, excludeId) {
-      len = Math.max(1, Number(len) || 1);
-      if (!vol) return { vol: null, d: null };
-      const max = await maxFolioUsado(vol, excludeId);
-      const cand = max + 1;
-      if (cand + len - 1 <= MAX_FOLIOS_POR_VOLUMEN) return { vol, d: cand };
-      const next = incVolumenTag(vol);
-      if (!next) return { vol, d: cand };
-      return { vol: next, d: 1 };
-    }
+  len = Math.max(1, Number(len) || 1);
+  if (!vol) return { vol: null, d: null };
+
+  const max = await maxFolioUsado(vol, excludeId);
+  let cand = Math.max(MIN_FOLIO_USABLE, max + 1);
+
+  if (cand + len - 1 <= MAX_FOLIO_USABLE) return { vol, d: cand };
+
+  const next = incVolumenTag(vol);
+  if (!next) return { vol, d: cand };
+  return { vol: next, d: MIN_FOLIO_USABLE };
+}
+
     async function ajustarRangoAuto({ vol, d, h, excludeId }) {
       if (!vol || !Number.isFinite(d) || !Number.isFinite(h)) return { vol, d, h };
       const len = Math.max(1, h - d + 1);
@@ -716,10 +929,11 @@ router.put('/:id', async (req, res) => {
       let v = slot.vol;
       let desde = slot.d;
       let hasta = desde + len - 1;
-      if (hasta > MAX_FOLIOS_POR_VOLUMEN) {
-        const next = incVolumenTag(v);
-        if (next) { v = next; desde = 1; hasta = len; }
-      }
+      if (hasta > MAX_FOLIO_USABLE) {
+  const next = incVolumenTag(v);
+  if (next) { v = next; desde = MIN_FOLIO_USABLE; hasta = desde + len - 1; }
+}
+
       return { vol: v, d: desde, h: hasta };
     }
 
@@ -810,13 +1024,16 @@ router.put('/:id', async (req, res) => {
             effVol = slot.vol;
             effDesde = slot.d;
             effHasta = slot.d + len - 1;
-            if (effHasta > MAX_FOLIOS_POR_VOLUMEN) {
+            if (effHasta > MAX_FOLIO_USABLE) {
               const nv = incVolumenTag(effVol);
               if (!nv) {
                 return res.status(409).json({ mensaje: 'Traslape de folio y no es posible incrementar el volumen automáticamente' });
               }
-              effVol = nv; effDesde = 1; effHasta = len;
+              effVol = nv;
+              effDesde = MIN_FOLIO_USABLE;
+              effHasta = MIN_FOLIO_USABLE + len - 1;
             }
+
           } else {
             return res.status(409).json({ mensaje: 'Traslape de folio en este volumen' });
           }

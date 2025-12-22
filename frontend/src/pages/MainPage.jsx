@@ -1,5 +1,5 @@
 // frontend/src/pages/MainPage.jsx
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useState, useEffect } from 'react';
 import './MainPage.css';
 import FormAbogado from '../components/FormAbogado';
 import RegistrarCliente from '../pages/Home';
@@ -24,6 +24,58 @@ export default function MainPage() {
 function AuthedApp() {
   const { user, logout } = useAuth();
   const role = user?.role || '';
+
+  // 🔴 LIMITE DE INACTIVIDAD: 10s para pruebas
+  const INACTIVITY_LIMIT = 60*60*1000; // 10 segundos (luego lo cambias a 60*60*1000)
+
+  useEffect(() => {
+    // marcar actividad
+    const touchActivity = () => {
+      localStorage.setItem('lastActivity', String(Date.now()));
+    };
+
+    // listeners de actividad
+    const handler = () => touchActivity();
+
+    window.addEventListener('click', handler);
+    window.addEventListener('keydown', handler);
+    window.addEventListener('mousemove', handler);
+
+    // inicializar al montar
+    touchActivity();
+
+    // watcher que revisa cada segundo
+    const intervalId = setInterval(() => {
+      const raw = localStorage.getItem('lastActivity');
+      const last = raw ? Number(raw) : 0;
+      if (!last) return;
+
+      const diff = Date.now() - last;
+
+      // console.log('diff', diff); // para debug
+
+      if (diff > INACTIVITY_LIMIT) {
+        clearInterval(intervalId);
+
+        // limpiar cosas del front
+        localStorage.removeItem('token');
+        localStorage.removeItem('user');
+        localStorage.removeItem('lastActivity');
+
+        // cerrar sesión en el contexto
+        logout();
+      }
+    }, 1000);
+
+    // cleanup al desmontar
+    return () => {
+      window.removeEventListener('click', handler);
+      window.removeEventListener('keydown', handler);
+      window.removeEventListener('mousemove', handler);
+      clearInterval(intervalId);
+    };
+  }, [logout, INACTIVITY_LIMIT]);
+  // 👆 esto solo corre cuando AuthedApp está montado (o sea, autenticado)
 
 const [seccion, setSeccion] = useState(
   role === 'PROTOCOLITO' ? 'registrar-generales' : 'registrar-cliente'

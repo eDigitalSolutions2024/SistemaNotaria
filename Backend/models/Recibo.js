@@ -7,7 +7,8 @@ const ReciboSchema = new Schema({
   recibiDe:     { type: String, required: true, trim: true },
   abogado:      { type: String, trim: true },
   concepto:     { type: String, trim: true },
-  control:      { type: String, trim: true },
+  control:      { type: Number, index: true },
+
 
   totalTramite: { type: Number, required: true, min: 0 },
   totalPagado:  { type: Number, required: true, min: 0 },

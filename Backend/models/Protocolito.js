@@ -12,6 +12,7 @@ const protocolitoSchema = new mongoose.Schema({
     required: true,
     trim: true
   },
+  volumen: { type: Number, index: true },
   cliente: {
     type: String,
     required: true,
@@ -26,6 +27,28 @@ const protocolitoSchema = new mongoose.Schema({
     required: true,
     trim: true
   },
+   // 🔹 NUEVO: quién capturó el trámite (asistente o abogado)
+  capturistaId: {
+    type: Number,
+    ref: 'Abogado',
+    default: null,
+    index: true
+  },
+  capturistaNombre: {
+    type: String,
+    trim: true,
+    default: ''
+  },
+
+  // 🔹 NUEVO (opcional, pero útil): id del abogado responsable
+  abogadoIdResponsable: {
+    type: Number,
+    ref: 'Abogado',
+    default: null,
+    index: true
+  },
+
+
   observaciones: { type: String, trim: true, default: '' },
   estatus_entrega: { type: String, default: 'Pendiente' },
   fecha_entrega: { type: Date },

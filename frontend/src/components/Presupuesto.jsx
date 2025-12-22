@@ -152,10 +152,13 @@ export default function Presupuesto() {
   }, []);
 
  const clienteOptions = useMemo(() => {
-  const opts = (clientes || []).map((c) => ({
-    value: c._id || c.id || c._doc?._id, // ✅ fallback
+  const list = [...(clientes || [])].reverse(); // ✅ último -> primero
+
+  const opts = list.map((c) => ({
+    value: c._id || c.id || c._doc?._id,
     label: `${c.idCliente || c.idClienteNumero || c.id || ''} - ${c.nombre || c.nombreCliente || ''}`,
   }));
+
 
   // ✅ debug rápido
   if (opts.length) {

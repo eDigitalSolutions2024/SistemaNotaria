@@ -31,6 +31,9 @@ export default function FormAbogado() {
   const [eUbicacion, setEUbicacion] = useState('sin sala');
   const [eRole, setERole] = useState('user');
 
+  // 🔹 Nuevo: abogado jefe (solo para asistentes)
+  const [eAbogadoJefe, setEAbogadoJefe] = useState('');
+
   // Password
   const [pwd1, setPwd1] = useState('');
   const [pwd2, setPwd2] = useState('');
@@ -68,6 +71,23 @@ export default function FormAbogado() {
     );
   }, [abogados, q]);
 
+  // 🔹 Lista de abogados con rol "ABOGADO" para asignar como responsables
+  const abogadosSoloAbogados = useMemo(
+    () => abogados.filter(a => a.role === 'ABOGADO'),
+    [abogados]
+  );
+
+  // 🔹 Asistentes que tienen como jefe al seleccionado (si es abogado)
+  const asistentesDeSeleccionado = useMemo(() => {
+    if (!selected?._id) return [];
+    return abogados.filter(
+      a =>
+        a.role === 'ASISTENTE' &&
+        a.abogadoJefe != null &&
+        String(a.abogadoJefe) === String(selected._id)
+    );
+  }, [abogados, selected]);
+
   const pickForEdit = (a) => {
     setSelected(a);
     setENombre(a?.nombre || '');
@@ -75,6 +95,7 @@ export default function FormAbogado() {
     setEDisponible(Boolean(a?.disponible ?? true));
     setEUbicacion(a?.ubicacion || 'sin sala');
     setERole(a?.role || 'user');
+    setEAbogadoJefe(a?.abogadoJefe ?? '');
     setPwd1('');
     setPwd2('');
     setMensaje('');
@@ -110,16 +131,26 @@ export default function FormAbogado() {
     setSavingData(true);
     setMensaje('');
     try {
+      const payload = {
+        nombre: eNombre,
+        orden: Number(eOrden),
+        disponible: Boolean(eDisponible),
+        ubicacion: eUbicacion,
+        role: eRole,
+      };
+
+      // 🔹 Si el usuario es ASISTENTE, enviamos su abogado responsable
+      if (eRole === 'ASISTENTE') {
+        payload.abogadoJefe = eAbogadoJefe ? Number(eAbogadoJefe) : null;
+      } else {
+        // Otros roles no deben tener abogado jefe
+        payload.abogadoJefe = null;
+      }
+
       const res = await fetch(`${API_URL}/abogados/${selected._id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json', ...authHeader() },
-        body: JSON.stringify({
-          nombre: eNombre,
-          orden: Number(eOrden),
-          disponible: Boolean(eDisponible),
-          ubicacion: eUbicacion,
-          role: eRole,
-        }),
+        body: JSON.stringify(payload),
       });
       const data = await res.json();
       if (res.ok) {
@@ -311,6 +342,28 @@ export default function FormAbogado() {
                   </select>
                 </div>
 
+                {/* Asignar abogado responsable cuando el usuario es ASISTENTE */}
+                {eRole === 'ASISTENTE' && (
+                  <div className="form-group">
+                    <label>Abogado responsable:</label>
+                    <select
+                      className="form-control input-text"
+                      value={eAbogadoJefe ?? ''}
+                      onChange={(e) => setEAbogadoJefe(e.target.value)}
+                    >
+                      <option value="">— Sin asignar —</option>
+                      {abogadosSoloAbogados.map(a => (
+                        <option key={a._id} value={a._id}>
+                          {a._id} — {a.nombre}
+                        </option>
+                      ))}
+                    </select>
+                    <small className="form-text text-muted">
+                      Este abogado será el responsable en Protocolito y en los reportes de este asistente.
+                    </small>
+                  </div>
+                )}
+
                 <button
                   className="btn btn-primary"
                   disabled={savingData}
@@ -350,6 +403,27 @@ export default function FormAbogado() {
                 >
                   {savingPwd ? 'Actualizando…' : 'Actualizar contraseña'}
                 </button>
+
+                {/* Si el seleccionado es ABOGADO, mostrar sus asistentes */}
+                {selected?.role === 'ABOGADO' && (
+                  <div className="mt-4">
+                    <h5>Asistentes asignados a este abogado</h5>
+                    {asistentesDeSeleccionado.length === 0 ? (
+                      <p className="text-muted">No hay asistentes asignados aún.</p>
+                    ) : (
+                      <ul>
+                        {asistentesDeSeleccionado.map(a => (
+                          <li key={a._id}>
+                            {a._id} — {a.nombre}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    <small className="form-text text-muted">
+                      Para cambiar los asistentes, edita cada usuario con rol ASISTENTE y asigna su abogado responsable.
+                    </small>
+                  </div>
+                )}
               </div>
             </div>
           )}

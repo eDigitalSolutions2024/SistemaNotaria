@@ -12,6 +12,10 @@ const path = require('path');
 const Protocolito = require('../models/Protocolito');
 const Cliente     = require('../models/Cliente');
 const Abogado     = require('../models/Abogado');
+const Recibo = require('../models/Recibo'); // <-- AJUSTA la ruta/nombre real
+
+
+const auth = require('../middleware/auth');
 
 // === Upload (para /import) ===
 const upload = multer({
@@ -34,6 +38,52 @@ const LOGO_PATH =
   ].find(p => { try { return fs.existsSync(p); } catch { return false; } }));
 
 console.log('[PDF] LOGO_PATH =', LOGO_PATH || 'NO ENCONTRADO');
+
+
+/* ===================== Candado (igual que escrituras) ===================== */
+
+function getUserNameFromReq(req) {
+  const u = req.user || {};
+  return (
+    u.nombre ||
+    u.name ||
+    u.fullName ||
+    u.username ||
+    u.userName ||
+    ''
+  ).trim();
+}
+
+function getUserRolesFromReq(req) {
+  const u = req.user || {};
+  const roles = [];
+  if (Array.isArray(u.roles)) roles.push(...u.roles);
+  if (u.rol) roles.push(u.rol);
+  if (u.role) roles.push(u.role);
+  return roles.map(r => String(r).toUpperCase());
+}
+
+function escapeRegex(text) {
+  return String(text || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Pendiente = estatus_recibo NO está en ['CON_RECIBO','JUSTIFICADO'] (o no existe)
+ */
+async function countProtocolitosSinReciboPorAbogado(nombreAbogado) {
+  if (!nombreAbogado) return 0;
+
+  const regexAbogado = new RegExp(escapeRegex(nombreAbogado), 'i');
+
+  return Protocolito.countDocuments({
+    abogado: regexAbogado,
+    $or: [
+      { estatus_recibo: { $exists: false } },
+      { estatus_recibo: { $nin: ['CON_RECIBO', 'JUSTIFICADO'] } },
+    ],
+  });
+}
+
 
 /* ========================== Helpers ========================== */
 // --- Import helpers ---
@@ -183,6 +233,20 @@ async function resolveAbogadoNombre(raw, maps) {
   return found?.nombre || null;
 }
 
+
+const ACTOS_POR_VOLUMEN = 1184;
+const BASE_NUMERO = 12934;
+const BASE_VOLUMEN = 13;
+
+function calcVolumen(numeroTramite) {
+  const n = Number(numeroTramite);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return Math.floor((n - BASE_NUMERO) / ACTOS_POR_VOLUMEN) + BASE_VOLUMEN;
+}
+
+
+
+
 router.get('/', async (req, res) => {
   try {
     const { q, sort = 'numero_desc' } = req.query;
@@ -226,7 +290,9 @@ router.get('/', async (req, res) => {
     for (const r of items) {
       if (!r.id && r._id) r.id = String(r._id);
       // ⬇️ No tocar r.fecha ni r.abogado: se envían crudos desde Mongo
-      r.fecha = r.fecha;
+      if (r.volumen == null && r.numeroTramite != null) {
+          r.volumen = calcVolumen(r.numeroTramite);
+        }
       // r.abogado = r.abogado;
     }
 
@@ -240,8 +306,25 @@ router.get('/', async (req, res) => {
 
 /* ============================ POST / ============================ */
 // Crear desde clienteId (o payload directo) con número autogenerado
-router.post('/', async (req, res) => {
+router.post('/', auth, async (req, res) => {
   try {
+            // 🔐 Candado: máximo 2 trámites sin recibo/justificante por abogado (no-admin)
+    const userName = getUserNameFromReq(req);
+    const roles = getUserRolesFromReq(req);
+    const isAdmin = roles.includes('ADMIN');
+
+    if (userName && !isAdmin) {
+      const pendientes = await countProtocolitosSinReciboPorAbogado(userName);
+      if (pendientes >= 5) {
+        return res.status(403).json({
+          mensaje:
+            `No puedes tomar un nuevo trámite: ` +
+            `ya tienes ${pendientes} trámites sin recibo o justificante a tu nombre.`,
+        });
+      }
+    }
+
+
     const { clienteId } = req.body;
     let { tipoTramite, cliente, fecha, abogado, motivo } = req.body;
 
@@ -342,6 +425,7 @@ router.post('/', async (req, res) => {
         const created = await Protocolito.create({
           ...payload,
           numeroTramite: siguiente,
+          volumen: calcVolumen(siguiente),
         });
 
         return res.status(201).json(created);
@@ -375,7 +459,8 @@ router.put('/:id', async (req, res) => {
 
     const update = {
       // estos suelen venir siempre desde tu UI de edición
-      ...(numeroTramite != null ? { numeroTramite } : {}),
+      ...(numeroTramite != null ? { numeroTramite, volumen: calcVolumen(numeroTramite) } : {}),
+
       ...(tipoTramite    ? { tipoTramite } : {}),
       ...(cliente        ? { cliente } : {}),
       ...(fechaOk        ? { fecha: fechaOk } : {}),
@@ -515,6 +600,8 @@ router.post('/import', upload.single('file'), async (req, res) => {
 
 /* ============================ EXPORT ============================ */
 // GET /protocolito/export?format=excel|pdf&from=YYYY-MM-DD&to=YYYY-MM-DD&cliente=...&abogado=...
+// routes/protocolitos.js
+// GET /protocolito/export?format=excel|pdf&from=YYYY-MM-DD&to=YYYY-MM-DD&cliente=...&abogado=...
 router.get('/export', async (req, res) => {
   try {
     // deps locales para no tocar el resto del archivo
@@ -523,6 +610,10 @@ router.get('/export', async (req, res) => {
     const XLSX = require('xlsx');
     const path = require('path');
     const fs = require('fs');
+
+    // 👇 AJUSTA si tu require ya está arriba del archivo
+    const Recibo = require('../models/Recibo');
+    const ReciboLink = require('../models/ReciboLink');
 
     const { format = 'excel', from, to, cliente, abogado } = req.query;
 
@@ -538,11 +629,11 @@ router.get('/export', async (req, res) => {
 
     // ---- Datos ----
     const docs = await Protocolito.find(filter)
-  .collation({ locale: 'es', numericOrdering: true })
-  .sort({ numeroTramite: 1 })
-  .lean();
-  
-  const rows = docs.map(d => ({
+      .collation({ locale: 'es', numericOrdering: true })
+      .sort({ numeroTramite: 1 })
+      .lean();
+
+    const rows = docs.map(d => ({
       numeroTramite: d.numeroTramite ?? '',
       tipoTramite: d.tipoTramite ?? '',
       cliente: d.cliente ?? '',
@@ -552,6 +643,117 @@ router.get('/export', async (req, res) => {
     }));
 
     const filenameBase = `protocolito_${dayjs().format('YYYYMMDD_HHmm')}`;
+
+    // ===================== VINCULAR RECIBOS (SIN protocolitoId) =====================
+    const numerosNum = docs.map(d => Number(d.numeroTramite)).filter(Number.isFinite);
+    const numerosStr = numerosNum.map(n => String(n));
+
+    const toMoney = (v) => {
+      if (v == null) return 0;
+      if (typeof v === 'number') return Number.isFinite(v) ? v : 0;
+      const n = Number(String(v).replace(/[^0-9.-]/g, ''));
+      return Number.isFinite(n) ? n : 0;
+    };
+
+    const getReciboAmount = (r) => {
+      // en tu schema existe totalPagado (y a veces en código usan total)
+      return toMoney(r.total) || toMoney(r.totalPagado) || 0;
+    };
+
+    // A) recibos directos por control (= numeroTramite)
+    const recibosDirectos = numerosStr.length
+      ? await Recibo.find({
+          estatus: { $ne: 'Cancelado' },
+          tipoTramite: 'Protocolito',
+          control: { $in: numerosStr },
+        })
+          .select('_id control total totalPagado estatus')
+          .lean()
+      : [];
+
+    // B) recibos linkeados por ReciboLink (reciboId -> control)
+    const links = numerosNum.length
+      ? await ReciboLink.find({ control: { $in: numerosNum } })
+          .select('reciboId control')
+          .lean()
+      : [];
+
+    const linkedIds = [...new Set(links.map(l => String(l.reciboId)).filter(Boolean))];
+
+    const recibosLinkeados = linkedIds.length
+      ? await Recibo.find({
+          _id: { $in: linkedIds },
+          estatus: { $ne: 'Cancelado' },
+        })
+          .select('_id total totalPagado estatus tipoTramite control')
+          .lean()
+      : [];
+
+    // dedupe por _id
+    const recibosById = new Map();
+    for (const r of [...recibosDirectos, ...recibosLinkeados]) {
+      recibosById.set(String(r._id), r);
+    }
+    const recibos = Array.from(recibosById.values());
+
+    // mapa tramite(control) -> abogado
+    const tramiteToAbogado = new Map();
+    for (const d of docs) {
+      const ctrl = String(Number(d.numeroTramite));
+      const ab = String(d.abogado || '—').trim() || '—';
+      tramiteToAbogado.set(ctrl, ab);
+    }
+
+    // resumen inicial (conteo de trámites)
+    const resumen = {}; // key=ABOGADO_UPPER -> { abogado, tramites, total }
+    for (const d of docs) {
+      const ab = String(d.abogado || '—').trim() || '—';
+      const key = ab.toUpperCase();
+      if (!resumen[key]) resumen[key] = { abogado: ab, tramites: 0, total: 0 };
+      resumen[key].tramites += 1;
+    }
+
+    // links por reciboId: reciboId -> [controls]
+    const linksByReciboId = new Map();
+    for (const l of links) {
+      const rid = String(l.reciboId);
+      if (!linksByReciboId.has(rid)) linksByReciboId.set(rid, []);
+      linksByReciboId.get(rid).push(Number(l.control));
+    }
+
+    // sumar dinero por abogado
+    for (const r of recibos) {
+      const rid = String(r._id);
+      const amount = getReciboAmount(r);
+      if (amount <= 0) continue;
+
+      let controls = (linksByReciboId.get(rid) || [])
+        .filter(Number.isFinite)
+        .map(n => String(n));
+
+      // fallback directo por Recibo.control
+      if (!controls.length && r.control != null) {
+        const c = String(r.control).trim();
+        if (tramiteToAbogado.has(c)) controls = [c];
+      }
+
+      if (!controls.length) continue;
+
+      // si un recibo está ligado a varios trámites, repartimos para no inflar
+      const portion = amount / controls.length;
+
+      for (const c of controls) {
+        const ab = tramiteToAbogado.get(c);
+        if (!ab) continue;
+        const key = ab.toUpperCase();
+        if (!resumen[key]) resumen[key] = { abogado: ab, tramites: 0, total: 0 };
+        resumen[key].total += portion;
+      }
+    }
+
+    const tablaResumen = Object.values(resumen).sort(
+      (a, b) => b.tramites - a.tramites || a.abogado.localeCompare(b.abogado, 'es')
+    );
 
     // =========================== PDF ===========================
     if (String(format).toLowerCase() === 'pdf') {
@@ -594,15 +796,8 @@ router.get('/export', async (req, res) => {
       const CELL_FONT_SIZE = 9;
       const HEADER_FONT_SIZE = 9;
 
-      // =================== RESUMEN / CONTABILIDAD ===================
-      const totalTramites = rows.length;
-      const conteoPorAbogado = rows.reduce((acc, r) => {
-        const nombre = String(r.abogado || '—').trim().toUpperCase();
-        acc[nombre] = (acc[nombre] || 0) + 1;
-        return acc;
-      }, {});
-      const listaAbogados = Object.entries(conteoPorAbogado)
-        .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'es'));
+      const moneyFmt = (n) =>
+        `$${Number(n || 0).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
       // ================= Encabezado (logo izq + textos der) =================
       function drawLogoLeft(yStart) {
@@ -634,16 +829,13 @@ router.get('/export', async (req, res) => {
 
         let yRight = PAGE.top + 14;
         doc.fillColor('black')
-           .fontSize(TITLE_SIZE)
-           .text('Reporte Protocolito', xRight, yRight, { width: wRight, align: 'left' });
+          .fontSize(TITLE_SIZE)
+          .text('Reporte Protocolito', xRight, yRight, { width: wRight, align: 'left' });
 
         const titleBottom = doc.y + 2;
         const accentW = Math.min(90, wRight * 0.25);
-        doc.moveTo(xRight, titleBottom)
-           .lineTo(xRight + accentW, titleBottom)
-           .lineWidth(2)
-           .strokeColor('#999')
-           .stroke();
+        doc.moveTo(xRight, titleBottom).lineTo(xRight + accentW, titleBottom)
+          .lineWidth(2).strokeColor('#999').stroke();
         doc.strokeColor('black').lineWidth(1);
 
         yRight = titleBottom + 6;
@@ -660,24 +852,15 @@ router.get('/export', async (req, res) => {
         const emitido = `Emitido: ${dayjs().format('DD/MM/YYYY HH:mm')}`;
 
         doc.fontSize(SUB_SIZE).fillColor('#666');
-        if (filtroTxt1) {
-          doc.text(filtroTxt1, xRight, yRight, { width: wRight, align: 'left' });
-          yRight = doc.y + 2;
-        }
-        if (filtroTxt2) {
-          doc.text(filtroTxt2, xRight, yRight, { width: wRight, align: 'left' });
-          yRight = doc.y + 2;
-        }
-        doc.fillColor('#888').text(emitido, xRight, yRight, { width: wRight, align: 'left' });
-        const textBottom = doc.y;
+        if (filtroTxt1) { doc.text(filtroTxt1, xRight, yRight, { width: wRight }); yRight = doc.y + 2; }
+        if (filtroTxt2) { doc.text(filtroTxt2, xRight, yRight, { width: wRight }); yRight = doc.y + 2; }
+        doc.fillColor('#888').text(emitido, xRight, yRight, { width: wRight });
 
+        const textBottom = doc.y;
         const headerBottom = Math.max(PAGE.top + logo.height, textBottom) + 12;
 
-        doc.moveTo(PAGE.left, headerBottom)
-           .lineTo(PAGE.right, headerBottom)
-           .lineWidth(0.8)
-           .strokeColor('#bbb')
-           .stroke();
+        doc.moveTo(PAGE.left, headerBottom).lineTo(PAGE.right, headerBottom)
+          .lineWidth(0.8).strokeColor('#bbb').stroke();
         doc.strokeColor('black').lineWidth(1);
 
         return headerBottom + 8;
@@ -726,53 +909,103 @@ router.get('/export', async (req, res) => {
         return y + rowH;
       }
 
-      // --- Bloque de Resumen / Contabilidad ---
+      // ✅ NUEVO: Resumen/Contabilidad con TABLA (manteniendo tu estilo)
       function drawResumenContabilidad(yStart) {
-        // estimación para checar salto de página
-        const estimado = 70 + (listaAbogados.length * 16);
+        const totalTramites = rows.length;
+        const estimado = 120 + (tablaResumen.length * 18);
         if (yStart + estimado > PAGE.bottom) {
           doc.addPage();
           yStart = drawPageHeader();
         }
 
         // Separador
-        doc.moveTo(PAGE.left, yStart)
-           .lineTo(PAGE.right, yStart)
-           .lineWidth(0.8)
-           .strokeColor('#bbb')
-           .stroke();
+        doc.moveTo(PAGE.left, yStart).lineTo(PAGE.right, yStart)
+          .lineWidth(0.8).strokeColor('#bbb').stroke();
         doc.strokeColor('black').lineWidth(1);
 
         let y = yStart + 10;
+
         doc.fontSize(12).fillColor('#000')
-           .text('Resumen / Contabilidad', PAGE.left, y, { width: PAGE.width, align: 'left' });
+          .text('Resumen / Contabilidad', PAGE.left, y, { width: PAGE.width, align: 'left' });
 
         y = doc.y + 6;
         doc.fontSize(10).fillColor('#333')
-           .text(`Total de trámites exportados: ${totalTramites}`, PAGE.left, y, { width: PAGE.width });
+          .text(`Total de trámites exportados: ${totalTramites}`, PAGE.left, y, { width: PAGE.width });
 
-        y = doc.y + 6;
-        doc.fontSize(10).fillColor('#333')
-           .text('Trámites por abogado:', PAGE.left, y, { width: PAGE.width });
+        // ---- Tabla resumen ----
+        y = doc.y + 10;
 
-        y = doc.y + 4;
+        const TCOLS = [
+          { key: 'abogado',  title: 'Abogado',      width: Math.round(PAGE.width * 0.55) },
+          { key: 'tramites', title: '# Trámites',   width: Math.round(PAGE.width * 0.15) },
+          { key: 'total',    title: 'Total Recibos', width: PAGE.width }, // corrige abajo
+        ];
+        const sumT = TCOLS.slice(0, -1).reduce((a, c) => a + c.width, 0);
+        TCOLS[TCOLS.length - 1].width = PAGE.width - sumT;
+
+        // header tabla
         doc.fontSize(9).fillColor('#000');
-        const indent = 12;
+        let x = PAGE.left;
+        TCOLS.forEach(c => {
+          doc.rect(x, y, c.width, HEADER_H).stroke();
+          doc.text(c.title, x + PADDING_X, y + 4, { width: c.width - 2 * PADDING_X });
+          x += c.width;
+        });
+        y += HEADER_H;
 
-        listaAbogados.forEach(([nombre, cnt]) => {
-          doc.text(`• ${nombre} — ${cnt}`, PAGE.left + indent, y, {
-            width: PAGE.width - indent,
-            align: 'left',
-          });
-          y = doc.y + 2;
-          if (y > PAGE.bottom - 24) {
+        // filas tabla
+        doc.fontSize(9);
+        tablaResumen.forEach(r => {
+          const rowData = {
+            abogado: r.abogado,
+            tramites: String(r.tramites),
+            total: moneyFmt(r.total),
+          };
+
+          const rowH = Math.max(
+            ...TCOLS.map(c => {
+              const h = doc.heightOfString(String(rowData[c.key] ?? ''), {
+                width: c.width - 2 * PADDING_X,
+                align: 'left',
+              });
+              return Math.max(h + 6, 16);
+            })
+          );
+
+          if (y + rowH > PAGE.bottom) {
             doc.addPage();
-            y = drawPageHeader() + 8;
-            doc.fontSize(9);
+            const yHeader = drawPageHeader();
+            y = yHeader + 8;
+
+            // re-draw header de tabla en nueva página
+            let xx = PAGE.left;
+            TCOLS.forEach(c => {
+              doc.rect(xx, y, c.width, HEADER_H).stroke();
+              doc.text(c.title, xx + PADDING_X, y + 4, { width: c.width - 2 * PADDING_X });
+              xx += c.width;
+            });
+            y += HEADER_H;
           }
+
+          let xx = PAGE.left;
+          TCOLS.forEach(c => {
+            doc.rect(xx, y, c.width, rowH).stroke();
+            doc.text(String(rowData[c.key] ?? ''), xx + PADDING_X, y + 3, {
+              width: c.width - 2 * PADDING_X,
+              align: 'left',
+            });
+            xx += c.width;
+          });
+          y += rowH;
         });
 
-        return y;
+        // total general
+        const totalGeneral = tablaResumen.reduce((a, r) => a + Number(r.total || 0), 0);
+        y += 10;
+        doc.fontSize(10).fillColor('#000')
+          .text(`TOTAL GENERAL RECIBOS: ${moneyFmt(totalGeneral)}`, PAGE.left, y, { width: PAGE.width });
+
+        return doc.y;
       }
 
       // --- Render ---
@@ -780,31 +1013,44 @@ router.get('/export', async (req, res) => {
       let y = drawTableHeader(headerBottomY);
       rows.forEach(r => { y = drawRow(y, r); });
 
-      // NUEVO: resumen/contabilidad al final
+      // resumen al final, con tabla + dinero
       y = drawResumenContabilidad(y + 8);
 
       doc.end();
-      return; // importante: salir para no continuar con Excel
+      return;
     }
 
     // =========================== EXCEL ===========================
     const wb = XLSX.utils.book_new();
+
+    // Hoja 1: listado protocolitos
     const header = ['# Trámite', 'Tipo', 'Cliente', 'Fecha', 'Abogado', 'Observ.'];
     const aoa = [header, ...rows.map(r => [
       r.numeroTramite, r.tipoTramite, r.cliente, r.fecha, r.abogado, r.observaciones
     ])];
     const ws = XLSX.utils.aoa_to_sheet(aoa);
     XLSX.utils.book_append_sheet(wb, ws, 'Protocolito');
-    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
 
+    // Hoja 2: resumen contable
+    const ws2 = XLSX.utils.aoa_to_sheet([
+      ['Abogado', '# Trámites', 'Total Recibos'],
+      ...tablaResumen.map(r => [r.abogado, r.tramites, Number(r.total || 0)]),
+    ]);
+    XLSX.utils.book_append_sheet(wb, ws2, 'Resumen');
+
+    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="${filenameBase}.xlsx"`);
     return res.send(buf);
+
   } catch (err) {
     console.error('EXPORT PROTOCOLITO ERROR:', err);
     res.status(500).json({ mensaje: 'Error al exportar', detalle: err?.message });
   }
 });
+
+
+
 
 
 

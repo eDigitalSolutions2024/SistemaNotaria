@@ -16,6 +16,7 @@ const API = process.env.REACT_APP_API_URL || 'http://localhost:4000';
 // ----- utils -----
 const emptyRow = {
   _id: null,
+  volumen: '',   
   numeroTramite: '',
   tipoTramite: '',
   cliente: '',
@@ -73,9 +74,9 @@ const stripSubtipo = (tipo) =>
 
 // >>> PRIORIZA MOTIVO PARA TIPO DE TRÁMITE <<<
 function applyClienteToProtocolito(cliente, prev) {
-  const fechaISO = cliente?.hora_llegada
+  /*const fechaISO = cliente?.hora_llegada
     ? formatDateInput(cliente.hora_llegada)
-    : formatDateInput(new Date());
+    : formatDateInput(new Date());*/
   return {
     ...prev,
     cliente: cliente?.nombre || prev.cliente,
@@ -86,7 +87,7 @@ function applyClienteToProtocolito(cliente, prev) {
       cliente?.accion ||
       prev.tipoTramite,
     abogado: cliente?.abogado || prev.abogado,
-    fecha: prev.fecha || fechaISO,
+    
   };
 }
 
@@ -100,6 +101,14 @@ export default function Protocolito({ onOpenRecibo }) {
   const canExport = ['ADMIN', 'PROTOCOLITO', 'RECEPCION', 'admin', 'protocolito', 'recepcion'].includes(user?.role);
   const canDeliver = ['ADMIN', 'RECEPCION', 'admin', 'recepcion'].includes(user?.role);
   const canSeeAll = ['ADMIN','RECEPCION','admin','recepcion'].includes(user?.role);
+  const isAbogado = ['ABOGADO','ASISTENTE','abogado','asistente'].includes(user?.role);
+  const canSeeReciboBtn =
+  isAbogado || canDeliver; // abogado/asistente + recepcion/admin
+
+const canModifyRecibos =
+  canDeliver; // solo recepcion/admin
+
+
 
   const currentUserName =
     user?.nombre || user?.name || user?.fullName || user?.username || '';
@@ -563,7 +572,7 @@ const descargarPlantilla = (id) => {
           tipoTramite: finalTipo,
           cliente: String(newRow.cliente || ''),
           fecha: newRow.fecha,
-          abogado: String(newRow.abogado || ''),
+          //abogado: String(newRow.abogado || ''),
         };
         await axios.put(`${API}/protocolito/${createdId}`, payloadPut);
       }
@@ -754,50 +763,97 @@ const descargarPlantilla = (id) => {
         <button
           className="btn btn-primary"
           style={{ padding: '6px 10px', fontSize: 13 }}
-          onClick={() => openReciboPdf(row)}
+          onClick={(e) => { e.stopPropagation(); openReciboPdf(row); }}
         >
           Recibo
         </button>
       );
     }
     if (estado === 'justificado') {
-      return (
-        <button
-          type="button"
-          onClick={() => { setJustifyViewRow(row); setJustifyViewOpen(true); }}
-          style={{
-            padding: '6px 10px',
-            fontSize: 13,
-            background: '#e6f4ea',
-            border: '1px solid #b7dfc5',
-            borderRadius: 6,
-            lineHeight: 1.2,
-            cursor: 'pointer'
-          }}
-          title="Ver justificante"
-        >
-          Justificado
-        </button>
-      );
-    }
+  // ABOGADO: solo texto (no clic)
+  if (isAbogado) {
     return (
-      <button
-        type="button"
-        onClick={() => openMissing(row)}
+      <span
         style={{
           padding: '6px 10px',
           fontSize: 13,
-          background: '#e9ecef',
-          border: '1px solid #dcdcdc',
+          background: '#e6f4ea',
+          border: '1px solid #b7dfc5',
           borderRadius: 6,
           lineHeight: 1.2,
-          cursor: 'pointer'
+          display: 'inline-block'
         }}
-        title="Opciones para generar/adjuntar justificante"
+        title="Justificado (solo lectura)"
       >
-        No tiene recibo
-      </button>
+        Justificado
+      </span>
     );
+  }
+
+  // RECEPCION/ADMIN: sí abre modal lectura
+  return (
+    <button
+      type="button"
+      onClick={(e) => { e.stopPropagation(); setJustifyViewRow(row); setJustifyViewOpen(true); }}
+      style={{
+        padding: '6px 10px',
+        fontSize: 13,
+        background: '#e6f4ea',
+        border: '1px solid #b7dfc5',
+        borderRadius: 6,
+        lineHeight: 1.2,
+        cursor: 'pointer'
+      }}
+      title="Ver justificante"
+    >
+      Justificado
+    </button>
+  );
+}
+
+    // --- cuando NO hay recibo ---
+if (estado === 'no') {
+  // ABOGADO/ASISTENTE: solo texto, sin opciones
+  if (!canModifyRecibos) {
+    return (
+      <span
+        style={{
+          padding: '6px 10px',
+          fontSize: 13,
+          color: '#6b7280',
+          borderRadius: 6,
+          border: '1px solid #dcdcdc',
+          background: '#f9fafb',
+          display: 'inline-block'
+        }}
+        title="Sin recibo registrado"
+      >
+        Sin recibo
+      </span>
+    );
+  }
+
+  // RECEPCION/ADMIN: sí abre modal opciones
+  return (
+    <button
+      type="button"
+      onClick={(e) => { e.stopPropagation(); openMissing(row); }}
+      style={{
+        padding: '6px 10px',
+        fontSize: 13,
+        background: '#e9ecef',
+        border: '1px solid #dcdcdc',
+        borderRadius: 6,
+        lineHeight: 1.2,
+        cursor: 'pointer'
+      }}
+      title="Opciones para generar/adjuntar justificante"
+    >
+      No tiene recibo
+    </button>
+  );
+}
+
   };
 
   // columnas tabla principal
@@ -817,7 +873,13 @@ const descargarPlantilla = (id) => {
       field: 'fecha',
       headerName: 'Fecha',
       width: 120, minWidth: 110,
-      renderCell: (params) => onlyDate(params?.row?.fecha),
+      renderCell: (params) => onlyDate(params?.row?.createdAt ?? params?.row?.fecha),
+      sortComparator: (_v1, _v2, c1, c2) => {
+        const ra = c1?.row?.createdAt ?? c1?.row?.fecha;
+        const rb = c2?.row?.createdAt ?? c2?.row?.fecha;
+        return (Date.parse(ra) || 0) - (Date.parse(rb) || 0);
+      },
+
       sortComparator: (_v1, _v2, cellParams1, cellParams2) => {
         const ra = cellParams1?.row?.fecha;
         const rb = cellParams2?.row?.fecha;
@@ -827,6 +889,7 @@ const descargarPlantilla = (id) => {
       },
     },
     { field: 'abogado', headerName: 'Abogado', width: 140, minWidth: 130 },
+     { field: 'volumen', headerName: 'Volumen', width: 110, minWidth: 90, type: 'number' }, // ✅ NUEVO
   ];
 
   const plantillasColumn = {
@@ -845,7 +908,8 @@ const descargarPlantilla = (id) => {
       <button
         className="btn btn-editar"
         style={{ padding: '6px 10px', fontSize: 13 }}
-        onClick={(e) => openTplMenu(e, params.row)}
+        onClick={(e) => { e.stopPropagation(); openTplMenu(e, params.row); }}
+
       >
         {label}
       </button>
@@ -883,7 +947,7 @@ const descargarPlantilla = (id) => {
               </button>
             </>
           )}
-          {canDeliver && <ReciboIndicator row={r} />}
+          {canSeeReciboBtn && <ReciboIndicator row={r} />}
 
           {canDeliver && (
             <button
@@ -965,7 +1029,7 @@ const descargarPlantilla = (id) => {
   };
 
   // === Construcción de columnas ===
-  const showActionsColumn = isAdmin || canDeliver;
+  const showActionsColumn = isAdmin || canSeeReciboBtn;
   const columns = [
     ...baseColumns,
     plantillasColumn,

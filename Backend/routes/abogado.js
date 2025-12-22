@@ -4,11 +4,12 @@ const Abogado = require('../models/Abogado');
 const Cliente = require('../models/Cliente');
 const Sala = require('../models/Sala');
 
+const ROLES_VALIDOS = ['ADMIN', 'ABOGADO', 'ASISTENTE', 'PROTOCOLITO', 'RECEPCION'];
 
 // Ruta para registrar abogado
 router.post('/', async (req, res) => {
   try {
-    const { nombre, orden } = req.body;
+    const { nombre, orden, role, abogadoJefe } = req.body;
 
     const existente = await Abogado.findOne({ nombre: new RegExp(`^${nombre}$`, 'i') });
     if (existente) {
@@ -24,21 +25,36 @@ router.post('/', async (req, res) => {
       orden,
       disponible: true,
       asignaciones: 0,
-      ubicacion: '---' // ✅ Inicializar ubicación
+      ubicacion: '---', // ✅ Inicializar ubicación
+      // si mandan role y es válido, lo respetamos; si no, se queda el default del schema
+      ...(role && ROLES_VALIDOS.includes(role) ? { role } : {})
     });
+
+    // 🔹 Si se crea un ASISTENTE y se manda abogadoJefe, lo ligamos
+    if (nuevo.role === 'ASISTENTE' && abogadoJefe) {
+      const jefeIdNum = Number(abogadoJefe);
+      if (Number.isFinite(jefeIdNum)) {
+        const jefe = await Abogado.findById(jefeIdNum);
+        if (jefe && jefe.role === 'ABOGADO') {
+          nuevo.abogadoJefe = jefe._id;
+        }
+      }
+    }
 
     await nuevo.save();
 
     // 💡 Nueva lógica: revisar si hay clientes en espera
-    const clienteEnEspera = await Cliente.findOne({
-      en_espera: true,
-      estado: 'En espera',
-      tieneCita: true
-    }).sort({ _id: 1 }) || await Cliente.findOne({
-      en_espera: true,
-      estado: 'En espera',
-      tieneCita: false
-    }).sort({ _id: 1 });
+    const clienteEnEspera =
+      (await Cliente.findOne({
+        en_espera: true,
+        estado: 'En espera',
+        tieneCita: true
+      }).sort({ _id: 1 })) ||
+      (await Cliente.findOne({
+        en_espera: true,
+        estado: 'En espera',
+        tieneCita: false
+      }).sort({ _id: 1 }));
 
     let mensaje = 'Abogado registrado con éxito';
 
@@ -54,10 +70,8 @@ router.post('/', async (req, res) => {
 
       mensaje += `. Cliente en espera asignado: ${clienteEnEspera.nombre}`;
     }
-    
-    
 
-await nuevo.save();  // Esto guarda la ubicación correctamente
+    await nuevo.save(); // Esto guarda la ubicación correctamente (y cualquier cambio extra)
 
     res.json({ mensaje, abogado: nuevo });
 
@@ -71,7 +85,7 @@ router.put('/liberar/:clienteId', async (req, res) => {
   try {
     console.log('Cliente ID recibido:', req.params.clienteId);
     console.log('Datos recibidos:', req.body);
-    
+
     const cliente = await Cliente.findById(req.params.clienteId);
     if (!cliente) {
       return res.status(404).json({ mensaje: 'Cliente no encontrado' });
@@ -95,41 +109,42 @@ router.put('/liberar/:clienteId', async (req, res) => {
       return res.status(404).json({ mensaje: 'Abogado no encontrado' });
     }
 
-   
     // 3. Liberar al abogado
-      abogado.disponible = true;
-      abogado.ubicacion = '---' // ✅ Limpiar ubicación
-      await abogado.save();
+    abogado.disponible = true;
+    abogado.ubicacion = '---'; // ✅ Limpiar ubicación
+    await abogado.save();
 
-      // 4. Liberar la sala asignada a este abogado
-      await Sala.findOneAndUpdate(
-        { abogado_asignado: abogado._id },
-        { disponible: true, abogado_asignado: null }
-      );
+    // 4. Liberar la sala asignada a este abogado
+    await Sala.findOneAndUpdate(
+      { abogado_asignado: abogado._id },
+      { disponible: true, abogado_asignado: null }
+    );
 
-    // 4. Asignar al siguiente cliente en espera
-        // Buscar siguiente cliente en espera (con cita tiene prioridad)
-          let siguienteCliente = await Cliente.findOne({ 
-        en_espera: true, 
-        estado: 'En espera', 
-        abogado_preferido: abogado._id, 
-        tieneCita: true 
-      }).sort({ _id: 1 });
+    // 5. Asignar al siguiente cliente en espera
+    // Buscar siguiente cliente en espera (con cita tiene prioridad)
+    let siguienteCliente = await Cliente.findOne({
+      en_espera: true,
+      estado: 'En espera',
+      abogado_preferido: abogado._id,
+      tieneCita: true
+    }).sort({ _id: 1 });
 
-      // Si no hay clientes específicos, se busca alguno general
-      if (!siguienteCliente) {
-        siguienteCliente = await Cliente.findOne({
+    // Si no hay clientes específicos, se busca alguno general
+    if (!siguienteCliente) {
+      siguienteCliente =
+        (await Cliente.findOne({
           en_espera: true,
           estado: 'En espera',
           tieneCita: true,
           abogado_preferido: null
-        }).sort({ _id: 1 }) || await Cliente.findOne({
+        }).sort({ _id: 1 })) ||
+        (await Cliente.findOne({
           en_espera: true,
           estado: 'En espera',
           tieneCita: false,
           abogado_preferido: null
-        }).sort({ _id: 1 });
-      }
+        }).sort({ _id: 1 }));
+    }
 
     if (siguienteCliente) {
       siguienteCliente.estado = 'Asignado';
@@ -152,12 +167,11 @@ router.put('/liberar/:clienteId', async (req, res) => {
       } else {
         abogado.ubicacion = 'Sin sala';
       }
-
     }
 
-   await abogado.save();
+    await abogado.save();
     const io = req.app.get('io');
-  io.emit('clienteActualizado');
+    io.emit('clienteActualizado');
 
     res.json({
       mensaje: 'Cliente finalizado. Abogado liberado y nuevo cliente asignado (si existía).',
@@ -169,7 +183,6 @@ router.put('/liberar/:clienteId', async (req, res) => {
   }
 });
 
-
 // Obtener todos los abogados
 router.get('/', async (req, res) => {
   try {
@@ -180,14 +193,12 @@ router.get('/', async (req, res) => {
   }
 });
 
-
-
 // === EDITAR DATOS DEL ABOGADO ===
 // PUT /abogados/:id
 router.put('/:id', async (req, res) => {
   try {
     const id = req.params.id; // tu _id es numérico (p.ej. 1001), pero mongoose acepta string numérico
-    const { nombre, orden, disponible, ubicacion, role } = req.body;
+    const { nombre, orden, disponible, ubicacion, role, abogadoJefe } = req.body;
 
     // Validar existencia
     const abogado = await Abogado.findById(id);
@@ -217,8 +228,30 @@ router.put('/:id', async (req, res) => {
       abogado.ubicacion = ubicacion.trim() || '---';
     }
 
-    if (role === 'ADMIN' || role === 'ABOGADO' || role === 'ASISTENTE' || role === 'PROTOCOLITO' || role === 'RECEPCION') {
+    // Rol (si viene y es válido)
+    if (role && ROLES_VALIDOS.includes(role)) {
       abogado.role = role;
+    }
+
+    // 🔹 Manejo de abogadoJefe (solo aplica para asistentes)
+    if (abogado.role === 'ASISTENTE') {
+      if (abogadoJefe === undefined || abogadoJefe === '' || abogadoJefe === null) {
+        // Sin jefe asignado
+        abogado.abogadoJefe = null;
+      } else {
+        const jefeIdNum = Number(abogadoJefe);
+        if (!Number.isFinite(jefeIdNum)) {
+          return res.status(400).json({ mensaje: 'El ID del abogado responsable no es válido' });
+        }
+        const jefe = await Abogado.findById(jefeIdNum);
+        if (!jefe || jefe.role !== 'ABOGADO') {
+          return res.status(400).json({ mensaje: 'El abogado responsable no existe o no es un abogado válido' });
+        }
+        abogado.abogadoJefe = jefe._id;
+      }
+    } else {
+      // Cualquier otro rol no debe tener abogadoJefe
+      abogado.abogadoJefe = null;
     }
 
     await abogado.save();

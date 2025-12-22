@@ -116,9 +116,51 @@ const tipoFromRow = (r) =>
   (r?.tipoTramite || r?.motivo || r?.servicio || r?.accion || '').trim();
 const incluye = (txt, needle) => norm(txt).includes(norm(needle));
 
+
+
+
+
+// ✅ Confirmación de folios antes de guardar
+function folioCount(desde, hasta) {
+  const d = Number(desde), h = Number(hasta);
+  if (!Number.isFinite(d) || !Number.isFinite(h)) return 0;
+  if (d <= 0 || h <= 0) return 0;
+  return Math.max(0, h - d + 1);
+}
+
+function confirmFoliosBeforeSave({ volumen, desde, hasta, tipo, control }) {
+  const v = String(volumen ?? '').trim();
+  const d = Number(desde), h = Number(hasta);
+
+  // Si no capturaron folios, no preguntamos
+  const hasAny = v || String(desde ?? '').trim() || String(hasta ?? '').trim();
+  if (!hasAny) return true;
+
+  // Si están incompletos/invalidos, deja que tus validaciones lo manejen
+  if (!v || !Number.isFinite(d) || !Number.isFinite(h) || d <= 0 || h <= 0) return true;
+
+  const qty = folioCount(d, h);
+
+  const msg =
+    `⚠️ Confirmación de folios\n\n` +
+    `${control ? `# Control: ${control}\n` : ''}` +
+    `${tipo ? `Trámite: ${tipo}\n` : ''}` +
+    `Volumen: ${v}\n` +
+    `Folios: ${d} a ${h}\n` +
+    `Cantidad: ${qty} folio(s)\n\n` +
+    `¿Confirmas que este rango es correcto?`;
+
+  return window.confirm(msg);
+}
+
 // ---------- Volumen y folios (helpers alineados a tus rutas) ----------
 // Límite máximo de folios por libro/volumen
 const MAX_FOLIO_POR_LIBRO = 300;
+
+// ⚠️ REGLA REAL DE USO DE FOLIOS (no se usa 1,2 ni 299,300)
+const FIRST_USABLE_FOLIO = 3;
+const LAST_USABLE_FOLIO = 298; // 300 - 2 últimos reservados
+
 
 // Incrementa etiquetas de volumen “Libro 3” -> “Libro 4” o “5” -> “6”
 function incVolumenTag(vol) {
@@ -204,9 +246,9 @@ const stripSubtipo = (tipo) =>
 
 // >>> PRIORIZA MOTIVO PARA TIPO DE TRÁMITE <<<
 function applyClienteToEscritura(cliente, prev) {
-  const fechaISO = cliente?.hora_llegada
+  /*const fechaISO = cliente?.hora_llegada
     ? formatDateInput(cliente.hora_llegada)
-    : formatDateInput(new Date());
+    : formatDateInput(new Date());*/
   return {
     ...prev,
     cliente: cliente?.nombre || prev.cliente,
@@ -217,7 +259,7 @@ function applyClienteToEscritura(cliente, prev) {
       cliente?.accion ||
       prev.tipoTramite,
     abogado: cliente?.abogado || prev.abogado,
-    fecha: prev.fecha || fechaISO,
+   
   };
 }
 
@@ -531,16 +573,22 @@ function isNewMoneyComplete(row) {
 
 function isNewFoliosValid(volumen, desde, hasta) {
   const hasAny = isNonEmpty(volumen) || isNonEmpty(desde) || isNonEmpty(hasta);
-  if (!hasAny) return true; // si no capturaron folios, no exigimos nada
+  if (!hasAny) return true;
 
-  const vOk   = isNonEmpty(volumen);
-  const dNum  = Number(desde), hNum = Number(hasta);
-  const nums  = Number.isFinite(dNum) && Number.isFinite(hNum) && dNum > 0 && hNum > 0;
+  const vOk = isNonEmpty(volumen);
+  const dNum = Number(desde), hNum = Number(hasta);
+
+  const nums = Number.isFinite(dNum) && Number.isFinite(hNum) && dNum > 0 && hNum > 0;
   const orden = dNum <= hNum;
-  const dentroDeLibro = hNum <= MAX_FOLIO_POR_LIBRO;  // 👈 aquí se aplica el límite
 
-  return vOk && nums && orden && dentroDeLibro;
+  // ✅ NUEVO: rango utilizable
+  const dentroRangoUtil =
+    dNum >= FIRST_USABLE_FOLIO &&
+    hNum <= LAST_USABLE_FOLIO;
+
+  return vOk && nums && orden && dentroRangoUtil;
 }
+
 
 
 
@@ -555,8 +603,9 @@ function getNewFormErrors({ newRow, newVolumen, newFolioDesde, newFolioHasta, ne
   if (!isNewCoreComplete(newRow)) errors.push('Tipo de trámite, Cliente, Fecha y Abogado son obligatorios.');
   if (!isNewFoliosValid(newVolumen, newFolioDesde, newFolioHasta)) {
   errors.push(
-    `Si registras folios: Volumen, “Desde” y “Hasta” son obligatorios, válidos (Desde ≤ Hasta) y el folio máximo permitido es ${MAX_FOLIO_POR_LIBRO} por volumen.`
-  );
+  `Si registras folios: Volumen, “Desde” y “Hasta” son obligatorios y deben estar dentro del rango utilizable ${FIRST_USABLE_FOLIO} a ${LAST_USABLE_FOLIO} (no se usan 1, 2, ${LAST_USABLE_FOLIO + 1}, ${LAST_USABLE_FOLIO + 2}).`
+);
+
 }
 
   if (!isNewTestamentoValid(newRow?.tipoTramite, newHoraInicio, newHoraFin)) {
@@ -825,7 +874,7 @@ function getNewFormErrors({ newRow, newVolumen, newFolioDesde, newFolioHasta, ne
 
   const onCancel = (id) => {
     if (adding && id === 'new') {
-      setNewRow(emptyRow);
+      setNewRow({ ...emptyRow, fecha: formatDateInput(new Date()) });
       setSelectedCliente(null);
       setAdding(false);
       setNewSubtipo('');
@@ -857,7 +906,7 @@ function getNewFormErrors({ newRow, newVolumen, newFolioDesde, newFolioHasta, ne
   };
 
   const onSaveNew = async () => {
-     // Validación de campos obligatorios
+  // 1) Validación central (obligatorios + folios + testamento HH:mm + montos si aplica)
   const errs = getNewFormErrors({
     newRow,
     newVolumen,
@@ -866,206 +915,235 @@ function getNewFormErrors({ newRow, newVolumen, newFolioDesde, newFolioHasta, ne
     newHoraInicio,
     newHoraFin
   });
+
   if (errs.length) {
     return setMsg({ type: 'warn', text: errs.join(' ') });
   }
 
-  // Si es testamento, validamos disponibilidad (como ya lo hacías):
-  if (isTestamentoTipo(newRow.tipoTramite)) {
-    const disponible = await checkHorarioTestamento({
-      apiBase: API,
-      fecha: newRow.fecha,
-      inicio: newHoraInicio,
-      fin: newHoraFin
-    });
-    if (!disponible) {
-      return setMsg({ type: 'error', text: 'La hora de lectura seleccionada ya está ocupada para ese día.' });
-    }
+  // 2) Cliente seleccionado
+  const cid = selectedCliente?._id || selectedCliente?.id;
+  if (!cid) {
+    return setMsg({ type: 'warn', text: 'Selecciona un cliente primero' });
   }
-    const cid = selectedCliente?._id || selectedCliente?.id;
-    if (!cid) return setMsg({ type: 'warn', text: 'Selecciona un cliente primero' });
 
-    // Validación local de folio si se indicó alguno
-if (newVolumen || newFolioDesde || newFolioHasta) {
-  const d = Number(newFolioDesde), h = Number(newFolioHasta);
-  if (!newVolumen && newVolumen !== 0) {
-    return setMsg({ type: 'warn', text: 'Volumen es obligatorio si registras folios' });
-  }
-  if (!Number.isFinite(d) || !Number.isFinite(h) || d <= 0 || h <= 0) {
-    return setMsg({ type: 'warn', text: 'Folio inválido: usa números positivos' });
-  }
-  if (d > h) {
-    return setMsg({ type: 'warn', text: 'Folio inválido: "desde" no puede ser mayor que "hasta"' });
-  }
-  if (h > MAX_FOLIO_POR_LIBRO) {
-    return setMsg({
-      type: 'warn',
-      text: `El folio "hasta" (${h}) supera el máximo permitido (${MAX_FOLIO_POR_LIBRO}) por volumen.`
-    });
-  }
-}
+  // 3) Si es testamento: validar disponibilidad (solo una vez)
+  const finalTipo = String(newRow.tipoTramite || '').trim();
 
-
-    // TESTAMENTO: validación de horas si aplica
-    if (isTestamentoTipo(newRow.tipoTramite)) {
-      if (!isHHMM(newHoraInicio) || !isHHMM(newHoraFin)) {
-        return setMsg({ type: 'warn', text: 'Para testamento, usa formato HH:mm en Hora inicio y Hora fin.' });
-      }
-      if (newHoraInicio >= newHoraFin) {
-        return setMsg({ type: 'warn', text: 'Hora fin debe ser mayor que hora inicio.' });
-      }
+  if (isTestamentoTipo(finalTipo)) {
+    try {
       const disponible = await checkHorarioTestamento({
         apiBase: API,
         fecha: newRow.fecha,
         inicio: newHoraInicio,
         fin: newHoraFin
       });
+
       if (!disponible) {
-        return setMsg({ type: 'error', text: 'La hora de lectura seleccionada ya está ocupada para ese día.' });
+        return setMsg({
+          type: 'error',
+          text: 'La hora de lectura seleccionada ya está ocupada para ese día.'
+        });
       }
+    } catch (e) {
+      return setMsg({
+        type: 'error',
+        text: 'No se pudo validar disponibilidad de horario. Intenta de nuevo.'
+      });
+    }
+  }
+
+  // 4) Confirmación de folios (si capturaron rango)
+  const okFolios = confirmFoliosBeforeSave({
+    volumen: newVolumen,
+    desde: newFolioDesde,
+    hasta: newFolioHasta,
+    tipo: finalTipo,
+    control: null // aún no existe en alta
+  });
+
+  if (!okFolios) {
+    return setMsg({ type: 'warn', text: 'Guardado cancelado por confirmación de folios.' });
+  }
+
+  try {
+    // 5) Crear escritura (backend genera # de control)
+    const postPayload = {
+      clienteId: cid,
+      volumen: newVolumen || null,
+      folioDesde: newFolioDesde ? Number(newFolioDesde) : null,
+      folioHasta: newFolioHasta ? Number(newFolioHasta) : null,
+      ...(isTestamentoTipo(finalTipo)
+        ? { horaLecturaInicio: newHoraInicio, horaLecturaFin: newHoraFin }
+        : {})
+    };
+
+    const { data: resp } = await axios.post(`${API}/escrituras`, postPayload);
+
+    let createdId = resp?.id || resp?._id || resp?.data?._id || null;
+    let createdNumero = resp?.numeroControl || resp?.data?.numeroControl || null;
+
+    // Fallback: si el POST no devolvió _id pero sí numeroControl, lo buscamos
+    if (!createdId && createdNumero != null) {
+      try {
+        const { data: list } = await axios.get(`${API}/escrituras`, {
+          params: { q: String(createdNumero) }
+        });
+        const arr = Array.isArray(list) ? list : [];
+        const found = arr.find((r) => Number(r?.numeroControl) === Number(createdNumero));
+        if (found?._id) {
+          createdId = found._id;
+          createdNumero = createdNumero ?? found.numeroControl;
+        }
+      } catch {}
     }
 
-    try {
-      const finalTipo = String(newRow.tipoTramite || '').trim();
+    const aplicaMontos = isTramiteConMontos(finalTipo);
 
-      // Crear escritura a partir de cliente seleccionado (backend genera # de control)
-      const { data: resp } = await axios.post(`${API}/escrituras`, {
-        clienteId: cid,
-        volumen: newVolumen || null,
-        folioDesde: newFolioDesde ? Number(newFolioDesde) : null,
-        folioHasta: newFolioHasta ? Number(newFolioHasta) : null,
-        // Enviamos horas en POST por si el backend ya las soporta
-        ...(isTestamentoTipo(finalTipo) ? {
-          horaLecturaInicio: newHoraInicio,
-          horaLecturaFin: newHoraFin
-        } : {})
-      });
+    // 6) PUT de aseguramiento (por si POST ignora campos)
+    if (createdId) {
+      const payloadPut = {
+        numeroControl: Number(createdNumero || 0),
+        tipoTramite: finalTipo || undefined,
+        cliente: String(newRow.cliente || '').trim(),
+        fecha: newRow.fecha,
+        abogado: String(newRow.abogado || '').trim(),
+        ...(newVolumen ? { volumen: newVolumen } : {}),
+        ...(newFolioDesde ? { folioDesde: Number(newFolioDesde) } : {}),
+        ...(newFolioHasta ? { folioHasta: Number(newFolioHasta) } : {}),
+        ...(isTestamentoTipo(finalTipo)
+          ? { horaLecturaInicio: newHoraInicio, horaLecturaFin: newHoraFin }
+          : {}),
+        ...(aplicaMontos
+          ? {
+              totalImpuestos: Number(newRow.totalImpuestos),
+              valorAvaluo: Number(newRow.valorAvaluo),
+              totalGastosExtra: Number(newRow.totalGastosExtra),
+              totalHonorarios: Number(newRow.totalHonorarios)
+            }
+          : {})
+      };
 
-      let createdId = resp?.id || resp?._id || resp?.data?._id || null;
-      let createdNumero = resp?.numeroControl || resp?.data?.numeroControl || null;
+      const { data: updated } = await axios.put(`${API}/escrituras/${createdId}`, payloadPut);
 
-      if (!createdId && createdNumero != null) {
-        try {
-          const { data: list } = await axios.get(`${API}/escrituras`, {
-            params: { q: String(createdNumero) }
-          });
-          const arr = Array.isArray(list) ? list : [];
-          const found = arr.find((r) => Number(r?.numeroControl) === Number(createdNumero));
-          if (found?._id) {
-            createdId = found._id;
-            createdNumero = createdNumero ?? found.numeroControl;
-          }
-        } catch {}
-      }
-      
-const aplicaMontos = isTramiteConMontos(finalTipo);
+      const volDespues = updated?.volumen ?? newVolumen ?? '';
+      const dDespues = updated?.folioDesde ?? newFolioDesde ?? '';
+      const hDespues = updated?.folioHasta ?? newFolioHasta ?? '';
 
-      // PUT de aseguramiento por si el backend ignora esos campos en POST
-      if (createdId) {
-        const payloadPut = {
-  numeroControl: Number(createdNumero || 0),
-  tipoTramite: finalTipo || undefined,
-  cliente: String(newRow.cliente || ''),
-  fecha: newRow.fecha,
-  abogado: String(newRow.abogado || ''),
-  ...(newVolumen ? { volumen: newVolumen } : {}),
-  ...(newFolioDesde ? { folioDesde: Number(newFolioDesde) } : {}),
-  ...(newFolioHasta ? { folioHasta: Number(newFolioHasta) } : {}),
-  ...(isTestamentoTipo(finalTipo) ? {
-    horaLecturaInicio: newHoraInicio,
-    horaLecturaFin: newHoraFin
-  } : {}),
-  ...(aplicaMontos ? {
-    totalImpuestos: Number(newRow.totalImpuestos),
-    valorAvaluo: Number(newRow.valorAvaluo),
-    totalGastosExtra: Number(newRow.totalGastosExtra),
-    totalHonorarios: Number(newRow.totalHonorarios),
-  } : {}),
-};
-
-        const { data: updated } = await axios.put(`${API}/escrituras/${createdId}`, payloadPut);
-
-        const volDespues = updated?.volumen ?? newVolumen ?? '';
-        const dDespues = updated?.folioDesde ?? newFolioDesde ?? '';
-        const hDespues = updated?.folioHasta ?? newFolioHasta ?? '';
-        if (volDespues || dDespues || hDespues) {
-          setMsg({ type: 'ok', text: `Escritura ${createdNumero ?? ''} creada. Volumen ${volDespues || '—'}, Folios ${fmtRange(dDespues, hDespues)}.` });
-        } else {
-          setMsg({ type: 'ok', text: `Escritura ${createdNumero ?? ''} creada` });
-        }
+      if (volDespues || dDespues || hDespues) {
+        setMsg({
+          type: 'ok',
+          text: `Escritura ${createdNumero ?? ''} creada. Volumen ${volDespues || '—'}, Folios ${fmtRange(dDespues, hDespues)}.`
+        });
       } else {
         setMsg({ type: 'ok', text: `Escritura ${createdNumero ?? ''} creada` });
       }
-
-      await fetchData();
-      setNewRow(emptyRow);
-      setSelectedCliente(null);
-      setAdding(false);
-      setNewSubtipo('');
-      setNewVolumen('');
-      setNewFolioDesde('');
-      setNewFolioHasta('');
-      setNewHoraInicio('');
-      setNewHoraFin('');
-    } catch (err2) {
-      const t = err2.response?.data?.mensaje || 'Error al crear';
-      setMsg({ type: 'error', text: t });
+    } else {
+      // Si no tenemos id, al menos avisamos (y refrescamos)
+      setMsg({ type: 'ok', text: `Escritura ${createdNumero ?? ''} creada` });
     }
+
+    // 7) Refrescar y limpiar formulario
+    await fetchData();
+    setNewRow(emptyRow);
+    setSelectedCliente(null);
+    setAdding(false);
+    setNewSubtipo('');
+    setNewVolumen('');
+    setNewFolioDesde('');
+    setNewFolioHasta('');
+    setNewHoraInicio('');
+    setNewHoraFin('');
+  } catch (err2) {
+    const t = err2?.response?.data?.mensaje || 'Error al crear';
+    setMsg({ type: 'error', text: t });
+  }
+};
+
+
+const onSaveEdit = async (id) => {
+  const draft = drafts[id] || {};
+
+  // ---------- helpers locales ----------
+  const isNonEmpty = (v) => String(v ?? '').trim().length > 0;
+  const isNum = (v) => v !== '' && v !== null && v !== undefined && !Number.isNaN(Number(v));
+  const isNonNeg = (v) => isNum(v) && Number(v) >= 0;
+
+  const validateEditCore = (d) => {
+    if (!isNonEmpty(d.numeroControl) || !isNonEmpty(d.tipoTramite) || !isNonEmpty(d.cliente) || !isNonEmpty(d.fecha) || !isNonEmpty(d.abogado)) {
+      return 'Todos los campos son obligatorios';
+    }
+    if (Number.isNaN(Number(d.numeroControl))) return 'El número de control debe ser numérico';
+    return null;
   };
 
-  const onSaveEdit = async (id) => {
-    const draft = drafts[id];
+  const validateEditFolios = (volumen, desde, hasta) => {
+    const hasAny = isNonEmpty(volumen) || isNonEmpty(desde) || isNonEmpty(hasta);
+    if (!hasAny) return null; // no capturaron folios → ok
 
-    const aplicaMontos = isTramiteConMontos(draft?.tipoTramite);
+    if (!isNonEmpty(volumen)) return 'Volumen es obligatorio si registras folios';
 
+    const d = Number(desde), h = Number(hasta);
+    if (!Number.isFinite(d) || !Number.isFinite(h) || d <= 0 || h <= 0) {
+      return 'Folio inválido: usa números positivos';
+    }
+    if (d > h) return 'Folio inválido: "desde" no puede ser mayor que "hasta"';
 
-   // Validación local de folio si hay cambios en esos campos
-if (draft?.volumen || draft?.folioDesde || draft?.folioHasta) {
-  const d = Number(draft.folioDesde), h = Number(draft.folioHasta);
-  if (!draft.volumen && draft.volumen !== 0) {
-    return setMsg({ type: 'warn', text: 'Volumen es obligatorio si registras folios' });
-  }
-  if (!Number.isFinite(d) || !Number.isFinite(h) || d <= 0 || h <= 0) {
-    return setMsg({ type: 'warn', text: 'Folio inválido: usa números positivos' });
-  }
-  if (d > h) {
-    return setMsg({ type: 'warn', text: 'Folio inválido: "desde" no puede ser mayor que "hasta"' });
-  }
-  if (h > MAX_FOLIO_POR_LIBRO) {
-    return setMsg({
-      type: 'warn',
-      text: `El folio "hasta" (${h}) supera el máximo permitido (${MAX_FOLIO_POR_LIBRO}) por volumen.`
-    });
-  }
-}
-
-
-    // Validación: no reutilizar folios ya ocupados (local)
-    if ((draft?.folioDesde || draft?.folioHasta)) {
-      const vol = drafts[id]?.volumen ?? '';
-      const chk = foliosTraslapanLocal(rows, vol, draft?.folioDesde, draft?.folioHasta, id);
-      if (chk?.conflict) {
-        const r = chk.with || {};
-        return setMsg({
-          type: 'error',
-          text: `Folio ocupado en Volumen ${vol}. Traslapa con el control ${r?.numeroControl ?? 'desconocido'} (${fmtRange(r?.folioDesde ?? r?.folio, r?.folioHasta ?? r?.folio)}).`
-        });
-      }
+    if (d < FIRST_USABLE_FOLIO || h > LAST_USABLE_FOLIO) {
+      return `Folios inválidos: solo se permite del ${FIRST_USABLE_FOLIO} al ${LAST_USABLE_FOLIO} (no se usan 1, 2, ${LAST_USABLE_FOLIO + 1} y ${LAST_USABLE_FOLIO + 2}).`;
     }
 
-    const err = validateRow(draft);
-    if (err) return setMsg({ type: 'warn', text: err });
+    return null;
+  };
 
-    // TESTAMENTO: validación de horas si aplica
-    if (isTestamentoTipo(draft.tipoTramite)) {
-      const hi = draft.horaLecturaInicio || '';
-      const hf = draft.horaLecturaFin || '';
-      if (!isHHMM(hi) || !isHHMM(hf)) {
-        return setMsg({ type: 'warn', text: 'Para testamento, usa formato HH:mm en Hora inicio y Hora fin.' });
-      }
-      if (hi >= hf) {
-        return setMsg({ type: 'warn', text: 'Hora fin debe ser mayor que hora inicio.' });
-      }
+  const validateEditMoney = (d) => {
+    if (!isTramiteConMontos(d?.tipoTramite)) return null;
+    if (!isNonNeg(d.totalImpuestos) || !isNonNeg(d.valorAvaluo) || !isNonNeg(d.totalGastosExtra) || !isNonNeg(d.totalHonorarios)) {
+      return 'Total Impuestos, Valor Avalúo, Gastos Extra y Honorarios son obligatorios y deben ser números ≥ 0 para este tipo de trámite.';
+    }
+    return null;
+  };
+
+  const validateEditTestamento = (d) => {
+    if (!isTestamentoTipo(d?.tipoTramite)) return null;
+    const hi = String(d.horaLecturaInicio || '').trim();
+    const hf = String(d.horaLecturaFin || '').trim();
+
+    if (!isHHMM(hi) || !isHHMM(hf)) return 'Para testamento: usa formato HH:mm en Hora inicio y Hora fin.';
+    if (hi >= hf) return 'Hora fin debe ser mayor que hora inicio.';
+    return null;
+  };
+
+  // ---------- 1) Validaciones ----------
+  const errCore = validateEditCore(draft);
+  if (errCore) return setMsg({ type: 'warn', text: errCore });
+
+  const errFolios = validateEditFolios(draft?.volumen, draft?.folioDesde, draft?.folioHasta);
+  if (errFolios) return setMsg({ type: 'warn', text: errFolios });
+
+  // Traslape local (solo si hay rango)
+  if (isNonEmpty(draft?.folioDesde) || isNonEmpty(draft?.folioHasta)) {
+    const vol = draft?.volumen ?? '';
+    const chk = foliosTraslapanLocal(rows, vol, draft?.folioDesde, draft?.folioHasta, id);
+    if (chk?.conflict) {
+      const r = chk.with || {};
+      return setMsg({
+        type: 'error',
+        text: `Folio ocupado en Volumen ${vol}. Traslapa con el control ${r?.numeroControl ?? 'desconocido'} (${fmtRange(r?.folioDesde ?? r?.folio, r?.folioHasta ?? r?.folio)}).`
+      });
+    }
+  }
+
+  const errTest = validateEditTestamento(draft);
+  if (errTest) return setMsg({ type: 'warn', text: errTest });
+
+  const errMoney = validateEditMoney(draft);
+  if (errMoney) return setMsg({ type: 'warn', text: errMoney });
+
+  // Disponibilidad de testamento (solo una vez)
+  if (isTestamentoTipo(draft?.tipoTramite)) {
+    const hi = String(draft.horaLecturaInicio || '').trim();
+    const hf = String(draft.horaLecturaFin || '').trim();
+    try {
       const disponible = await checkHorarioTestamento({
         apiBase: API,
         fecha: draft.fecha,
@@ -1076,62 +1154,86 @@ if (draft?.volumen || draft?.folioDesde || draft?.folioHasta) {
       if (!disponible) {
         return setMsg({ type: 'error', text: 'La hora de lectura seleccionada ya está ocupada para ese día.' });
       }
+    } catch {
+      return setMsg({ type: 'error', text: 'No se pudo validar disponibilidad de horario. Intenta de nuevo.' });
     }
+  }
 
-    try {
-      const horasEdit =
-        isTestamentoTipo(draft.tipoTramite) && isHHMM(draft.horaLecturaInicio) && isHHMM(draft.horaLecturaFin)
-          ? { horaLecturaInicio: draft.horaLecturaInicio, horaLecturaFin: draft.horaLecturaFin }
-          : {}; // no toques horas si no son válidas
+  // Confirmación de folios
+  const okFolios = confirmFoliosBeforeSave({
+    volumen: draft?.volumen,
+    desde: draft?.folioDesde,
+    hasta: draft?.folioHasta,
+    tipo: draft?.tipoTramite,
+    control: draft?.numeroControl
+  });
 
-      const payload = {
-  numeroControl: Number(draft.numeroControl),
-  tipoTramite: draft.tipoTramite.trim(),
-  cliente: draft.cliente.trim(),
-  fecha: draft.fecha,
-  abogado: draft.abogado.trim(),
-  ...(draft.volumen != null && draft.volumen !== '' ? { volumen: draft.volumen } : {}),
-  ...(draft.folioDesde != null && draft.folioDesde !== '' ? { folioDesde: Number(draft.folioDesde) } : {}),
-  ...(draft.folioHasta != null && draft.folioHasta !== '' ? { folioHasta: Number(draft.folioHasta) } : {}),
-  ...(isAdmin ? { observaciones: (draft.observaciones || '').trim() } : {}),
-  ...horasEdit,
-  ...(aplicaMontos ? {
-    totalImpuestos: Number(draft.totalImpuestos),
-    valorAvaluo: Number(draft.valorAvaluo),
-    totalGastosExtra: Number(draft.totalGastosExtra),
-    totalHonorarios: Number(draft.totalHonorarios),
-  } : {}),
+  if (!okFolios) {
+    return setMsg({ type: 'warn', text: 'Guardado cancelado por confirmación de folios.' });
+  }
+
+  // ---------- 2) Payload ----------
+  const aplicaMontos = isTramiteConMontos(draft?.tipoTramite);
+
+  const horasEdit =
+    isTestamentoTipo(draft?.tipoTramite) && isHHMM(draft?.horaLecturaInicio) && isHHMM(draft?.horaLecturaFin)
+      ? { horaLecturaInicio: draft.horaLecturaInicio, horaLecturaFin: draft.horaLecturaFin }
+      : {};
+
+  const payload = {
+    numeroControl: Number(draft.numeroControl),
+    tipoTramite: String(draft.tipoTramite || '').trim(),
+    cliente: String(draft.cliente || '').trim(),
+    fecha: draft.fecha,
+    abogado: String(draft.abogado || '').trim(),
+
+    ...(draft.volumen != null && String(draft.volumen).trim() !== '' ? { volumen: draft.volumen } : {}),
+    ...(draft.folioDesde != null && String(draft.folioDesde).trim() !== '' ? { folioDesde: Number(draft.folioDesde) } : {}),
+    ...(draft.folioHasta != null && String(draft.folioHasta).trim() !== '' ? { folioHasta: Number(draft.folioHasta) } : {}),
+
+    ...(isAdmin ? { observaciones: String(draft.observaciones || '').trim() } : {}),
+    ...horasEdit,
+
+    ...(aplicaMontos
+      ? {
+          totalImpuestos: Number(draft.totalImpuestos),
+          valorAvaluo: Number(draft.valorAvaluo),
+          totalGastosExtra: Number(draft.totalGastosExtra),
+          totalHonorarios: Number(draft.totalHonorarios)
+        }
+      : {})
+  };
+
+  // ---------- 3) Guardar ----------
+  try {
+    const { data: updated } = await axios.put(`${API}/escrituras/${id}`, payload);
+
+    await fetchData();
+    onCancel(id);
+
+    // mensaje final
+    const volDespues = updated?.volumen ?? draft?.volumen ?? '';
+    const dDespues = updated?.folioDesde ?? draft?.folioDesde ?? '';
+    const hDespues = updated?.folioHasta ?? draft?.folioHasta ?? '';
+
+    if (volDespues || dDespues || hDespues) {
+      setMsg({
+        type: 'ok',
+        text: `Registro actualizado. Rango final: Volumen ${volDespues || '—'}, Folios ${fmtRange(dDespues, hDespues)}.`
+      });
+    } else {
+      setMsg({ type: 'ok', text: 'Registro actualizado' });
+    }
+  } catch (err2) {
+    const t =
+      err2?.response?.status === 409
+        ? (err2?.response?.data?.mensaje || 'Traslape de folio en este volumen')
+        : (err2?.response?.data?.mensaje || 'Error al actualizar');
+
+    setMsg({ type: 'error', text: t });
+  }
 };
 
-      const { data: updated } = await axios.put(`${API}/escrituras/${id}`, payload);
-
-      await fetchData();
-      onCancel(id);
-
-      const volAntes = draft.volumen ?? '';
-      const volDespues = updated?.volumen ?? volAntes;
-      const dAntes = draft.folioDesde ?? '';
-      const hAntes = draft.folioHasta ?? '';
-      const dDespues = updated?.folioDesde ?? dAntes;
-      const hDespues = updated?.folioHasta ?? hAntes;
-
-      if (!same(volAntes, volDespues) || !same(dAntes, dDespues) || !same(hAntes, hDespues)) {
-        setMsg({
-          type: 'ok',
-          text:
-            `Registro actualizado. ` +
-            `Rango final: Volumen ${volDespues || '—'}, Folios ${fmtRange(dDespues, hDespues)}.`
-        });
-      } else {
-        setMsg({ type: 'ok', text: 'Registro actualizado' });
-      }
-    } catch (err2) {
-      const t = err2.response?.status === 409
-        ? (err2.response?.data?.mensaje || 'Traslape de folio en este volumen')
-        : (err2.response?.data?.mensaje || 'Error al actualizar');
-      setMsg({ type: 'error', text: t });
-    }
-  };
 
   const onDelete = async (id) => {
     if (!window.confirm('¿Eliminar esta escritura?')) return;
@@ -1155,7 +1257,8 @@ if (draft?.volumen || draft?.folioDesde || draft?.folioHasta) {
     }
 
     setAdding(true);
-    setNewRow(emptyRow);
+    setNewRow({ ...emptyRow, fecha: formatDateInput(new Date()) });
+
     setSelectedCliente(null);
     setNewSubtipo('');
     setNewVolumen('');
@@ -1389,12 +1492,13 @@ if (draft?.volumen || draft?.folioDesde || draft?.folioHasta) {
       field: 'fecha',
       headerName: 'Fecha',
       width: 110, minWidth: 100,
-      renderCell: (params) => onlyDateDMY2(params?.row?.fecha),
+      renderCell: (params) => onlyDateDMY2(params?.row?.createdAt ?? params?.row?.fecha),
       sortComparator: (_v1, _v2, a, b) => {
-        const ta = Date.parse(a?.row?.fecha);
-        const tb = Date.parse(b?.row?.fecha);
+        const ta = Date.parse(a?.row?.createdAt ?? a?.row?.fecha);
+        const tb = Date.parse(b?.row?.createdAt ?? b?.row?.fecha);
         return (Number.isNaN(ta) ? 0 : ta) - (Number.isNaN(tb) ? 0 : tb);
       },
+
     },
     {
       field: 'folio',
@@ -1823,10 +1927,25 @@ if (draft?.volumen || draft?.folioDesde || draft?.folioHasta) {
               onClick={async () => {
                 if (!newVolumen) return;
                 const sugerido = await suggestNextFolioFor(API, newVolumen);
-                if (sugerido != null) {
-                  setNewFolioDesde(String(sugerido));
-                  if (!newFolioHasta) setNewFolioHasta(String(sugerido));
-                }
+
+if (sugerido != null) {
+  let s = Number(sugerido);
+
+  // ✅ evita 1 y 2
+  if (s < FIRST_USABLE_FOLIO) s = FIRST_USABLE_FOLIO;
+
+  // ✅ si ya no cabe ni siquiera el primer folio utilizable, fuerza aviso
+  if (s > LAST_USABLE_FOLIO) {
+    return setMsg({
+      type: 'warn',
+      text: `Este volumen ya no tiene folios utilizables (${FIRST_USABLE_FOLIO}-${LAST_USABLE_FOLIO}). Debe usarse el siguiente volumen.`
+    });
+  }
+
+  setNewFolioDesde(String(s));
+  if (!newFolioHasta) setNewFolioHasta(String(s));
+}
+
               }}
               disabled={!newVolumen}
             >
@@ -2006,9 +2125,20 @@ if (draft?.volumen || draft?.folioDesde || draft?.folioHasta) {
                 const vol = drafts[editingId]?.volumen;
                 const sugerido = await suggestNextFolioFor(API, vol);
                 if (sugerido != null) {
-                  onChangeDraft(editingId, 'folioDesde', String(sugerido));
-                  if (!drafts[editingId]?.folioHasta) onChangeDraft(editingId, 'folioHasta', String(sugerido));
-                }
+  let s = Number(sugerido);
+  if (s < FIRST_USABLE_FOLIO) s = FIRST_USABLE_FOLIO;
+
+  if (s > LAST_USABLE_FOLIO) {
+    return setMsg({
+      type: 'warn',
+      text: `Este volumen ya no tiene folios utilizables (${FIRST_USABLE_FOLIO}-${LAST_USABLE_FOLIO}). Debe usarse el siguiente volumen.`
+    });
+  }
+
+  onChangeDraft(editingId, 'folioDesde', String(s));
+  if (!drafts[editingId]?.folioHasta) onChangeDraft(editingId, 'folioHasta', String(s));
+}
+
               }}
             >
               Siguiente disponible

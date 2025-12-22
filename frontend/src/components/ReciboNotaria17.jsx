@@ -2,11 +2,22 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import axios from "axios";
 import "../css/ReciboNotaria17.css";
+import { useAuth } from "../auth/AuthContext";
+
 
 const API = process.env.REACT_APP_API_URL || "http://localhost:4000";
 const SAVE_URL = `${API}/recibos`;
 
 export default function ReciboNotaria17() {
+
+
+  const { token } = useAuth();
+
+  const authCfg = useMemo(() => ({
+    headers: { Authorization: `Bearer ${token}` }
+  }), [token]);
+
+
   const hoy = useMemo(() => new Date().toISOString().slice(0, 10), []);
   const [showPrev, setShowPrev] = useState(false);
 
@@ -65,7 +76,8 @@ export default function ReciboNotaria17() {
     try {
       setSaving(true);
       const { data } = await axios.get(
-        `${API}/recibos/escrituras/${encodeURIComponent(numero)}/pending`
+        `${API}/recibos/escrituras/${encodeURIComponent(numero)}/pending`,
+        authCfg
       );
       const info = data?.data || null;
       if (!info) {
@@ -118,8 +130,9 @@ export default function ReciboNotaria17() {
     }
     try {
       const { data } = await axios.get(
-        `${API}/recibos/escrituras/${encodeURIComponent(numero)}/history`
-      );
+      `${API}/recibos/escrituras/${encodeURIComponent(numero)}/history`,
+      authCfg
+    );
       setHist(data?.data || null);
     } catch (e) {
       console.error("HIST ERROR:", e);
@@ -250,8 +263,9 @@ export default function ReciboNotaria17() {
 
     try {
       const { data } = await axios.get(
-        `${API}/recibos/protocolitos/${encodeURIComponent(value)}`
-      );
+  `${API}/recibos/protocolitos/${encodeURIComponent(value)}`,
+  authCfg
+);
       const d = data?.data || {};
 
       setF((prev) => {
@@ -377,7 +391,8 @@ export default function ReciboNotaria17() {
         totalHonorarios: toNum(f.totalHonorarios),
       };
 
-      const { data } = await axios.post(SAVE_URL, payload);
+      const { data } = await axios.post(SAVE_URL, payload, authCfg);
+
       const id = data?.data?._id;
       if (id) setSavedId(id);
 
@@ -430,8 +445,9 @@ export default function ReciboNotaria17() {
     escSearchTimer.current = setTimeout(async () => {
       try {
         const { data } = await axios.get(`${API}/recibos/escrituras/search`, {
-          params: { q },
-        });
+  ...authCfg,
+  params: { q },
+});
         const list = Array.isArray(data?.data) ? data.data : [];
         setEscSugs(list.slice(0, 20));
       } catch {

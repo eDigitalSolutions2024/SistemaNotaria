@@ -14,6 +14,9 @@ const authRoutes = require('./routes/auth');
 const recibosRouter = require('./routes/recibos');
 const escriturasRoutes = require('./routes/escrituras');
 
+
+const auth = require('./middleware/auth');
+
 dotenv.config({
   path: path.resolve(
     __dirname,
@@ -157,7 +160,13 @@ app.use('/api/abogados', require('./routes/abogado'));
 app.use('/api/clientes', require('./routes/clientes'));
 app.use('/api/salas', require('./routes/salas'));
 app.use('/api/Protocolito', require('./routes/Protocolito'));
-app.use('/api/recibos', recibosRouter); // dropdown de protocolitos
+app.use('/api/recibos', (req, res, next) => {
+  // deja libre cualquier ruta que termine en /pdf
+  if (req.path.endsWith('/pdf')) return next();
+
+  // todo lo demás sí requiere token
+  return auth(req, res, next);
+}, recibosRouter);// dropdown de protocolitos
 app.use('/api/plantillas', require('./routes/plantillas'));
 app.use('/api/escrituras', escriturasRoutes);
 app.use('/api/clientes-generales', require('./routes/clientesGenerales'));

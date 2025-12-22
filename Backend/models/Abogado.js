@@ -1,3 +1,4 @@
+// models/abogado.js
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 
@@ -11,11 +12,41 @@ const abogadoSchema = new mongoose.Schema({
   asignaciones: { type: Number, default: 0 },
   orden: { type: Number, required: true },
   ubicacion: { type: String, default: 'sin sala' }, // Nombre de la sala
+
   passwordHash: { type: String, select: false },
 
-  // 🔑 Nuevo enum de roles
+  // 🔑 Rol del usuario en el sistema
   role: { type: String, enum: ROLES, default: 'ABOGADO', index: true },
-}, { timestamps: true });
+
+  /**
+   * Para ASISTENTES:
+   * abogadoJefe es el abogado responsable de este asistente.
+   * Solo tiene sentido cuando role === 'ASISTENTE'
+   */
+  abogadoJefe: {
+    type: Number,        // mismo tipo que _id
+    ref: 'Abogado',
+    default: null,
+    index: true
+  }
+}, {
+  timestamps: true,
+  toJSON: { virtuals: true },
+  toObject: { virtuals: true }
+});
+
+/**
+ * Virtual: lista de asistentes que dependen de este abogado.
+ *
+ * Uso:
+ *  const abogado = await Abogado.findById(id).populate('asistentes');
+ *  console.log(abogado.asistentes); // array de usuarios con role = 'ASISTENTE'
+ */
+abogadoSchema.virtual('asistentes', {
+  ref: 'Abogado',
+  localField: '_id',          // id del abogado
+  foreignField: 'abogadoJefe' // campo en los asistentes
+});
 
 // Métodos de instancia
 abogadoSchema.methods.setPassword = async function (plain) {
@@ -28,5 +59,7 @@ abogadoSchema.methods.validatePassword = async function (plain) {
   return bcrypt.compare(String(plain), this.passwordHash);
 };
 
-module.exports = mongoose.model('Abogado', abogadoSchema);
+const Abogado = mongoose.model('Abogado', abogadoSchema);
+
+module.exports = Abogado;
 module.exports.ROLES = ROLES;
