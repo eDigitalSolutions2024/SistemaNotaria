@@ -19,6 +19,7 @@ const emptyRow = {
   numeroControl: '',
   tipoTramite: '',
   cliente: '',
+  clienteNumero: '',
   fecha: '',
   abogado: '',
   // nuevos campos monetarios
@@ -253,11 +254,14 @@ const stripSubtipo = (tipo) =>
 function applyClienteToEscritura(cliente, prev) {
   const numero =
     cliente?.idCliente ?? cliente?.idClienteNumero ?? cliente?.numeroCliente ?? cliente?.id ?? null;
-
+ const nombre = String(cliente?.nombre || '').trim();
   return {
     ...prev,
-    // ✅ guardar número como string si existe
-    cliente: numero != null ? String(numero) : (cliente?.nombre || prev.cliente),
+    // ✅ guardar NOMBRE en "cliente"
+    cliente: nombre || prev.cliente,
+
+    // ✅ guardar NUMERO aparte (opcional pero recomendado)
+    clienteNumero: numero != null ? String(numero) : (prev.clienteNumero ?? ''),
 
     tipoTramite:
       cliente?.motivo ||

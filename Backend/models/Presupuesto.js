@@ -50,7 +50,7 @@ const presupuestoSchema = new Schema(
   {
     // ✅ CORRECCIÓN: Cliente como ObjectId para populate real
     cliente: {
-      type: Schema.Types.ObjectId,
+      type: Number,
       ref: 'Cliente',
       required: true,
     },

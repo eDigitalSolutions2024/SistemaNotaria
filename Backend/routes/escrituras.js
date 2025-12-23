@@ -1041,7 +1041,21 @@ const MAX_FOLIO_USABLE = 298;
 
     // --- datos de entrada ---
     const body = req.body || {};
-    const base = pick(body, ['numeroControl', 'tipoTramite', 'cliente', 'fecha', 'abogado', 'observaciones']);
+    const base = pick(body, [
+  'numeroControl',
+  'tipoTramite',
+  'cliente',
+  'fecha',
+  'abogado',
+  'observaciones',
+
+  // ✅ nuevos del modal estatus
+  'documentos',
+  'comentariosEstatus',
+  'documentacionFaltante',
+  'fechaEnvioNTD',
+]);
+
 
     // normalizar strings / fecha
     base.tipoTramite   = trimOrNull(base.tipoTramite);
@@ -1049,6 +1063,33 @@ const MAX_FOLIO_USABLE = 298;
     base.abogado       = trimOrNull(base.abogado);
     base.observaciones = base.observaciones === undefined ? undefined : String(base.observaciones || '').trim();
     base.fecha         = toDateOrNull(base.fecha);
+
+    // ✅ Normalizar campos del modal Estatus
+const touchedEstatus =
+  ('documentos' in body) ||
+  ('comentariosEstatus' in body) ||
+  ('documentacionFaltante' in body) ||
+  ('fechaEnvioNTD' in body);
+
+const normText = (v) => {
+  if (v === undefined) return undefined;
+  if (v === null) return '';
+  return String(v).trim();
+};
+
+// documentos debe ser objeto
+let docsObj = undefined;
+if ('documentos' in body) {
+  docsObj = (body.documentos && typeof body.documentos === 'object' && !Array.isArray(body.documentos))
+    ? body.documentos
+    : {};
+}
+
+if ('comentariosEstatus' in body) base.comentariosEstatus = normText(body.comentariosEstatus);
+if ('documentacionFaltante' in body) base.documentacionFaltante = normText(body.documentacionFaltante);
+if ('fechaEnvioNTD' in body) base.fechaEnvioNTD = toDateOrNull(body.fechaEnvioNTD);
+if ('documentos' in body) base.documentos = docsObj;
+
 
     // obtener actual
     const current = await Escritura.findById(req.params.id);
