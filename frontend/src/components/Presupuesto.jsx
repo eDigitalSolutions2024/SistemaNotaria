@@ -3,6 +3,7 @@ import Select from 'react-select';
 import axios from 'axios';
 import '../css/Presupuesto.css';
 import { useAuth } from '../auth/AuthContext';
+import ConsultarPresupuestosModal from "../components/ConsultarPresupuestosModal";
 
 const api = axios.create({
   baseURL: process.env.REACT_APP_API_URL || 'http://localhost:8010/api',
@@ -34,13 +35,11 @@ const parseNum = (v) => {
 };
 
 const initialForm = {
-  // ✅ ESTE CAMPO DEBE EXISTIR SIEMPRE
   clienteId: '',
 
   responsable: '',
   tipoTramite: { value: 'Compraventa', label: 'Compraventa' },
 
-  // ✅ avalúo = valor operación
   avaluo: '',
   valorOperacion: '',
   valorTerreno: '',
@@ -102,8 +101,8 @@ export default function Presupuesto() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [openConsulta, setOpenConsulta] = useState(false);
 
-  // ✅ DEBUG: confirma si existe clienteId siempre
   useEffect(() => {
     console.log('[DEBUG form.clienteId]', form.clienteId);
   }, [form.clienteId]);
@@ -134,6 +133,19 @@ export default function Presupuesto() {
     []
   );
 
+  // Cliente seleccionado completo (para obtener idCliente number)
+  const selectedCliente = useMemo(() => {
+    const id = form.clienteId;
+    if (!id) return null;
+    return (clientes || []).find(c => (c._id || c.id) === id) || null;
+  }, [clientes, form.clienteId]);
+
+  // idCliente numérico (2001, 2002...) para filtrar en el modal si tu backend lo soporta
+  const clienteIdNumber = useMemo(() => {
+    const n = Number(selectedCliente?.idCliente || selectedCliente?.idClienteNumero || '');
+    return Number.isFinite(n) ? n : null;
+  }, [selectedCliente]);
+
   useEffect(() => {
     const fetchClientes = async () => {
       try {
@@ -151,26 +163,22 @@ export default function Presupuesto() {
     fetchClientes();
   }, []);
 
- const clienteOptions = useMemo(() => {
-  const list = [...(clientes || [])].reverse(); // ✅ último -> primero
+  const clienteOptions = useMemo(() => {
+    const list = [...(clientes || [])].reverse();
 
-  const opts = list.map((c) => ({
-    value: c._id || c.id || c._doc?._id,
-    label: `${c.idCliente || c.idClienteNumero || c.id || ''} - ${c.nombre || c.nombreCliente || ''}`,
-  }));
+    const opts = list.map((c) => ({
+      value: c._id || c.id || c._doc?._id,
+      label: `${c.idCliente || c.idClienteNumero || c.id || ''} - ${c.nombre || c.nombreCliente || ''}`,
+    }));
 
+    if (opts.length) {
+      console.log('[DEBUG clienteOptions[0]]', opts[0]);
+      console.log('[DEBUG cliente raw[0]]', clientes[0]);
+    }
 
-  // ✅ debug rápido
-  if (opts.length) {
-    console.log('[DEBUG clienteOptions[0]]', opts[0]);
-    console.log('[DEBUG cliente raw[0]]', clientes[0]);
-  }
+    return opts;
+  }, [clientes]);
 
-  return opts;
-}, [clientes]);
-
-
-  // ✅ IMPORTANTE: el value del Select viene del state clienteId
   const selectedClienteOption = useMemo(() => {
     return clienteOptions.find((o) => o.value === form.clienteId) || null;
   }, [clienteOptions, form.clienteId]);
@@ -196,7 +204,6 @@ export default function Presupuesto() {
     }));
   };
 
-  // ✅ AQUÍ ESTÁ LA CLAVE: log inmediato para confirmar que sí entra
   const handleClienteChange = (option) => {
     console.log('[DEBUG handleClienteChange option]', option);
     setForm((prev) => ({
@@ -205,7 +212,7 @@ export default function Presupuesto() {
     }));
   };
 
-  // ✅ avalúo = valorOperacion
+  // avalúo = valorOperacion
   useEffect(() => {
     setForm((prev) => ({ ...prev, avaluo: prev.valorOperacion }));
   }, [form.valorOperacion]);
@@ -236,6 +243,7 @@ export default function Presupuesto() {
     };
   }, [form.valorOperacion, form.valorTerreno, form.valorConstruccion]);
 
+  // Traslación dominio (auto)
   useEffect(() => {
     if (!datosCalculo.puedeContinuar) return;
 
@@ -253,6 +261,7 @@ export default function Presupuesto() {
     }));
   }, [datosCalculo.puedeContinuar, form.valorOperacion, form.tipoTramite]);
 
+  // Registro público (auto)
   useEffect(() => {
     if (!datosCalculo.puedeContinuar) return;
 
@@ -266,6 +275,7 @@ export default function Presupuesto() {
     }));
   }, [datosCalculo.puedeContinuar, form.valorOperacion, form.anioRegistro]);
 
+  // Honorarios (auto)
   useEffect(() => {
     if (!datosCalculo.puedeContinuar) return;
 
@@ -304,7 +314,6 @@ export default function Presupuesto() {
   ]);
 
   const handleSubmit = async (e) => {
-    
     e.preventDefault();
     setError('');
     setSuccess('');
@@ -322,11 +331,12 @@ export default function Presupuesto() {
     }
 
     const body = {
+      // ⚠️ así lo tienes hoy: manda _id string
       cliente: form.clienteId,
+
       responsable: form.responsable || undefined,
       tipoTramite: form.tipoTramite?.value || 'Compraventa',
 
-      // ✅ avalúo = valorOperacion
       avaluo: parseNum(form.valorOperacion),
       valorOperacion: parseNum(form.valorOperacion),
       valorTerreno: parseNum(form.valorTerreno),
@@ -358,7 +368,6 @@ export default function Presupuesto() {
         window.open(`${base}/presupuestos/${id}/pdf`, '_blank');
       }
 
-      // Reset pero conserva cliente
       setForm((prev) => ({
         ...initialForm,
         clienteId: prev.clienteId,
@@ -374,9 +383,23 @@ export default function Presupuesto() {
 
   return (
     <div className="pres-page">
-      <div className="pres-header">
-        <h1>Presupuesto</h1>
-        <p>Calcula honorarios y cargos para el cliente seleccionado.</p>
+
+      {/* ✅ Header con botón arriba */}
+      <div className="pres-header" style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 12 }}>
+        <div>
+          <h1>Presupuesto</h1>
+          <p>Calcula honorarios y cargos para el cliente seleccionado.</p>
+        </div>
+
+        <div style={{ display: 'flex', gap: 10 }}>
+          <button
+            type="button"
+            className="pres-btn"
+            onClick={() => setOpenConsulta(true)}
+          >
+            Consultar presupuestos
+          </button>
+        </div>
       </div>
 
       {error && <div className="pres-alert pres-alert-error">{error}</div>}
@@ -435,17 +458,35 @@ export default function Presupuesto() {
           <div className="pres-row pres-row-3">
             <div className="pres-field">
               <label>Valor de operación</label>
-              <input type="number" step="0.01" name="valorOperacion" value={form.valorOperacion} onChange={handleBasicChange} />
+              <input
+                type="number"
+                step="0.01"
+                name="valorOperacion"
+                value={form.valorOperacion}
+                onChange={handleBasicChange}
+              />
             </div>
 
             <div className="pres-field">
               <label>Valor Terreno</label>
-              <input type="number" step="0.01" name="valorTerreno" value={form.valorTerreno} onChange={handleBasicChange} />
+              <input
+                type="number"
+                step="0.01"
+                name="valorTerreno"
+                value={form.valorTerreno}
+                onChange={handleBasicChange}
+              />
             </div>
 
             <div className="pres-field">
               <label>Valor Construcción</label>
-              <input type="number" step="0.01" name="valorConstruccion" value={form.valorConstruccion} onChange={handleBasicChange} />
+              <input
+                type="number"
+                step="0.01"
+                name="valorConstruccion"
+                value={form.valorConstruccion}
+                onChange={handleBasicChange}
+              />
 
               {String(form.valorOperacion).trim() !== '' &&
                 (String(form.valorTerreno).trim() !== '' || String(form.valorConstruccion).trim() !== '') && (
@@ -466,7 +507,6 @@ export default function Presupuesto() {
           </div>
         </section>
 
-        {/* resto igual */}
         <section className="pres-grid-3">
           <div className="pres-card">
             <h2 className="pres-card-title">Honorarios</h2>
@@ -496,7 +536,14 @@ export default function Presupuesto() {
             ].map(([name, label]) => (
               <div className="pres-field" key={name}>
                 <label>{label}</label>
-                <input disabled={bloquearAbajo} type="number" step="0.01" name={name} value={form.honorariosCalc[name]} onChange={handleHonorarioChange} />
+                <input
+                  disabled={bloquearAbajo}
+                  type="number"
+                  step="0.01"
+                  name={name}
+                  value={form.honorariosCalc[name]}
+                  onChange={handleHonorarioChange}
+                />
               </div>
             ))}
           </div>
@@ -519,7 +566,15 @@ export default function Presupuesto() {
               return (
                 <div className="pres-field" key={name}>
                   <label>{label}</label>
-                  <input disabled={bloquearAbajo} readOnly={isAuto} type="number" step="0.01" name={name} value={form.cargos[name]} onChange={handleCargoChange} />
+                  <input
+                    disabled={bloquearAbajo}
+                    readOnly={isAuto}
+                    type="number"
+                    step="0.01"
+                    name={name}
+                    value={form.cargos[name]}
+                    onChange={handleCargoChange}
+                  />
                 </div>
               );
             })}
@@ -544,7 +599,14 @@ export default function Presupuesto() {
             ].map(([name, label]) => (
               <div className="pres-field" key={name}>
                 <label>{label}</label>
-                <input disabled={bloquearAbajo} type="number" step="0.01" name={name} value={form.cargos[name]} onChange={handleCargoChange} />
+                <input
+                  disabled={bloquearAbajo}
+                  type="number"
+                  step="0.01"
+                  name={name}
+                  value={form.cargos[name]}
+                  onChange={handleCargoChange}
+                />
               </div>
             ))}
           </div>
@@ -553,7 +615,13 @@ export default function Presupuesto() {
         <section className="pres-footer">
           <div className="pres-field pres-field-full">
             <label>Observaciones</label>
-            <textarea disabled={bloquearAbajo} rows="2" name="observaciones" value={form.observaciones} onChange={handleBasicChange} />
+            <textarea
+              disabled={bloquearAbajo}
+              rows="2"
+              name="observaciones"
+              value={form.observaciones}
+              onChange={handleBasicChange}
+            />
           </div>
 
           <div className="pres-footer-total">
@@ -568,6 +636,35 @@ export default function Presupuesto() {
           </div>
         </section>
       </form>
+
+      {/* ✅ Modal fuera del form (mejor UX) */}
+      <ConsultarPresupuestosModal
+        open={openConsulta}
+        onClose={() => setOpenConsulta(false)}
+        api={api}
+        clienteIdNumber={clienteIdNumber}
+        onPick={(p) => {
+          setForm((prev) => ({
+            ...prev,
+            tipoTramite: { value: p.tipoTramite, label: p.tipoTramite },
+            valorOperacion: p.valorOperacion ?? "",
+            valorTerreno: p.valorTerreno ?? "",
+            valorConstruccion: p.valorConstruccion ?? "",
+            anioRegistro: { value: p.anioRegistro, label: String(p.anioRegistro) },
+            cargos: { ...prev.cargos, ...(p.cargos || {}) },
+            honorariosCalc: {
+              ...prev.honorariosCalc,
+              ...(p.honorariosCalc || {}),
+              porcentaje: {
+                value: p.porcentajeHonorarios ?? prev.honorariosCalc.porcentaje?.value ?? 10,
+                label: `${p.porcentajeHonorarios ?? prev.honorariosCalc.porcentaje?.value ?? 10}%`,
+              },
+            },
+            observaciones: p.observaciones ?? "",
+          }));
+          setOpenConsulta(false);
+        }}
+      />
     </div>
   );
 }

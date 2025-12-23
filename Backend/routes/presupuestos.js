@@ -292,7 +292,6 @@ const fitOneLine = (doc, text, maxW) => {
     const honorItems = [
       ['Honorarios', honor.honorarios ?? honor.subtotal ?? 0],
       ['I.V.A.', honor.iva ?? 0],
-      ['Subtotal', honor.subtotal ?? 0],
       ['Reten. I.S.R.', honor.retencionIsr ?? 0],
       ['Reten. I.V.A.', honor.retencionIva ?? 0],
       ['Total Honorarios', honor.totalHonorarios ?? 0],
@@ -344,16 +343,56 @@ router.post('/', async (req, res) => {
   }
 });
 
-// Listar
-router.get('/', async (_req, res) => {
+// Listar (con filtros)
+router.get('/', async (req, res) => {
   try {
-    const presupuestos = await Presupuesto.find().populate('cliente', 'nombre idCliente');
-    res.json(presupuestos);
+    const page = Math.max(1, Number(req.query.page || 1));
+    const limit = Math.min(100, Math.max(1, Number(req.query.limit || 20)));
+    const skip = (page - 1) * limit;
+
+    const cliente = req.query.cliente;
+    const q = (req.query.q || '').trim();
+
+    const filter = {};
+    if (cliente !== undefined && cliente !== '') {
+      const cnum = Number(cliente);
+      if (!Number.isFinite(cnum)) return res.status(400).json({ message: 'cliente inválido' });
+      filter.cliente = cnum;
+    }
+
+    // Populate para mostrar nombre e idCliente
+    // Si necesitas búsqueda por nombre/idCliente, se hace con aggregate o con un paso extra.
+    // Aquí lo hacemos simple: si viene q, traemos más y filtramos en memoria.
+    const cursor = Presupuesto.find(filter)
+      .sort({ createdAt: -1 })
+      .populate('cliente', 'nombre idCliente');
+
+    let items = await cursor.skip(skip).limit(limit).lean();
+
+    if (q) {
+      const qq = q.toLowerCase();
+      items = items.filter((p) => {
+        const cn = (p.cliente?.nombre || '').toLowerCase();
+        const ci = String(p.cliente?.idCliente || '').toLowerCase();
+        const tt = String(p.tipoTramite || '').toLowerCase();
+        return cn.includes(qq) || ci.includes(qq) || tt.includes(qq) || String(p._id).includes(q);
+      });
+    }
+
+    const total = await Presupuesto.countDocuments(filter);
+
+    res.json({
+      page,
+      limit,
+      total,
+      items,
+    });
   } catch (err) {
     console.error('Error al obtener presupuestos:', err);
     res.status(500).json({ message: 'Error al obtener presupuestos', error: err.message });
   }
 });
+
 
 
 router.get('/ultimo/cliente/:cliente', async (req, res) => {

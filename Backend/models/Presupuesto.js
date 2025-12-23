@@ -8,11 +8,8 @@ const cargosSchema = new Schema(
     isrAdquisicion: { type: Number, default: 0 },
 
     traslacionDominio: { type: Number, default: 0 },
-
-    // compat opcional
-    trasladoDominio: { type: Number, default: 0 },
-    trasladoDominio2: { type: Number, default: 0 },
-    trasladoDominioRecargos: { type: Number, default: 0 },
+    traslacionDominio2: { type: Number, default: 0 },
+    traslacionDominioRecargos: { type: Number, default: 0 },
 
     registroPublico: { type: Number, default: 0 },
     registroPubVtaHip: { type: Number, default: 0 },
@@ -51,9 +48,9 @@ const honorariosSchema = new Schema(
 
 const presupuestoSchema = new Schema(
   {
-    // ✅ TU CLIENTE ES NUMBER (2001, 2002, etc.)
+    // ✅ CORRECCIÓN: Cliente como ObjectId para populate real
     cliente: {
-      type: Number,
+      type: Schema.Types.ObjectId,
       ref: 'Cliente',
       required: true,
     },
@@ -66,7 +63,6 @@ const presupuestoSchema = new Schema(
       default: 'Compraventa',
     },
 
-    // ✅ AVALÚO = VALOR OPERACIÓN (misma cosa)
     avaluo: { type: Number, default: 0 },
 
     valorOperacion: { type: Number, required: true },

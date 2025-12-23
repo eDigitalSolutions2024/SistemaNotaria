@@ -269,3 +269,55 @@
     align-items: flex-start;
   }
 }
+.pres-modal-backdrop{
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,.35);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 9999;
+}
+.pres-modal{
+  width: min(980px, 95vw);
+  background: #fff;
+  border-radius: 12px;
+  padding: 14px;
+  box-shadow: 0 20px 60px rgba(0,0,0,.25);
+}
+.pres-modal-header{
+  display:flex; align-items:center; justify-content:space-between;
+  gap: 10px; padding-bottom: 10px; border-bottom: 1px solid #eee;
+}
+.pres-modal-toolbar{
+  display:flex; gap: 10px; padding: 12px 0;
+}
+.pres-modal-toolbar input{
+  flex: 1; padding: 10px 12px; border: 1px solid #ddd; border-radius: 8px;
+}
+.pres-modal-body{ max-height: 55vh; overflow: auto; }
+.pres-table{
+  width: 100%;
+  border-collapse: collapse;
+}
+.pres-table th, .pres-table td{
+  border-bottom: 1px solid #eee;
+  padding: 10px;
+  text-align: left;
+}
+.pres-modal-footer{
+  display:flex; align-items:center; justify-content:center;
+  gap: 12px; padding-top: 12px;
+}
+.pres-btn{
+  padding: 8px 12px;
+  border: 1px solid #ddd;
+  background: #fff;
+  border-radius: 8px;
+  cursor:pointer;
+}
+.pres-btn-primary{
+  padding: 8px 12px;
+  border: 0;
+  background: #111827;
+  color: #fff;
+  border-radius: 8px;
+  cursor:pointer;
+}
