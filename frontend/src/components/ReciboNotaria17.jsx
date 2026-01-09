@@ -31,10 +31,10 @@ export default function ReciboNotaria17() {
     totalTramite: "",
     totalPagado: "",      // Escritura: pagado acumulado (solo lectura)
     abono: "",            // Escritura: abono del recibo actual
-    totalImpuestos: "",
+    /*totalImpuestos: "",
     valorAvaluo: "",
     totalGastosExtra: "",
-    totalHonorarios: "",
+    totalHonorarios: "",*/
   });
 
   const [conceptoTouched, setConceptoTouched] = useState(false);
@@ -102,10 +102,10 @@ export default function ReciboNotaria17() {
           recibiDe: rec.recibiDe || prev.recibiDe,
           abogado: rec.abogado || prev.abogado,
           // “de sistema” desde el último recibo si existen
-          totalImpuestos: String(rec.totalImpuestos ?? ""),
+          /*totalImpuestos: String(rec.totalImpuestos ?? ""),
           valorAvaluo: String(rec.valorAvaluo ?? ""),
           totalGastosExtra: String(rec.totalGastosExtra ?? ""),
-          totalHonorarios: String(rec.totalHonorarios ?? ""),
+          totalHonorarios: String(rec.totalHonorarios ?? ""),*/
         };
       });
 
@@ -311,10 +311,10 @@ export default function ReciboNotaria17() {
     totalTramite: "",
     totalPagado: "",
     abono: "",
-    totalImpuestos: "",
+    /*totalImpuestos: "",
     valorAvaluo: "",
     totalGastosExtra: "",
-    totalHonorarios: "",
+    totalHonorarios: "",*/
   });
 
   const toNum = (v) => Number(String(v).replace(/[^0-9.]/g, "")) || 0;
@@ -385,10 +385,10 @@ export default function ReciboNotaria17() {
         totalPagado: totalPagadoEnviar,
         abono: isEscritura ? abonoNum : undefined,
         restante,
-        totalImpuestos: toNum(f.totalImpuestos),
+        /*totalImpuestos: toNum(f.totalImpuestos),
         valorAvaluo: toNum(f.valorAvaluo),
         totalGastosExtra: toNum(f.totalGastosExtra),
-        totalHonorarios: toNum(f.totalHonorarios),
+        totalHonorarios: toNum(f.totalHonorarios),*/
       };
 
       const { data } = await axios.post(SAVE_URL, payload, authCfg);
@@ -697,7 +697,7 @@ export default function ReciboNotaria17() {
               />
             </Field>
 
-            {/* Campos “sistema” solo para Escritura (como tenías) */}
+            {/* Campos “sistema” solo para Escritura (como tenías) 
             {!["Protocolito", "Contrato", "Otro"].includes(f.tipoTramite) && (
               <>
                 <Field label="Total Impuestos (sistema)">
@@ -728,7 +728,7 @@ export default function ReciboNotaria17() {
                   />
                 </Field>
               </>
-            )}
+            )}*/}
           </div>
 
           {saveError && (

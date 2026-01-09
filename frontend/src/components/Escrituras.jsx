@@ -43,6 +43,33 @@ const fmtMoney = (v) => {
   return Number.isFinite(n) ? n.toFixed(2) : '0.00';
 };
 
+
+// --- Helpers para totales de presupuesto ---
+const PRES_IMPUESTOS_KEYS = [
+  'isr', 'isrAdquisicion',
+  'traslacionDominio', 'traslacionDominio2', 'traslacionDominioRecargos',
+  'ivaLocalComerc', 'actosJuridicos',
+  'impuestoCedular', 'impuestoPredial',
+];
+
+const PRES_GASTOS_KEYS = [
+  'registroPublico', 'registroPubVtaHip', 'registroPubPoderes',
+  'registroPubOtros', 'registroPublicoRecargos',
+  'solicPermiso', 'avisoPermiso', 'costoAvaluo', 'gastosGestiones',
+  'tramiteForaneo', 'otrosConceptos',
+  'certificados1', 'certificados2', 'certificados3',
+];
+
+const sumKeys = (obj, keys) =>
+  keys.reduce((acc, k) => acc + (Number(obj?.[k]) || 0), 0);
+
+const numSafe = (v) => {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+};
+
+
+
 function formatDateInput(raw) {
   if (!raw) return '';
 
@@ -446,6 +473,13 @@ const [estatusRow, setEstatusRow] = useState(null);
   const [justifyOpen, setJustifyOpen] = useState(false);
   const [justifyText, setJustifyText] = useState('');
 
+    // --- Modal: selección de presupuesto ---
+  const [presupOpen, setPresupOpen] = useState(false);
+  const [presupLoading, setPresupLoading] = useState(false);
+  const [presupRows, setPresupRows] = useState([]);
+  const [presupTarget, setPresupTarget] = useState(null); // 'new' | (en futuro: id de edición)
+
+
   // --- Modal: lectura de justificante ---
   const [justifyViewOpen, setJustifyViewOpen] = useState(false);
   const [justifyViewRow, setJustifyViewRow] = useState(null);
@@ -792,6 +826,91 @@ function getNewFormErrors({ newRow, newVolumen, newFolioDesde, newFolioHasta, ne
     return null;
   }
 }
+async function fetchPresupuestosCliente(apiBase, clienteNumero) {
+  if (!clienteNumero) return [];
+
+  try {
+    const { data } = await axios.get(
+      `${apiBase}/escrituras/presupuestos/cliente/${clienteNumero}`
+    );
+
+    const arr = Array.isArray(data) ? data : [];
+
+    const normed = arr.map((p) => {
+      const cargos = p.cargos || {};
+      const honor = p.honorariosCalc || {};
+
+      // 💰 Impuestos (acepta camelCase y snake_case)
+      const totalImpuestos =
+        p.totalImpuestos != null || p.total_impuestos != null
+          ? numSafe(p.totalImpuestos ?? p.total_impuestos)
+          : sumKeys(cargos, PRES_IMPUESTOS_KEYS);
+
+      // 💰 Gastos extra (camel + snake)
+      const totalGastosExtra =
+        p.totalGastosExtra != null || p.total_gastos_extra != null
+          ? numSafe(p.totalGastosExtra ?? p.total_gastos_extra)
+          : sumKeys(cargos, PRES_GASTOS_KEYS);
+
+      // 💰 Avalúo (camel + snake)
+      const valorAvaluo =
+        p.valorAvaluo != null || p.valor_avaluo != null
+          ? numSafe(p.valorAvaluo ?? p.valor_avaluo)
+          : p.avaluo != null && p.avaluo !== 0
+          ? numSafe(p.avaluo)
+          : numSafe(p.valorOperacion);
+
+      // 💰 Honorarios (camel + snake, y dentro de honorariosCalc)
+      const totalHonorarios =
+        p.totalHonorarios != null ||
+        p.total_honorarios != null ||
+        honor.totalHonorarios != null ||
+        honor.total_honorarios != null
+          ? numSafe(
+              p.totalHonorarios ??
+                p.total_honorarios ??
+                honor.totalHonorarios ??
+                honor.total_honorarios
+            )
+          : 0;
+
+      // Descripción amigable (ampliamos un poco)
+      const descripcion =
+        p.descripcion ||
+        p.concepto ||
+        p.observaciones ||
+        p.tipoTramite ||
+        '';
+
+      const fecha = p.fecha || p.createdAt || null;
+
+      return {
+        id: String(p._id || p.id),
+
+        cliente: p.cliente,
+        fecha,
+        descripcion,
+
+        totalImpuestos,
+        valorAvaluo,
+        totalGastosExtra,
+        totalHonorarios,
+
+        raw: p,
+      };
+    });
+
+    console.log('[RAW presupuestos]', arr);
+    console.log('[presupuestos normalizados]', normed);
+    return normed;
+  } catch (e) {
+    console.error('Error cargando presupuestos por cliente:', e);
+    return [];
+  }
+}
+
+
+
 
 
   const fetchPicker = async (query) => {
@@ -903,6 +1022,104 @@ function getNewFormErrors({ newRow, newVolumen, newFolioDesde, newFolioHasta, ne
 
   setPickerOpen(false);
 };
+
+
+const openPresupuestoPicker = async (target) => {
+  if (target === 'new') {
+    const clienteNumero =
+      selectedCliente?.idCliente ??
+      selectedCliente?.numeroCliente ??
+      selectedCliente?.id ??
+      null;
+
+    if (!clienteNumero) {
+      setMsg({
+        type: 'warn',
+        text: 'Primero selecciona un cliente para buscar sus presupuestos.',
+      });
+      return;
+    }
+
+    setPresupTarget('new');
+    setPresupOpen(true);
+    setPresupLoading(true);
+
+    try {
+      const lista = await fetchPresupuestosCliente(API, clienteNumero);
+
+      const nombreCliente =
+        selectedCliente?.nombre ||
+        selectedCliente?.clienteNombre ||
+        selectedCliente?.cliente ||
+        '';
+
+      const rowsNorm = lista.map((p) => ({
+        ...p, // ← aquí vienen: id, cliente, fecha, descripcion, montos
+        clienteNombre:
+          p.clienteNombre ||
+          p.cliente ||
+          p.nombreCliente ||
+          nombreCliente ||
+          '',
+      }));
+
+      setPresupRows(rowsNorm);
+    } catch {
+      setPresupRows([]);
+    } finally {
+      setPresupLoading(false);
+    }
+  } else {
+    setMsg({
+      type: 'warn',
+      text: 'Selector de presupuesto aún no disponible en edición.',
+    });
+  }
+};
+
+
+  const closePresupuestoPicker = () => {
+    setPresupOpen(false);
+    setPresupRows([]);
+    setPresupTarget(null);
+  };
+
+  // ✅ Aplica el presupuesto seleccionado al formulario correspondiente
+  const applyPresupuestoToTarget = (presupuesto) => {
+    if (!presupuesto || !presupTarget) return;
+
+    const valores = {
+      totalImpuestos: presupuesto.totalImpuestos ?? presupuesto.total_impuestos ?? 0,
+      valorAvaluo: presupuesto.valorAvaluo ?? presupuesto.valor_avaluo ?? 0,
+      totalGastosExtra: presupuesto.totalGastosExtra ?? presupuesto.total_gastos_extra ?? 0,
+      totalHonorarios: presupuesto.totalHonorarios ?? presupuesto.total_honorarios ?? 0,
+      presupuestoId:
+        presupuesto.presupuestoId ??
+        presupuesto._id ??
+        presupuesto.id ??
+        null,
+    };
+
+    if (presupTarget === 'new') {
+      setNewRow((prev) => ({
+        ...prev,
+        ...valores,
+      }));
+    }
+
+    // si más adelante quieres que funcione en edición:
+    // if (typeof presupTarget === 'string' && presupTarget !== 'new') {
+    //   setDrafts((prev) => ({
+    //     ...prev,
+    //     [presupTarget]: {
+    //       ...(prev[presupTarget] || {}),
+    //       ...valores,
+    //     },
+    //   }));
+    // }
+
+    closePresupuestoPicker();
+  };
 
 
   const fetchData = async () => {
@@ -1572,7 +1789,22 @@ const onSaveEdit = async (id) => {
 
   // columnas tabla principal
   const baseColumns = [
-    { field: 'numeroControl', headerName: 'Núm. de Escritura', width: 150, minWidth: 130, type: 'number' },
+    {
+  field: 'numeroControl',
+  headerName: 'Núm. de Escritura',
+  width: 150,
+  minWidth: 130,
+  type: 'number',
+  renderCell: (params) => (
+    <span
+      className="escritura-num-link"
+      title="Doble click en la fila para abrir Estatus"
+    >
+      {params.value ?? '—'}
+    </span>
+  )
+},
+
     {
       field: 'fecha',
       headerName: 'Fecha',
@@ -2063,44 +2295,73 @@ if (sugerido != null) {
 
           {/* Montos del recibo (solo para escrituras / compra venta / protocolización / donación) */}
 {isTramiteConMontos(newRow.tipoTramite) && (
-  <div style={{ gridColumn: '1 / -1', display: 'grid', gridTemplateColumns: 'repeat(4, minmax(180px, 1fr))', gap: 8 }}>
-    <TextField
-      label="Total Impuestos (sistema)"
-      type="number"
-      size="small"
-      value={newRow.totalImpuestos ?? ''}
-      onChange={(e) =>
-        setNewRow(prev => ({ ...prev, totalImpuestos: e.target.value }))
-      }
-    />
-    <TextField
-      label="Valor Avalúo (sistema)"
-      type="number"
-      size="small"
-      value={newRow.valorAvaluo ?? ''}
-       onChange={(e) =>
-        setNewRow(prev => ({ ...prev, valorAvaluo: e.target.value }))
-      }
-    />
-    <TextField
-      label="Total Gastos Extra (sistema)"
-      type="number"
-      size="small"
-      value={newRow.totalGastosExtra ?? ''}
-      onChange={(e) =>
-        setNewRow(prev => ({ ...prev, totalGastosExtra: e.target.value }))
-      }
-    />
-    <TextField
-      label="Total Honorarios (sistema)"
-      type="number"
-      size="small"
-      value={newRow.totalHonorarios ?? ''}
-      onChange={(e) =>
-        setNewRow(prev => ({ ...prev, totalHonorarios: e.target.value }))
-      }
-    />
-  </div>
+  <>
+    {/* 🔴 NUEVO: botón para abrir el modal de presupuestos */}
+    <div
+      style={{
+        gridColumn: '1 / -1',
+        display: 'flex',
+        justifyContent: 'flex-end',
+        marginTop: 4,
+        marginBottom: 4,
+      }}
+    >
+      <Button
+        variant="outlined"
+        size="small"
+        onClick={() => openPresupuestoPicker('new')}
+        disabled={!selectedCliente}
+      >
+        Elegir presupuesto…
+      </Button>
+    </div>
+
+    <div
+      style={{
+        gridColumn: '1 / -1',
+        display: 'grid',
+        gridTemplateColumns: 'repeat(4, minmax(180px, 1fr))',
+        gap: 8,
+      }}
+    >
+      <TextField
+        label="Total Impuestos (sistema)"
+        type="number"
+        size="small"
+        value={newRow.totalImpuestos ?? ''}
+        onChange={(e) =>
+          setNewRow((prev) => ({ ...prev, totalImpuestos: e.target.value }))
+        }
+      />
+      <TextField
+        label="Valor Avalúo (sistema)"
+        type="number"
+        size="small"
+        value={newRow.valorAvaluo ?? ''}
+        onChange={(e) =>
+          setNewRow((prev) => ({ ...prev, valorAvaluo: e.target.value }))
+        }
+      />
+      <TextField
+        label="Total Gastos Extra (sistema)"
+        type="number"
+        size="small"
+        value={newRow.totalGastosExtra ?? ''}
+        onChange={(e) =>
+          setNewRow((prev) => ({ ...prev, totalGastosExtra: e.target.value }))
+        }
+      />
+      <TextField
+        label="Total Honorarios (sistema)"
+        type="number"
+        size="small"
+        value={newRow.totalHonorarios ?? ''}
+        onChange={(e) =>
+          setNewRow((prev) => ({ ...prev, totalHonorarios: e.target.value }))
+        }
+      />
+    </div>
+  </>
 )}
 
 
@@ -2596,6 +2857,105 @@ if (sugerido != null) {
     <Button onClick={() => setEstatusOpen(false)}>Cerrar</Button>
   </DialogActions>
 </Dialog>
+
+      {/* Modal: seleccionar presupuesto para llenar montos */}
+      <Dialog open={presupOpen} onClose={closePresupuestoPicker} fullWidth maxWidth="md">
+        <DialogTitle>Seleccionar presupuesto</DialogTitle>
+        <DialogContent dividers>
+          {presupLoading ? (
+            <div style={{ padding: 16 }}>Cargando presupuestos…</div>
+          ) : presupRows.length === 0 ? (
+            <div style={{ padding: 16 }}>No se encontraron presupuestos para este cliente.</div>
+          ) : (
+            <div style={{ width: '100%' }}>
+              <DataGrid
+                rows={presupRows}
+                getRowId={(r) => r.id}
+                autoHeight
+                loading={presupLoading}
+                pageSizeOptions={[5, 10, 25]}
+                initialState={{
+                  pagination: { paginationModel: { pageSize: 10, page: 0 } },
+                  sorting: { sortModel: [{ field: 'fecha', sort: 'desc' }] },
+                }}
+                columns={[
+  {
+    field: 'fecha',
+    headerName: 'Fecha',
+    width: 130,
+    
+  },
+  {
+    field: 'clienteNombre',
+    headerName: 'Cliente',
+    width: 200,
+    
+  },
+  {
+    field: 'descripcion',
+    headerName: 'Descripción',
+    flex: 1,
+    minWidth: 220,
+   
+  },
+  {
+    field: 'totalImpuestos',
+    headerName: 'Impuestos',
+    width: 120,
+    
+    renderCell: (p) => `$ ${fmtMoney(p.value)}`,
+  },
+  {
+    field: 'valorAvaluo',
+    headerName: 'Avalúo',
+    width: 120,
+   
+    renderCell: (p) => `$ ${fmtMoney(p.value)}`,
+  },
+  {
+    field: 'totalGastosExtra',
+    headerName: 'Gastos extra',
+    width: 130,
+   
+    renderCell: (p) => `$ ${fmtMoney(p.value)}`,
+  },
+  {
+    field: 'totalHonorarios',
+    headerName: 'Honorarios',
+    width: 130,
+    
+    renderCell: (p) => `$ ${fmtMoney(p.value)}`,
+  },
+  {
+    field: 'pick',
+    headerName: 'Usar',
+    width: 120,
+    sortable: false,
+    filterable: false,
+    renderCell: (params) => (
+      <Button
+        variant="contained"
+        size="small"
+        onClick={() => applyPresupuestoToTarget(params.row)}
+      >
+        Usar
+      </Button>
+    ),
+  },
+]}
+
+
+                disableRowSelectionOnClick
+                onRowDoubleClick={(params) => applyPresupuestoToTarget(params.row)}
+              />
+            </div>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={closePresupuestoPicker}>Cerrar</Button>
+        </DialogActions>
+      </Dialog>
+
 
     </div>
   );

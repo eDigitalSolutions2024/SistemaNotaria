@@ -246,10 +246,10 @@ router.post('/', async (req, res) => {
       totalTramite,
       totalPagado,
       abono,
-      totalImpuestos = 0,
-      valorAvaluo = 0,
-      totalGastosExtra = 0,
-      totalHonorarios = 0,
+      /*totalImpuestos ,
+      valorAvaluo ,
+      totalGastosExtra ,
+      totalHonorarios,*/
       creadoPor,
     } = req.body || {};
 
@@ -261,10 +261,10 @@ router.post('/', async (req, res) => {
     totalTramite = Number(totalTramite || 0);
     totalPagado = Number(totalPagado || 0);
     abono = Number(abono || 0);
-    totalImpuestos = Number(totalImpuestos || 0);
+    /*totalImpuestos = Number(totalImpuestos || 0);
     valorAvaluo = Number(valorAvaluo || 0);
     totalGastosExtra = Number(totalGastosExtra || 0);
-    totalHonorarios = Number(totalHonorarios || 0);
+    totalHonorarios = Number(totalHonorarios || 0);*/
 
     // normaliza control a Number cuando aplique
     const controlNum = control == null || control === '' ? null : Number(control);
@@ -322,10 +322,10 @@ router.post('/', async (req, res) => {
       totalPagado,
       abono,
       restante,
-      totalImpuestos,
+      /*totalImpuestos,
       valorAvaluo,
       totalGastosExtra,
-      totalHonorarios,
+      totalHonorarios,*/
       creadoPor: creadoPor || undefined,
     };
 
@@ -336,7 +336,7 @@ router.post('/', async (req, res) => {
       if (tipoTramite === 'Escritura') {
         await Escritura.updateOne(
           { numeroControl: controlNum, estatus_recibo: { $ne: 'JUSTIFICADO' } },
-          { $set: { estatus_recibo: 'CON_RECIBO', totalImpuestos, valorAvaluo, totalGastosExtra, totalHonorarios } }
+          { $set: { estatus_recibo: 'CON_RECIBO' } }
         );
       }
       if (tipoTramite === 'Protocolito') {
@@ -586,10 +586,10 @@ router.get('/escrituras/:numero/pending', async (req, res) => {
             totalTramite: '$last.totalTramite',
             totalPagado: '$last.totalPagado',
             restante: '$last.restante',
-            totalImpuestos: '$last.totalImpuestos',
+            /*totalImpuestos: '$last.totalImpuestos',
             valorAvaluo: '$last.valorAvaluo',
             totalGastosExtra: '$last.totalGastosExtra',
-            totalHonorarios: '$last.totalHonorarios'
+            totalHonorarios: '$last.totalHonorarios'*/
           }
         }
       }
@@ -689,6 +689,7 @@ const filter = {
       concepto: r.concepto,
       totalTramite: Number(r.totalTramite || 0),
       totalPagado: Number(r.totalPagado || 0),
+      total: Number((r.total ?? r.totalPagado) || 0), 
       estatus: r.estatus || 'Activo',
       pdfUrl: `/recibos/${r._id}/pdf`,
     }));

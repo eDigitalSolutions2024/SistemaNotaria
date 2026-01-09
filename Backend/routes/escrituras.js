@@ -11,10 +11,17 @@ const xlsx = require('xlsx');
 
 const Escritura = require('../models/Escritura');
 const Presupuesto = require('../models/Presupuesto');
+const Recibo = require('../models/Recibo');
+
+const ReciboLink = require('../models/ReciboLink');
 
 // (Opcional) si tienes modelo Cliente; si no, no pasa nada
 let Cliente = null;
 try { Cliente = require('../models/Cliente'); } catch { /* opcional */ }
+
+
+
+
 
 // --- helpers ---
 
@@ -106,10 +113,11 @@ function escapeRegex(text) {
 async function countEscriturasSinReciboPorAbogado(nombreAbogado) {
   if (!nombreAbogado) return 0;
 
-  const regexAbogado = new RegExp(escapeRegex(nombreAbogado), 'i');
+  //const regexAbogado = new RegExp(escapeRegex(nombreAbogado), 'i');
 
   const filter = {
-    abogado: regexAbogado,
+    abogado: { $regex: `^${escapeRegex(nombreAbogado)}$`, $options: 'i' },
+
     $or: [
       { estatus_recibo: { $exists: false } },
       { estatus_recibo: { $nin: ['CON_RECIBO', 'JUSTIFICADO'] } },
@@ -133,6 +141,101 @@ const numOrNull = (v) => {
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
 };
+
+// --- Helpers para Presupuesto ---
+
+// mismos conceptos que usas al auto-llenar en POST /escrituras
+const PRES_IMPUESTOS_KEYS = [
+  'isr', 'isrAdquisicion',
+  'traslacionDominio', 'traslacionDominio2', 'traslacionDominioRecargos',
+  'ivaLocalComerc', 'actosJuridicos',
+  'impuestoCedular', 'impuestoPredial',
+];
+
+const PRES_GASTOS_KEYS = [
+  'registroPublico', 'registroPubVtaHip', 'registroPubPoderes',
+  'registroPubOtros', 'registroPublicoRecargos',
+  'solicPermiso', 'avisoPermiso', 'costoAvaluo', 'gastosGestiones',
+  'tramiteForaneo', 'otrosConceptos',
+  'certificados1', 'certificados2', 'certificados3',
+];
+
+function sumKeys(obj, keys) {
+  return keys.reduce((acc, k) => acc + (Number(obj?.[k]) || 0), 0);
+}
+
+function numSafe(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function mapPresupuestoToRow(p) {
+  const cargos = p.cargos || {};
+  const honor  = p.honorariosCalc || {};
+
+  // === AVALÚO / VALOR OPERACIÓN ===
+  const valorAvaluo =
+    // primero intenta campos planos camel / snake
+    (p.valorAvaluo != null || p.valor_avaluo != null)
+      ? numSafe(p.valorAvaluo ?? p.valor_avaluo)
+      : (p.avaluo != null && p.avaluo !== 0)
+        ? numSafe(p.avaluo)
+        : numSafe(p.valorOperacion ?? p.valor_operacion);
+
+  // === IMPUESTOS (acepta camel + snake) ===
+  const totalImpuestos =
+    (p.totalImpuestos != null || p.total_impuestos != null)
+      ? numSafe(p.totalImpuestos ?? p.total_impuestos)
+      : sumKeys(cargos, PRES_IMPUESTOS_KEYS);
+
+  // === GASTOS EXTRA (camel + snake) ===
+  const totalGastosExtra =
+    (p.totalGastosExtra != null || p.total_gastos_extra != null)
+      ? numSafe(p.totalGastosExtra ?? p.total_gastos_extra)
+      : sumKeys(cargos, PRES_GASTOS_KEYS);
+
+  // === HONORARIOS (camel + snake, plano o en honorariosCalc) ===
+  const totalHonorarios =
+    (p.totalHonorarios != null || p.total_honorarios != null ||
+     honor.totalHonorarios != null || honor.total_honorarios != null)
+      ? numSafe(
+          p.totalHonorarios ??
+          p.total_honorarios ??
+          honor.totalHonorarios ??
+          honor.total_honorarios
+        )
+      : (() => {
+          const porc = Number(p.porcentajeHonorarios);
+          if (Number.isFinite(porc) && porc > 0) {
+            return numSafe(valorAvaluo * (porc / 100));
+          }
+          return 0;
+        })();
+
+  // === TEXTO / FECHA (mas campos) ===
+  const descripcion =
+    p.descripcion ||
+    p.concepto ||
+    p.observaciones ||
+    p.tipoTramite ||
+    '';
+
+  const fecha = p.fecha || p.createdAt || null;
+
+  return {
+    _id: p._id,
+    id: String(p._id),       // para DataGrid
+    cliente: p.cliente,      // número de cliente
+    fecha,
+    descripcion,
+    totalImpuestos,
+    valorAvaluo,
+    totalGastosExtra,
+    totalHonorarios,
+  };
+}
+
+
 
 
 
@@ -376,7 +479,78 @@ router.get('/export', async (req, res) => {
 
     if (volumen) filter.volumen = { $regex: String(volumen).trim(), $options: 'i' };
 
-    const docs = await Escritura.find(filter).sort({ numeroControl: 1 }).lean();
+  const docs = await Escritura.aggregate([
+  { $match: filter },
+  { $sort: { numeroControl: 1 } },
+
+  // 1) Recibo directo (por control)
+  {
+    $lookup: {
+      from: 'recibos',
+      let: { ctrl: '$numeroControl' },
+      pipeline: [
+        { $match: { $expr: { $eq: ['$control', '$$ctrl'] }, estatus: 'Activo' } },
+        { $sort: { fecha: -1, createdAt: -1 } },
+        { $limit: 1 },
+        { $project: { _id: 1, control: 1, fecha: 1 } }
+      ],
+      as: 'reciboDirecto'
+    }
+  },
+  { $addFields: { reciboDirecto: { $arrayElemAt: ['$reciboDirecto', 0] } } },
+
+  // 2) Link (por control) -> trae reciboId
+  {
+    $lookup: {
+      from: 'recibolinks',
+      let: { ctrl: '$numeroControl' },
+      pipeline: [
+        { $match: { $expr: { $eq: ['$control', '$$ctrl'] } } },
+        { $sort: { createdAt: -1 } },
+        { $limit: 1 },
+        { $project: { reciboId: 1, control: 1 } }
+      ],
+      as: 'reciboLink'
+    }
+  },
+  { $addFields: { reciboLink: { $arrayElemAt: ['$reciboLink', 0] } } },
+
+  // 3) Recibo por link (por _id)
+  {
+    $lookup: {
+      from: 'recibos',
+      let: { rid: '$reciboLink.reciboId' },
+      pipeline: [
+        { $match: { $expr: { $eq: ['$_id', '$$rid'] }, estatus: 'Activo' } },
+        { $project: { _id: 1, control: 1, fecha: 1 } }
+      ],
+      as: 'reciboVinculado'
+    }
+  },
+  { $addFields: { reciboVinculado: { $arrayElemAt: ['$reciboVinculado', 0] } } },
+
+  // 4) Elegir reciboFinal + bandera vinculado
+ {
+  $addFields: {
+    reciboFinal: { $ifNull: ['$reciboDirecto', '$reciboVinculado'] },
+
+    reciboEsVinculado: {
+      $cond: [
+        {
+          $and: [
+            { $eq: [ { $ifNull: ['$reciboDirecto', null] }, null ] },     // no hay directo
+            { $ne: [ { $ifNull: ['$reciboVinculado', null] }, null ] }    // sí hay vinculado
+          ]
+        },
+        true,
+        false
+      ]
+    }
+  }
+}
+
+]);
+
 
     /* ===================== PDF ===================== */
     if (String(format).toLowerCase() === 'pdf') {
@@ -422,6 +596,28 @@ router.get('/export', async (req, res) => {
           `Honor: ${moneyFmt(r.totalHonorarios)}`,
         ].join(' · ');
 
+
+        const REC_STATUS = String(r.estatus_recibo || '').toUpperCase();
+
+// Número corto del recibo (como ya lo estabas haciendo)
+const reciboNumero = r.reciboFinal?._id
+  ? String(r.reciboFinal._id).slice(-5).toUpperCase()
+  : null;
+
+const tagVinc = r.reciboEsVinculado ? '*' : '';
+
+
+// Lógica de la celda "Recibo / Just."
+const reciboJustificante =
+  (REC_STATUS === 'CON_RECIBO')
+    ? (reciboNumero ? `${reciboNumero}${tagVinc}` : '—')
+    : (REC_STATUS === 'JUSTIFICADO')
+      ? (r.justificante_text ? String(r.justificante_text).trim() : '—')
+      : '—';
+
+
+
+
         return {
           numeroControl: r.numeroControl ?? '',
           fecha,
@@ -431,6 +627,7 @@ router.get('/export', async (req, res) => {
           volumen: r.volumen ?? '',
           folio: folioStr,
           montos,
+          reciboJustificante,
           estatus_entrega: r.estatus_entrega ?? '',
           estatus_recibo: r.estatus_recibo ?? '',
           observaciones: r.observaciones ?? '',
@@ -439,13 +636,15 @@ router.get('/export', async (req, res) => {
 
       // Columnas (ajusta porcentajes a tu gusto)
       const COLS = [
-        { key: 'numeroControl', title: '# Control', width: Math.round(PAGE.width * 0.10) },
+        { key: 'numeroControl', title: '#', width: Math.round(PAGE.width * 0.05) },
         { key: 'fecha',         title: 'Fecha',    width: Math.round(PAGE.width * 0.10) },
-        { key: 'cliente',       title: 'Cliente',  width: Math.round(PAGE.width * 0.22) },
+        { key: 'cliente',       title: 'Cliente',  width: Math.round(PAGE.width * 0.17) },
         { key: 'tipoTramite',   title: 'Tipo',     width: Math.round(PAGE.width * 0.14) },
         { key: 'abogado',       title: 'Abogado',  width: Math.round(PAGE.width * 0.14) },
         { key: 'volumen',       title: 'Vol.',     width: Math.round(PAGE.width * 0.06) },
         { key: 'folio',         title: 'Folio',    width: Math.round(PAGE.width * 0.10) },
+        { key: 'reciboJustificante', title: 'Recibo/Just.', width: Math.round(PAGE.width * 0.11) },
+
         { key: 'montos',        title: 'Montos',   width: PAGE.width }, // corrige abajo
       ];
       const sumExceptLast = COLS.slice(0, -1).reduce((a, c) => a + c.width, 0);
@@ -591,7 +790,11 @@ router.get('/export', async (req, res) => {
       { header: 'Estatus entrega', key: 'estatus_entrega', width: 16 },
       { header: 'Estatus recibo', key: 'estatus_recibo', width: 16 },
       { header: 'Observaciones', key: 'observaciones', width: 50 },
+      { header: 'Recibo', key: 'recibo', width: 12 },
+{ header: 'Recibo vinculado', key: 'reciboVinculado', width: 16 },
+
     ];
+const reciboNumero = r.reciboFinalDoc?._id ? String(r.reciboFinalDoc._id).slice(-5).toUpperCase() : '';
 
     docs.forEach(r => {
       ws.addRow({
@@ -609,7 +812,9 @@ router.get('/export', async (req, res) => {
         totalHonorarios: r.totalHonorarios ?? '',
         estatus_entrega: r.estatus_entrega ?? '',
         estatus_recibo: r.estatus_recibo ?? '',
-        observaciones: r.observaciones || ''
+        observaciones: r.observaciones || '',
+        recibo: reciboNumero ? (r.reciboEsVinculado ? `${reciboNumero} (VINC)` : reciboNumero) : '',
+  reciboVinculado: r.reciboEsVinculado ? 'SI' : '',
       });
     });
 
@@ -904,6 +1109,39 @@ router.post('/', async (req, res) => {
   } catch (e) {
     if (e?.code === 11000) return res.status(409).json({ mensaje: 'El número de control ya existe' });
     res.status(500).json({ mensaje: 'Error creando escritura', detalle: e.message });
+  }
+});
+
+router.get('/presupuestos/cliente/:clienteNumero', async (req, res) => {
+  try {
+    const raw = req.params.clienteNumero;
+    const clienteNumero = Number(raw);
+
+    if (!Number.isFinite(clienteNumero)) {
+      return res.status(400).json({ mensaje: 'clienteNumero inválido' });
+    }
+
+    const list = await Presupuesto
+      .find({ cliente: clienteNumero })
+      .sort({ createdAt: -1 })
+      .lean();
+
+    console.log('Presupuestos cliente', clienteNumero);
+    list.forEach(p => {
+      console.log({
+        _id: p._id,
+        avaluo: p.avaluo,
+        valorOperacion: p.valorOperacion,
+        cargos: p.cargos,
+        honorariosCalc: p.honorariosCalc,
+      });
+    });
+
+    const rows = list.map(mapPresupuestoToRow);
+    res.json(rows);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ mensaje: 'Error listando presupuestos', detalle: e.message });
   }
 });
 
@@ -1223,24 +1461,36 @@ if ('documentos' in body) base.documentos = docsObj;
     }
     // === FIN Horas Testamento ===
 
-    // === Montos ===
-    const touchedMontos =
-      ('totalImpuestos' in body) || ('total_impuestos' in body) ||
-      ('valorAvaluo' in body) || ('valor_avaluo' in body) ||
-      ('totalGastosExtra' in body) || ('total_gastos_extra' in body) ||
-      ('totalHonorarios' in body) || ('total_honorarios' in body);
+    const montoKeys = [
+  'totalImpuestos','total_impuestos',
+  'valorAvaluo','valor_avaluo',
+  'totalGastosExtra','total_gastos_extra',
+  'totalHonorarios','total_honorarios'
+];
 
-    if (touchedMontos) {
-      const mTotalImpuestos  = numOrNull(body.totalImpuestos  ?? body.total_impuestos);
-      const mValorAvaluo     = numOrNull(body.valorAvaluo     ?? body.valor_avaluo);
-      const mGastosExtra     = numOrNull(body.totalGastosExtra ?? body.total_gastos_extra);
-      const mHonorarios      = numOrNull(body.totalHonorarios  ?? body.total_honorarios);
+// ¿viene alguna llave?
+const touchedMontos = montoKeys.some(k => Object.prototype.hasOwnProperty.call(body, k));
 
-      out.totalImpuestos   = mTotalImpuestos;
-      out.valorAvaluo      = mValorAvaluo;
-      out.totalGastosExtra = mGastosExtra;
-      out.totalHonorarios  = mHonorarios;
-    }
+// ¿viene algún valor “real” (no vacío)?
+const hasMontoValue = montoKeys.some(k => {
+  const v = body[k];
+  return v !== undefined && v !== null && v !== '';
+});
+
+if (touchedMontos && hasMontoValue) {
+  const mTotalImpuestos  = numOrNull(body.totalImpuestos  ?? body.total_impuestos);
+  const mValorAvaluo     = numOrNull(body.valorAvaluo     ?? body.valor_avaluo);
+  const mGastosExtra     = numOrNull(body.totalGastosExtra ?? body.total_gastos_extra);
+  const mHonorarios      = numOrNull(body.totalHonorarios  ?? body.total_honorarios);
+
+  out.totalImpuestos   = mTotalImpuestos;
+  out.valorAvaluo      = mValorAvaluo;
+  out.totalGastosExtra = mGastosExtra;
+  out.totalHonorarios  = mHonorarios;
+}
+
+// Si touchedMontos pero NO hay valores, ignoramos para que NO se borren.
+
 
     // aplicar cambios: construir $set final con merged + out
     await Escritura.updateOne(
@@ -1262,6 +1512,12 @@ if ('documentos' in body) base.documentos = docsObj;
           ...(out.valorAvaluo      !== undefined ? { valorAvaluo: out.valorAvaluo } : {}),
           ...(out.totalGastosExtra !== undefined ? { totalGastosExtra: out.totalGastosExtra } : {}),
           ...(out.totalHonorarios  !== undefined ? { totalHonorarios: out.totalHonorarios } : {}),
+
+           // ✅✅ NUEVO: guardar estatus/documentación
+      ...(base.documentos !== undefined ? { documentos: base.documentos } : {}),
+      ...(base.comentariosEstatus !== undefined ? { comentariosEstatus: base.comentariosEstatus } : {}),
+      ...(base.documentacionFaltante !== undefined ? { documentacionFaltante: base.documentacionFaltante } : {}),
+      ...(base.fechaEnvioNTD !== undefined ? { fechaEnvioNTD: base.fechaEnvioNTD } : {}),
         }
       }
     );
@@ -1285,22 +1541,40 @@ router.delete('/:id', async (req, res) => {
   }
 });
 
-// GET /escrituras/:id/entrega-info
 router.get('/:id/entrega-info', async (req, res) => {
   try {
     const it = await Escritura.findById(req.params.id).lean();
     if (!it) return res.status(404).json({ mensaje: 'No encontrado' });
 
     let telefono = '—';
+    let clienteNombre = it.cliente || '—';
+
     if (Cliente) {
-      const c = await Cliente.findOne({ nombre: it.cliente }).lean();
-      if (c?.telefono) telefono = c.telefono;
+      const raw = String(it.cliente || '').trim();
+
+      // si viene "2001" (numérico), buscar por _id
+      if (/^\d+$/.test(raw)) {
+        const c = await Cliente.findById(Number(raw)).lean();
+        if (c) {
+          clienteNombre = c.nombre || clienteNombre;
+          telefono = c.numero_telefono || '—';
+        }
+      } else {
+        // si viene nombre, buscar por nombre
+        const c = await Cliente.findOne({ nombre: raw }).lean();
+        if (c) {
+          clienteNombre = c.nombre || clienteNombre;
+          telefono = c.numero_telefono || '—';
+        }
+      }
     }
-    res.json({ telefono });
+
+    res.json({ telefono, clienteNombre });
   } catch (e) {
     res.status(500).json({ mensaje: 'Error obteniendo info de entrega', detalle: e.message });
   }
 });
+
 
 // POST /escrituras/:id/entregar
 router.post('/:id/entregar', async (req, res) => {

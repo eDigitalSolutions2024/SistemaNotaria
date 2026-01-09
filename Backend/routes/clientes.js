@@ -183,4 +183,21 @@ router.get('/search', async (req, res) => {
 });
 
 
+// GET /clientes/:id  (trae un cliente por _id numérico)
+router.get('/:id', async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json({ mensaje: 'ID inválido' });
+
+    const c = await Cliente.findById(id).lean();
+    if (!c) return res.status(404).json({ mensaje: 'Cliente no encontrado' });
+
+    res.json(c);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ mensaje: 'Error al obtener cliente' });
+  }
+});
+
+
 module.exports = router;

@@ -75,26 +75,55 @@ export default function EscrituraEstatus({ escrituraId, onClose }) {
 
   const documentos = row?.documentos || {};
 
+
+   const money = (v) => {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+};
+
+const isCancelado = (r) => /cancel/i.test(String(r?.estatus || r?.status || ''));
+
+
+  const resumenPagos = useMemo(() => {
+  const honorarios = money(row?.totalHonorarios);
+  const impuestos  = money(row?.totalImpuestos);
+  const extras     = money(row?.totalGastosExtra);
+
+  const totalEscritura = honorarios + impuestos + extras;
+
+  const pagado = (recibos || []).reduce((acc, r) => {
+    if (isCancelado(r)) return acc;
+    const monto = money(r?.total ?? r?.monto ?? r?.importeTotal);
+    return acc + monto;
+  }, 0);
+
+  const saldo = totalEscritura - pagado; // NO lo forces a 0, así ves si algo está raro
+
+  return { honorarios, impuestos, extras, totalEscritura, pagado, saldo };
+}, [row, recibos]);
+
+
+
   const totals = useMemo(() => {
     const keys = [...DOCS_LEFT, ...DOCS_RIGHT].map(([k]) => k);
     const done = keys.filter((k) => Boolean(documentos?.[k])).length;
     return { total: keys.length, done, pending: keys.length - done };
   }, [documentos]);
 
-  const loadCliente = async (clienteId) => {
+  const loadCliente = async () => {
+  setClienteNombre('');
+  setClienteTelefono('');
+  if (!escrituraId) return;
+
+  try {
+    const { data } = await axios.get(`${API}/escrituras/${escrituraId}/entrega-info`);
+    setClienteNombre(data?.clienteNombre || '');
+    setClienteTelefono(data?.telefono || '');
+  } catch {
     setClienteNombre('');
     setClienteTelefono('');
-    if (!clienteId) return;
-
-    try {
-      const { data: c } = await axios.get(`${API}/clientes/${encodeURIComponent(clienteId)}`);
-      setClienteNombre(c?.nombre || '');
-      setClienteTelefono(pickTelefono(c) || '');
-    } catch {
-      setClienteNombre('');
-      setClienteTelefono('');
-    }
-  };
+  }
+};
 
   // ✅ SOLO LOS RECIBOS DEL TRÁMITE (por control y tipoTramite)
   const loadRecibos = async (numeroControl) => {
@@ -116,7 +145,31 @@ export default function EscrituraEstatus({ escrituraId, onClose }) {
     setLoadingRecibos(false);
   }
 };
+const toNum = (v) => {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+};
 
+
+
+const montos = useMemo(() => {
+  const honor = toNum(row?.totalHonorarios);
+  const imp   = toNum(row?.totalImpuestos);
+  const extra = toNum(row?.totalGastosExtra);
+
+  const totalEscritura = honor + imp + extra;
+
+  const pagado = (recibos || [])
+    .filter(r => !isCancelado(r))
+    .reduce((acc, r) => {
+      const t = r?.total ?? r?.monto ?? r?.importeTotal;
+      return acc + toNum(t);
+    }, 0);
+
+  const saldo = totalEscritura - pagado;
+
+  return { honor, imp, extra, totalEscritura, pagado, saldo };
+}, [row, recibos]);
 
   const load = async () => {
     if (!escrituraId) return;
@@ -135,7 +188,7 @@ export default function EscrituraEstatus({ escrituraId, onClose }) {
 
       setRow(safe);
 
-      await loadCliente(safe?.cliente);
+      await loadCliente();
       await loadRecibos(safe?.numeroControl);
     } catch {
       setRow(null);
@@ -216,9 +269,7 @@ export default function EscrituraEstatus({ escrituraId, onClose }) {
 
           <div>
             <b>Cliente:</b> {row.cliente || '—'}
-            <div style={{ fontSize: 12, color: '#555', marginTop: 2 }}>
-              <b>Nombre:</b> {clienteNombre || '—'}
-            </div>
+            
             <div style={{ fontSize: 12, color: '#555', marginTop: 2 }}>
               <b>Teléfono:</b> {clienteTelefono || '—'}
             </div>
@@ -268,6 +319,37 @@ export default function EscrituraEstatus({ escrituraId, onClose }) {
               Refrescar
             </Button>
           </div>
+
+
+                 {/* ✅ Resumen de montos (YA fuera del flex) */}
+<div style={{ marginTop: 10, display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
+  <div style={{ padding: 10, border: '1px solid #eee', borderRadius: 10 }}>
+    <div style={{ fontSize: 12, color: '#666' }}>Total escritura</div>
+    <div style={{ fontSize: 18, fontWeight: 700 }}>{currency(resumenPagos.totalEscritura)}</div>
+    <div style={{ marginTop: 6, fontSize: 12, color: '#666' }}>
+      Honorarios: {currency(resumenPagos.honorarios)}<br />
+      Impuestos: {currency(resumenPagos.impuestos)}<br />
+      Extras: {currency(resumenPagos.extras)}
+    </div>
+  </div>
+
+  <div style={{ padding: 10, border: '1px solid #eee', borderRadius: 10 }}>
+    <div style={{ fontSize: 12, color: '#666' }}>Abonos / Pagado</div>
+    <div style={{ fontSize: 18, fontWeight: 700 }}>{currency(resumenPagos.pagado)}</div>
+    <div style={{ marginTop: 6, fontSize: 12, color: '#666' }}>
+      (Suma de recibos no cancelados)
+    </div>
+  </div>
+
+  <div style={{ padding: 10, border: '1px solid #eee', borderRadius: 10 }}>
+    <div style={{ fontSize: 12, color: '#666' }}>Saldo / Debe</div>
+    <div style={{ fontSize: 18, fontWeight: 700 }}>{currency(resumenPagos.saldo)}</div>
+    <div style={{ marginTop: 6, fontSize: 12, color: '#666' }}>
+      Total − Pagado
+    </div>
+  </div>
+</div>
+
         </div>
 
         <div style={{ marginTop: 10 }}>
