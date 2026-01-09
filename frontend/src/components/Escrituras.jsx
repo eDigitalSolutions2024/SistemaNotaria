@@ -2853,9 +2853,7 @@ if (sugerido != null) {
 </DialogContent>
 
 
-  <DialogActions>
-    <Button onClick={() => setEstatusOpen(false)}>Cerrar</Button>
-  </DialogActions>
+  
 </Dialog>
 
       {/* Modal: seleccionar presupuesto para llenar montos */}
