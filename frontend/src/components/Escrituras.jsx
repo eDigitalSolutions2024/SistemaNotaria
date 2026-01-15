@@ -700,7 +700,7 @@ function getNewFormErrors({ newRow, newVolumen, newFolioDesde, newFolioHasta, ne
   }, [rows, currentUserName]);
 
   // Candado solo para abogados / asistentes (no para ADMIN)
-  const bloqueoPorRecibo = !isAdmin && mySinReciboCount >= 2;
+  const bloqueoPorRecibo = !isAdmin && mySinReciboCount >= 5;
 
 
 

@@ -61,6 +61,48 @@ const currency = (n) => {
   return num.toLocaleString('es-MX', { style: 'currency', currency: 'MXN' });
 };
 
+// ======================
+// ✅ Comentarios como lista (Chips)
+// Guardamos en DB como JSON string en comentariosEstatus
+// ======================
+const parseComentarios = (raw) => {
+  if (!raw) return [];
+  const s = String(raw).trim();
+  if (!s) return [];
+
+  // Nuevo formato: JSON
+  try {
+    const arr = JSON.parse(s);
+    if (Array.isArray(arr)) {
+      return arr
+        .filter(Boolean)
+        .map((c) => ({
+          id: c?.id || `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+          text: String(c?.text || c || '').trim(),
+          createdAt: c?.createdAt || null,
+          by: c?.by || '',
+        }))
+        .filter((c) => c.text);
+    }
+  } catch {
+    // formato viejo: texto libre
+  }
+
+  // Formato viejo: texto libre -> split por líneas
+  return s
+    .split('\n')
+    .map((t) => t.trim())
+    .filter(Boolean)
+    .map((t) => ({
+      id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      text: t,
+      createdAt: null,
+      by: '',
+    }));
+};
+
+const serializeComentarios = (arr) => JSON.stringify(Array.isArray(arr) ? arr : []);
+
 export default function EscrituraEstatus({ escrituraId, onClose }) {
   const { user } = useAuth();
 
@@ -101,6 +143,16 @@ export default function EscrituraEstatus({ escrituraId, onClose }) {
   const [listHasMore, setListHasMore] = useState(true);
   const [selectedIds, setSelectedIds] = useState([]); // ids a adjuntar (multi)
   const [attaching, setAttaching] = useState(false);
+
+  // ✅ NUEVO: comentarios como lista + input
+  const [comentariosList, setComentariosList] = useState([]);
+  const [comentarioInput, setComentarioInput] = useState('');
+
+
+  // ✅ NUEVO: documentación faltante como lista + input
+const [faltanteList, setFaltanteList] = useState([]);
+const [faltanteInput, setFaltanteInput] = useState('');
+
 
   const documentos = row?.documentos || {};
 
@@ -211,12 +263,20 @@ export default function EscrituraEstatus({ escrituraId, onClose }) {
       const safe = {
         ...data,
         documentos: data?.documentos || {},
-        comentariosEstatus: data?.comentariosEstatus || '',
+        comentariosEstatus: data?.comentariosEstatus || '', // <- raw (string)
         documentacionFaltante: data?.documentacionFaltante || '',
         fechaEnvioNTD: data?.fechaEnvioNTD ? String(data.fechaEnvioNTD).slice(0, 10) : '',
       };
 
       setRow(safe);
+
+      // ✅ Alimenta lista desde DB (soporta JSON nuevo o texto viejo)
+setFaltanteList(parseComentarios(safe.documentacionFaltante));
+setFaltanteInput('');
+
+      // ✅ Alimenta lista desde DB
+      setComentariosList(parseComentarios(safe.comentariosEstatus));
+      setComentarioInput('');
 
       await loadCliente();
       await loadRecibos(safe?.numeroControl);
@@ -225,6 +285,8 @@ export default function EscrituraEstatus({ escrituraId, onClose }) {
       setClienteNombre('');
       setClienteTelefono('');
       setRecibos([]);
+      setComentariosList([]);
+      setComentarioInput('');
     } finally {
       setLoading(false);
     }
@@ -242,14 +304,35 @@ export default function EscrituraEstatus({ escrituraId, onClose }) {
     }));
   };
 
+  // ✅ NUEVO: agregar/eliminar comentario (chips)
+  const addComentario = () => {
+    const t = String(comentarioInput || '').trim();
+    if (!t) return;
+
+    const item = {
+      id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      text: t,
+      createdAt: new Date().toISOString(),
+      by: user?.nombre || user?.name || user?.username || '',
+    };
+
+    setComentariosList((prev) => [item, ...(prev || [])]); // nuevo arriba
+    setComentarioInput('');
+  };
+
+  const deleteComentario = (id) => {
+    setComentariosList((prev) => (prev || []).filter((c) => String(c.id) !== String(id)));
+  };
+
   const save = async () => {
     if (!row?._id) return;
     setSaving(true);
     try {
       await axios.put(`${API}/escrituras/${row._id}`, {
         documentos: row.documentos,
-        comentariosEstatus: row.comentariosEstatus,
-        documentacionFaltante: row.documentacionFaltante,
+        // ✅ Guardamos lista como JSON string
+        comentariosEstatus: serializeComentarios(comentariosList),
+        documentacionFaltante: serializeComentarios(faltanteList),
         fechaEnvioNTD: row.fechaEnvioNTD || null,
       });
       await load();
@@ -257,6 +340,26 @@ export default function EscrituraEstatus({ escrituraId, onClose }) {
       setSaving(false);
     }
   };
+
+  const addFaltante = () => {
+  const t = String(faltanteInput || '').trim();
+  if (!t) return;
+
+  const item = {
+    id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    text: t,
+    createdAt: new Date().toISOString(),
+    by: user?.nombre || user?.name || user?.username || '',
+  };
+
+  setFaltanteList((prev) => [item, ...(prev || [])]);
+  setFaltanteInput('');
+};
+
+const deleteFaltante = (id) => {
+  setFaltanteList((prev) => (prev || []).filter((c) => String(c.id) !== String(id)));
+};
+
 
   // ✅ PDF
   const getPdfUrl = (recibo) => `${API}/recibos/${recibo._id}/pdf`;
@@ -474,28 +577,76 @@ export default function EscrituraEstatus({ escrituraId, onClose }) {
 
       {/* Documentación */}
       <div style={{ marginTop: 12, padding: 12, border: '1px solid #eee', borderRadius: 10 }}>
-        <h3 style={{ marginTop: 0 }}>Documentación</h3>
+  <h3 style={{ marginTop: 0 }}>Documentación</h3>
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-          <div>
-            {DOCS_LEFT.map(([k, label]) => (
-              <label key={k} style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '6px 0' }}>
-                <input type="checkbox" checked={!!documentos[k]} onChange={() => toggleDoc(k)} />
-                <span>{label}</span>
-              </label>
-            ))}
-          </div>
+  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+    <div>
+      {DOCS_LEFT.map(([k, label]) => (
+        <label
+          key={k}
+          style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '6px 0' }}
+        >
+          <input type="checkbox" checked={!!documentos[k]} onChange={() => toggleDoc(k)} />
+          <span>{label}</span>
+        </label>
+      ))}
+    </div>
 
-          <div>
-            {DOCS_RIGHT.map(([k, label]) => (
-              <label key={k} style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '6px 0' }}>
-                <input type="checkbox" checked={!!documentos[k]} onChange={() => toggleDoc(k)} />
-                <span>{label}</span>
-              </label>
-            ))}
-          </div>
-        </div>
-      </div>
+    <div>
+      {DOCS_RIGHT.map(([k, label]) => (
+        <label
+          key={k}
+          style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '6px 0' }}
+        >
+          <input type="checkbox" checked={!!documentos[k]} onChange={() => toggleDoc(k)} />
+          <span>{label}</span>
+        </label>
+      ))}
+    </div>
+  </div>
+
+  {/* ✅ Documentación faltante (chips) */}
+  <div style={{ marginTop: 14 }}>
+    <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+      <TextField
+        label="Documentación faltante (agrega uno por uno)"
+        multiline
+        minRows={2}
+        fullWidth
+        value={faltanteInput}
+        onChange={(e) => setFaltanteInput(e.target.value)}
+        placeholder="Ej: INE comprador, predial actualizado, agua, etc."
+      />
+
+      <Button
+        variant="contained"
+        onClick={addFaltante}
+        disabled={!String(faltanteInput || '').trim()}
+        style={{ height: 40, marginTop: 6 }}
+      >
+        Agregar
+      </Button>
+    </div>
+
+    <div style={{ marginTop: 10, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+      {(faltanteList || []).length === 0 ? (
+        <span style={{ fontSize: 12, color: '#666' }}>
+          No hay documentación faltante registrada.
+        </span>
+      ) : (
+        faltanteList.map((c) => (
+          <Chip
+            key={c.id}
+            label={c.text}
+            onDelete={() => deleteFaltante(c.id)}
+            variant="outlined"
+          />
+        ))
+      )}
+    </div>
+  </div>
+</div>
+
 
       {/* Historial de recibos */}
       <div style={{ marginTop: 12, padding: 12, border: '1px solid #eee', borderRadius: 10 }}>
@@ -622,28 +773,45 @@ export default function EscrituraEstatus({ escrituraId, onClose }) {
           <div />
         </div>
 
+        {/* ✅ Comentarios (nuevo) */}
         <div style={{ marginTop: 10 }}>
-          <TextField
-            label="Comentarios"
-            multiline
-            minRows={3}
-            fullWidth
-            value={row.comentariosEstatus || ''}
-            onChange={(e) => setRow((p) => ({ ...p, comentariosEstatus: e.target.value }))}
-          />
+          <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+            <TextField
+              label="Comentario (agrega uno por uno)"
+              multiline
+              minRows={2}
+              fullWidth
+              value={comentarioInput}
+              onChange={(e) => setComentarioInput(e.target.value)}
+              placeholder="Escribe un comentario y presiona Agregar…"
+            />
+            <Button
+              variant="contained"
+              onClick={addComentario}
+              disabled={!String(comentarioInput || '').trim()}
+              style={{ height: 40, marginTop: 6 }}
+            >
+              Agregar
+            </Button>
+          </div>
+
+          <div style={{ marginTop: 10, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            {(comentariosList || []).length === 0 ? (
+              <span style={{ fontSize: 12, color: '#666' }}>Aún no hay comentarios.</span>
+            ) : (
+              comentariosList.map((c) => (
+                <Chip
+                  key={c.id}
+                  label={c.text}
+                  onDelete={() => deleteComentario(c.id)}
+                  variant="outlined"
+                />
+              ))
+            )}
+          </div>
         </div>
 
-        <div style={{ marginTop: 10 }}>
-          <TextField
-            label="Documentación faltante"
-            multiline
-            minRows={3}
-            fullWidth
-            value={row.documentacionFaltante || ''}
-            onChange={(e) => setRow((p) => ({ ...p, documentacionFaltante: e.target.value }))}
-            placeholder="Ej: Falta INE del comprador, predial actualizado, agua, etc."
-          />
-        </div>
+        
       </div>
 
       {/* ✅ Acciones duplicadas al final */}
