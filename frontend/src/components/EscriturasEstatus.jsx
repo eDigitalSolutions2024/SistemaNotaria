@@ -19,7 +19,6 @@ import {
 } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
 
-// ✅ Ajusta la ruta si tu AuthContext está en otro lugar
 import { useAuth } from '../auth/AuthContext';
 
 const API = process.env.REACT_APP_API_URL || 'http://localhost:8010';
@@ -55,6 +54,19 @@ const fmtDate = (d) => {
   }
 };
 
+const fmtDateTime = (iso) => {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleString('es-MX', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+};
+
 const currency = (n) => {
   const num = Number(n);
   if (Number.isNaN(num)) return '';
@@ -62,15 +74,15 @@ const currency = (n) => {
 };
 
 // ======================
-// ✅ Comentarios como lista (Chips)
-// Guardamos en DB como JSON string en comentariosEstatus
+// ✅ Listas (comentarios / doc faltante) guardadas como JSON string
+// - Si el campo es JSON: [{id,text,createdAt,by}, ...]
+// - Si es texto viejo: se parte por líneas
 // ======================
-const parseComentarios = (raw) => {
+const parseListField = (raw) => {
   if (!raw) return [];
   const s = String(raw).trim();
   if (!s) return [];
 
-  // Nuevo formato: JSON
   try {
     const arr = JSON.parse(s);
     if (Array.isArray(arr)) {
@@ -85,10 +97,9 @@ const parseComentarios = (raw) => {
         .filter((c) => c.text);
     }
   } catch {
-    // formato viejo: texto libre
+    // formato viejo
   }
 
-  // Formato viejo: texto libre -> split por líneas
   return s
     .split('\n')
     .map((t) => t.trim())
@@ -101,7 +112,7 @@ const parseComentarios = (raw) => {
     }));
 };
 
-const serializeComentarios = (arr) => JSON.stringify(Array.isArray(arr) ? arr : []);
+const serializeListField = (arr) => JSON.stringify(Array.isArray(arr) ? arr : []);
 
 export default function EscrituraEstatus({ escrituraId, onClose }) {
   const { user } = useAuth();
@@ -125,7 +136,7 @@ export default function EscrituraEstatus({ escrituraId, onClose }) {
   const [clienteNombre, setClienteNombre] = useState('');
   const [clienteTelefono, setClienteTelefono] = useState('');
 
-  // recibos (historial ligado a la escritura/control)
+  // recibos
   const [recibos, setRecibos] = useState([]);
   const [loadingRecibos, setLoadingRecibos] = useState(false);
 
@@ -133,26 +144,24 @@ export default function EscrituraEstatus({ escrituraId, onClose }) {
   const [openPdf, setOpenPdf] = useState(false);
   const [pdfRecibo, setPdfRecibo] = useState(null);
 
-  // --- adjuntar recibos existentes (lista + búsqueda + paginación) ---
+  // adjuntar recibos
   const [openAttach, setOpenAttach] = useState(false);
   const [attachQuery, setAttachQuery] = useState('');
   const [listLoading, setListLoading] = useState(false);
   const [listError, setListError] = useState('');
-  const [listItems, setListItems] = useState([]); // lista (paginada) de /api/recibos
+  const [listItems, setListItems] = useState([]);
   const [listPage, setListPage] = useState(1);
   const [listHasMore, setListHasMore] = useState(true);
-  const [selectedIds, setSelectedIds] = useState([]); // ids a adjuntar (multi)
+  const [selectedIds, setSelectedIds] = useState([]);
   const [attaching, setAttaching] = useState(false);
 
-  // ✅ NUEVO: comentarios como lista + input
+  // ✅ Comentarios
   const [comentariosList, setComentariosList] = useState([]);
   const [comentarioInput, setComentarioInput] = useState('');
 
-
-  // ✅ NUEVO: documentación faltante como lista + input
-const [faltanteList, setFaltanteList] = useState([]);
-const [faltanteInput, setFaltanteInput] = useState('');
-
+  // ✅ Documentación faltante
+  const [faltanteList, setFaltanteList] = useState([]);
+  const [faltanteInput, setFaltanteInput] = useState('');
 
   const documentos = row?.documentos || {};
 
@@ -263,20 +272,18 @@ const [faltanteInput, setFaltanteInput] = useState('');
       const safe = {
         ...data,
         documentos: data?.documentos || {},
-        comentariosEstatus: data?.comentariosEstatus || '', // <- raw (string)
+        comentariosEstatus: data?.comentariosEstatus || '',
         documentacionFaltante: data?.documentacionFaltante || '',
         fechaEnvioNTD: data?.fechaEnvioNTD ? String(data.fechaEnvioNTD).slice(0, 10) : '',
       };
 
       setRow(safe);
 
-      // ✅ Alimenta lista desde DB (soporta JSON nuevo o texto viejo)
-setFaltanteList(parseComentarios(safe.documentacionFaltante));
-setFaltanteInput('');
-
-      // ✅ Alimenta lista desde DB
-      setComentariosList(parseComentarios(safe.comentariosEstatus));
+      setComentariosList(parseListField(safe.comentariosEstatus));
       setComentarioInput('');
+
+      setFaltanteList(parseListField(safe.documentacionFaltante));
+      setFaltanteInput('');
 
       await loadCliente();
       await loadRecibos(safe?.numeroControl);
@@ -287,6 +294,8 @@ setFaltanteInput('');
       setRecibos([]);
       setComentariosList([]);
       setComentarioInput('');
+      setFaltanteList([]);
+      setFaltanteInput('');
     } finally {
       setLoading(false);
     }
@@ -304,7 +313,9 @@ setFaltanteInput('');
     }));
   };
 
-  // ✅ NUEVO: agregar/eliminar comentario (chips)
+  const who = user?.nombre || user?.name || user?.username || '';
+
+  // ✅ Comentarios handlers
   const addComentario = () => {
     const t = String(comentarioInput || '').trim();
     if (!t) return;
@@ -313,15 +324,35 @@ setFaltanteInput('');
       id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
       text: t,
       createdAt: new Date().toISOString(),
-      by: user?.nombre || user?.name || user?.username || '',
+      by: who,
     };
 
-    setComentariosList((prev) => [item, ...(prev || [])]); // nuevo arriba
+    setComentariosList((prev) => [item, ...(prev || [])]);
     setComentarioInput('');
   };
 
   const deleteComentario = (id) => {
     setComentariosList((prev) => (prev || []).filter((c) => String(c.id) !== String(id)));
+  };
+
+  // ✅ Faltante handlers
+  const addFaltante = () => {
+    const t = String(faltanteInput || '').trim();
+    if (!t) return;
+
+    const item = {
+      id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      text: t,
+      createdAt: new Date().toISOString(),
+      by: who,
+    };
+
+    setFaltanteList((prev) => [item, ...(prev || [])]);
+    setFaltanteInput('');
+  };
+
+  const deleteFaltante = (id) => {
+    setFaltanteList((prev) => (prev || []).filter((c) => String(c.id) !== String(id)));
   };
 
   const save = async () => {
@@ -330,9 +361,8 @@ setFaltanteInput('');
     try {
       await axios.put(`${API}/escrituras/${row._id}`, {
         documentos: row.documentos,
-        // ✅ Guardamos lista como JSON string
-        comentariosEstatus: serializeComentarios(comentariosList),
-        documentacionFaltante: serializeComentarios(faltanteList),
+        comentariosEstatus: serializeListField(comentariosList),
+        documentacionFaltante: serializeListField(faltanteList),
         fechaEnvioNTD: row.fechaEnvioNTD || null,
       });
       await load();
@@ -340,26 +370,6 @@ setFaltanteInput('');
       setSaving(false);
     }
   };
-
-  const addFaltante = () => {
-  const t = String(faltanteInput || '').trim();
-  if (!t) return;
-
-  const item = {
-    id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
-    text: t,
-    createdAt: new Date().toISOString(),
-    by: user?.nombre || user?.name || user?.username || '',
-  };
-
-  setFaltanteList((prev) => [item, ...(prev || [])]);
-  setFaltanteInput('');
-};
-
-const deleteFaltante = (id) => {
-  setFaltanteList((prev) => (prev || []).filter((c) => String(c.id) !== String(id)));
-};
-
 
   // ✅ PDF
   const getPdfUrl = (recibo) => `${API}/recibos/${recibo._id}/pdf`;
@@ -375,7 +385,7 @@ const deleteFaltante = (id) => {
   };
 
   // =============================
-  // Adjuntar recibos (lista completa + búsqueda)
+  // Adjuntar recibos
   // =============================
   const LIST_RECIBOS_ENDPOINT = ({ q, page, limit }) => {
     const params = new URLSearchParams();
@@ -411,18 +421,13 @@ const deleteFaltante = (id) => {
 
     const nextPage = reset ? 1 : listPage;
     const limit = 25;
-
-    // evita doble fetch si ya no hay más
     if (!reset && !listHasMore) return;
 
     setListLoading(true);
     setListError('');
     try {
-      const { data } = await axios.get(
-        LIST_RECIBOS_ENDPOINT({ q: attachQuery, page: nextPage, limit })
-      );
+      const { data } = await axios.get(LIST_RECIBOS_ENDPOINT({ q: attachQuery, page: nextPage, limit }));
 
-      // backend: { ok:true, total, page, limit, items }
       const items = Array.isArray(data?.items) ? data.items : [];
       const total = Number(data?.total || 0);
 
@@ -455,7 +460,6 @@ const deleteFaltante = (id) => {
     if (!canAttachRecibos) return;
     setOpenAttach(true);
     resetAttachModal();
-    // carga inicial: lista completa (página 1)
     setTimeout(() => fetchRecibosList({ reset: true }), 0);
   };
 
@@ -464,7 +468,6 @@ const deleteFaltante = (id) => {
     resetAttachModal();
   };
 
-  // Debounce: cuando cambia attachQuery, recarga desde página 1
   useEffect(() => {
     if (!openAttach) return;
     if (!canAttachRecibos) return;
@@ -496,7 +499,7 @@ const deleteFaltante = (id) => {
     const eligible = (listItems || [])
       .filter((r) => r?._id)
       .filter((r) => {
-        const isSameControlDirect = Number(r?.control) === control; // directo
+        const isSameControlDirect = Number(r?.control) === control;
         const isAlreadyInHistory = linkedIdSet.has(String(r._id));
         return !isSameControlDirect && !isAlreadyInHistory;
       })
@@ -520,7 +523,6 @@ const deleteFaltante = (id) => {
     setAttaching(true);
     setListError('');
     try {
-      // Ligamos 1 por 1 (simple y compatible con tu backend actual)
       for (const reciboId of ids) {
         await axios.post(LINK_ENDPOINT, { reciboId, control });
       }
@@ -577,76 +579,76 @@ const deleteFaltante = (id) => {
 
       {/* Documentación */}
       <div style={{ marginTop: 12, padding: 12, border: '1px solid #eee', borderRadius: 10 }}>
-  <h3 style={{ marginTop: 0 }}>Documentación</h3>
+        <h3 style={{ marginTop: 0 }}>Documentación</h3>
 
-  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-    <div>
-      {DOCS_LEFT.map(([k, label]) => (
-        <label
-          key={k}
-          style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '6px 0' }}
-        >
-          <input type="checkbox" checked={!!documentos[k]} onChange={() => toggleDoc(k)} />
-          <span>{label}</span>
-        </label>
-      ))}
-    </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+          <div>
+            {DOCS_LEFT.map(([k, label]) => (
+              <label key={k} style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '6px 0' }}>
+                <input type="checkbox" checked={!!documentos[k]} onChange={() => toggleDoc(k)} />
+                <span>{label}</span>
+              </label>
+            ))}
+          </div>
 
-    <div>
-      {DOCS_RIGHT.map(([k, label]) => (
-        <label
-          key={k}
-          style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '6px 0' }}
-        >
-          <input type="checkbox" checked={!!documentos[k]} onChange={() => toggleDoc(k)} />
-          <span>{label}</span>
-        </label>
-      ))}
-    </div>
-  </div>
+          <div>
+            {DOCS_RIGHT.map(([k, label]) => (
+              <label key={k} style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '6px 0' }}>
+                <input type="checkbox" checked={!!documentos[k]} onChange={() => toggleDoc(k)} />
+                <span>{label}</span>
+              </label>
+            ))}
+          </div>
+        </div>
 
-  {/* ✅ Documentación faltante (chips) */}
-  <div style={{ marginTop: 14 }}>
-    <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
-      <TextField
-        label="Documentación faltante (agrega uno por uno)"
-        multiline
-        minRows={2}
-        fullWidth
-        value={faltanteInput}
-        onChange={(e) => setFaltanteInput(e.target.value)}
-        placeholder="Ej: INE comprador, predial actualizado, agua, etc."
-      />
+        {/* Documentación faltante */}
+        <div style={{ marginTop: 14 }}>
+          <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+            <TextField
+              label="Documentación faltante (agrega uno por uno)"
+              multiline
+              minRows={2}
+              fullWidth
+              value={faltanteInput}
+              onChange={(e) => setFaltanteInput(e.target.value)}
+              placeholder="Ej: INE comprador, predial actualizado, agua, etc."
+            />
+            <Button
+              variant="contained"
+              onClick={addFaltante}
+              disabled={!String(faltanteInput || '').trim()}
+              style={{ height: 40, marginTop: 6 }}
+            >
+              Agregar
+            </Button>
+          </div>
 
-      <Button
-        variant="contained"
-        onClick={addFaltante}
-        disabled={!String(faltanteInput || '').trim()}
-        style={{ height: 40, marginTop: 6 }}
-      >
-        Agregar
-      </Button>
-    </div>
-
-    <div style={{ marginTop: 10, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-      {(faltanteList || []).length === 0 ? (
-        <span style={{ fontSize: 12, color: '#666' }}>
-          No hay documentación faltante registrada.
-        </span>
-      ) : (
-        faltanteList.map((c) => (
-          <Chip
-            key={c.id}
-            label={c.text}
-            onDelete={() => deleteFaltante(c.id)}
-            variant="outlined"
-          />
-        ))
-      )}
-    </div>
-  </div>
-</div>
-
+          <div style={{ marginTop: 10 }}>
+            {(faltanteList || []).length === 0 ? (
+              <span style={{ fontSize: 12, color: '#666' }}>No hay documentación faltante registrada.</span>
+            ) : (
+              <ul style={{ margin: 0, paddingLeft: 18 }}>
+                {faltanteList.map((c) => (
+                  <li key={c.id} style={{ marginBottom: 8 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10 }}>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: 14, fontWeight: 600 }}>{c.text}</div>
+                        <div style={{ fontSize: 12, color: '#666', marginTop: 2 }}>
+                          {fmtDateTime(c.createdAt) || '—'}
+                          {c.by ? ` · ${c.by}` : ''}
+                        </div>
+                      </div>
+                      <IconButton size="small" onClick={() => deleteFaltante(c.id)} title="Eliminar">
+                        <CloseIcon fontSize="small" />
+                      </IconButton>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
+      </div>
 
       {/* Historial de recibos */}
       <div style={{ marginTop: 12, padding: 12, border: '1px solid #eee', borderRadius: 10 }}>
@@ -658,7 +660,6 @@ const deleteFaltante = (id) => {
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
             {loadingRecibos ? <span style={{ fontSize: 12, color: '#666' }}>Cargando…</span> : null}
 
-            {/* ✅ SOLO ADMIN / RECEPCION */}
             {canAttachRecibos ? (
               <Button variant="outlined" size="small" onClick={openAttachModal}>
                 Adjuntar recibos
@@ -731,9 +732,7 @@ const deleteFaltante = (id) => {
                       <TableCell>
                         {folio}
                         {r?._linked ? (
-                          <span style={{ marginLeft: 8, fontSize: 12, color: '#666' }}>
-                            (Vinculado)
-                          </span>
+                          <span style={{ marginLeft: 8, fontSize: 12, color: '#666' }}>(Vinculado)</span>
                         ) : null}
                       </TableCell>
                       <TableCell>{fecha || '—'}</TableCell>
@@ -773,7 +772,7 @@ const deleteFaltante = (id) => {
           <div />
         </div>
 
-        {/* ✅ Comentarios (nuevo) */}
+        {/* Comentarios */}
         <div style={{ marginTop: 10 }}>
           <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
             <TextField
@@ -795,26 +794,35 @@ const deleteFaltante = (id) => {
             </Button>
           </div>
 
-          <div style={{ marginTop: 10, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <div style={{ marginTop: 10 }}>
             {(comentariosList || []).length === 0 ? (
               <span style={{ fontSize: 12, color: '#666' }}>Aún no hay comentarios.</span>
             ) : (
-              comentariosList.map((c) => (
-                <Chip
-                  key={c.id}
-                  label={c.text}
-                  onDelete={() => deleteComentario(c.id)}
-                  variant="outlined"
-                />
-              ))
+              <ul style={{ margin: 0, paddingLeft: 18 }}>
+                {comentariosList.map((c) => (
+                  <li key={c.id} style={{ marginBottom: 8 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10 }}>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: 14, fontWeight: 600 }}>{c.text}</div>
+                        <div style={{ fontSize: 12, color: '#666', marginTop: 2 }}>
+                          {fmtDateTime(c.createdAt) || '—'}
+                          {c.by ? ` · ${c.by}` : ''}
+                        </div>
+                      </div>
+
+                      <IconButton size="small" onClick={() => deleteComentario(c.id)} title="Eliminar">
+                        <CloseIcon fontSize="small" />
+                      </IconButton>
+                    </div>
+                  </li>
+                ))}
+              </ul>
             )}
           </div>
         </div>
-
-        
       </div>
 
-      {/* ✅ Acciones duplicadas al final */}
+      {/* Acciones */}
       <div style={{ marginTop: 14, display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
         <Button variant="outlined" onClick={onClose}>Cerrar</Button>
         <Button variant="contained" onClick={save} disabled={saving}>
@@ -822,7 +830,7 @@ const deleteFaltante = (id) => {
         </Button>
       </div>
 
-      {/* ✅ Modal: Adjuntar recibos existentes (LISTA COMPLETA + BÚSQUEDA + CARGAR MÁS) */}
+      {/* Modal: Adjuntar recibos */}
       <Dialog open={openAttach} onClose={closeAttachModal} maxWidth="md" fullWidth>
         <DialogTitle sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 2 }}>
           <span>Adjuntar recibos al trámite (Control {row?.numeroControl ?? '—'})</span>
@@ -831,9 +839,7 @@ const deleteFaltante = (id) => {
 
         <DialogContent dividers>
           {!canAttachRecibos ? (
-            <div style={{ color: '#b00020' }}>
-              No tienes permisos para adjuntar recibos.
-            </div>
+            <div style={{ color: '#b00020' }}>No tienes permisos para adjuntar recibos.</div>
           ) : (
             <>
               <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
@@ -875,9 +881,7 @@ const deleteFaltante = (id) => {
               </div>
 
               {listError ? (
-                <div style={{ marginTop: 10, color: '#b00020', fontSize: 13 }}>
-                  {listError}
-                </div>
+                <div style={{ marginTop: 10, color: '#b00020', fontSize: 13 }}>{listError}</div>
               ) : null}
 
               <div style={{ marginTop: 10 }}>
@@ -897,24 +901,17 @@ const deleteFaltante = (id) => {
                   <TableBody>
                     {(!listItems || listItems.length === 0) && listLoading ? (
                       <TableRow>
-                        <TableCell colSpan={7} style={{ color: '#666' }}>
-                          Cargando lista…
-                        </TableCell>
+                        <TableCell colSpan={7} style={{ color: '#666' }}>Cargando lista…</TableCell>
                       </TableRow>
                     ) : (!listItems || listItems.length === 0) ? (
                       <TableRow>
-                        <TableCell colSpan={7} style={{ color: '#666' }}>
-                          No hay recibos para mostrar.
-                        </TableCell>
+                        <TableCell colSpan={7} style={{ color: '#666' }}>No hay recibos para mostrar.</TableCell>
                       </TableRow>
                     ) : (
                       listItems.map((r, idx) => {
                         const id = String(r?._id || `lr-${idx}`);
                         const control = Number(row?.numeroControl);
 
-                        // "Ya ligado" si:
-                        // 1) ya está en historial (directo o vinculado)
-                        // 2) o es directo del mismo control
                         const isSameControlDirect = Number(r?.control) === control;
                         const alreadyLinked = linkedIdSet.has(String(r?._id)) || isSameControlDirect;
 
@@ -967,17 +964,11 @@ const deleteFaltante = (id) => {
 
                 <div style={{ marginTop: 10, display: 'flex', justifyContent: 'center' }}>
                   {listHasMore ? (
-                    <Button
-                      variant="outlined"
-                      onClick={() => fetchRecibosList({ reset: false })}
-                      disabled={listLoading}
-                    >
+                    <Button variant="outlined" onClick={() => fetchRecibosList({ reset: false })} disabled={listLoading}>
                       {listLoading ? 'Cargando…' : 'Cargar más'}
                     </Button>
                   ) : (
-                    <span style={{ fontSize: 12, color: '#666' }}>
-                      No hay más recibos.
-                    </span>
+                    <span style={{ fontSize: 12, color: '#666' }}>No hay más recibos.</span>
                   )}
                 </div>
               </div>
@@ -997,7 +988,7 @@ const deleteFaltante = (id) => {
         </DialogActions>
       </Dialog>
 
-      {/* ✅ Modal para ver PDF */}
+      {/* Modal: Ver PDF */}
       <Dialog open={openPdf} onClose={() => setOpenPdf(false)} maxWidth="lg" fullWidth>
         <DialogTitle sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 2 }}>
           <span>PDF — Recibo {pdfRecibo?.folio || pdfRecibo?.numeroRecibo || ''}</span>
@@ -1026,3 +1017,4 @@ const deleteFaltante = (id) => {
     </div>
   );
 }
+
