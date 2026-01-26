@@ -427,7 +427,7 @@ router.get('/:id/pdf', async (req, res) => {
 router.get('/', async (req, res) => {
   try {
     const page  = Math.max(1, parseInt(req.query.page || '1', 10));
-    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit || '25', 10)));
+    const limit = Math.min(5000, Math.max(1, parseInt(req.query.limit || '500', 10)));
     const skip  = (page - 1) * limit;
 
     const filter = buildFilter(req.query);
