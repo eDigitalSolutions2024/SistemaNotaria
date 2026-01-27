@@ -474,18 +474,12 @@ export default function RegistrarGenerales() {
                     <input
                       type="text"
                       value={p.estado_civil_con_quien || ""}
-                      onChange={(e) => {
-                        const val = e.target.value;
-                        handleChangePersona(index, "estado_civil_con_quien", val);
-
-                        if (String(val).trim() !== "Casado/a") {
-                          handleChangePersona(index, "estado_civil_con_quien", "");
-                          handleChangePersona(index, "estado_civil_lugar_fecha", "");
-                          handleChangePersona(index, "estado_civil_regimen", "");
-                        }
-                      }}
+                      onChange={(e) =>
+                        handleChangePersona(index, "estado_civil_con_quien", e.target.value)
+                      }
                       required
                     />
+
                   </div>
 
                   <div className="form-group">
