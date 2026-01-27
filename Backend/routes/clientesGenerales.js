@@ -16,6 +16,42 @@ const generarHTMLDatosGenerales = require('../pdf-templates/generarHTMLDatosGene
 //     { ... }
 //   ]
 // }
+
+function composeLugarNacimiento(ciudad = '', estado = '') {
+  const c = String(ciudad || '').trim();
+  const e = String(estado || '').trim();
+
+  if (c && e) return `${c}, ${e}`;
+  if (c) return c;
+  if (e) return e;
+  return '';
+}
+
+function isCasado(estadoCivil = '') {
+  return String(estadoCivil || '').trim() === 'Casado/a';
+}
+
+function sanitizeEstadoCivilFields(p = {}) {
+  const estadoCivil = String(p.estado_civil || '').trim();
+
+  const doc = { ...p, estado_civil: estadoCivil };
+
+  // ✅ si NO es casado, limpiamos campos extra
+  if (!isCasado(estadoCivil)) {
+    doc.estado_civil_con_quien = '';
+    doc.estado_civil_lugar_fecha = '';
+    doc.estado_civil_regimen = '';
+  } else {
+    // si es casado, normalizamos defaults para que no quede undefined
+    doc.estado_civil_con_quien = String(doc.estado_civil_con_quien || '').trim();
+    doc.estado_civil_lugar_fecha = String(doc.estado_civil_lugar_fecha || '').trim();
+    doc.estado_civil_regimen = String(doc.estado_civil_regimen || '').trim();
+  }
+
+  return doc;
+}
+
+
 router.post('/', async (req, res) => {
   try {
     console.log('BODY /api/clientes-generales =>', req.body);
@@ -39,10 +75,23 @@ router.post('/', async (req, res) => {
     }
 
     // Agregar el clienteId a cada persona
-    const docs = personas.map((p) => ({
+    const docs = personas.map((p) => {
+    p = sanitizeEstadoCivilFields(p);
+    const estado = p.lugar_nacimiento_estado || '';
+    const ciudad = p.lugar_nacimiento_ciudad || '';
+
+    const composed = composeLugarNacimiento(ciudad, estado);
+
+    return {
       ...p,
+      // 🔹 legacy fallback
+      lugar_nacimiento: p.lugar_nacimiento || composed,
+      lugar_nacimiento_estado: estado,
+      lugar_nacimiento_ciudad: ciudad,
       clienteId,
-    }));
+    };
+  });
+
 
     const creados = await ClienteGeneral.insertMany(docs);
 
@@ -101,8 +150,8 @@ router.get('/pdf-data/:clienteId', async (req, res) => {
     const pdfData = {
       notaria: {
         nombre: 'Notaría 17',
-        direccion: 'Dirección de la notaría',   // <- aquí luego lo ajustas
-        telefono: 'Teléfono de la notaría',     // <- igual, a tu gusto
+        direccion: 'Dirección de la notaría',
+        telefono: 'Teléfono de la notaría',
       },
       cliente: {
         id: cliente._id,
@@ -115,24 +164,42 @@ router.get('/pdf-data/:clienteId', async (req, res) => {
       },
       generales: {
         fechaRegistro: registros[0]?.createdAt ?? null,
-        personas: registros.map((p, i) => ({
-          indice: i + 1,
-          nombre_completo: p.nombre_completo,
-          lugar_nacimiento: p.lugar_nacimiento,
-          fecha_nacimiento: p.fecha_nacimiento,
-          ocupacion: p.ocupacion,
-          estado_civil: p.estado_civil,
-          domicilio: p.domicilio,
-          colonia: p.colonia,
-          telefono_principal: p.telefono_principal,
-          telefono_secundario: p.telefono_secundario,
-          correo_electronico: p.correo_electronico,
-          curp: p.curp,
-          rfc: p.rfc,
-        })),
+        personas: registros.map((p, i) => {
+          const display =
+            composeLugarNacimiento(p.lugar_nacimiento_ciudad, p.lugar_nacimiento_estado) ||
+            p.lugar_nacimiento;
+
+          return {
+            indice: i + 1,
+            nombre_completo: p.nombre_completo,
+
+            lugar_nacimiento: p.lugar_nacimiento, // legacy
+            lugar_nacimiento_estado: p.lugar_nacimiento_estado || '',
+            lugar_nacimiento_ciudad: p.lugar_nacimiento_ciudad || '',
+            lugar_nacimiento_display: display,
+
+            fecha_nacimiento: p.fecha_nacimiento,
+            ocupacion: p.ocupacion,
+
+            estado_civil: p.estado_civil,
+            estado_civil_con_quien: p.estado_civil_con_quien || '',
+            estado_civil_lugar_fecha: p.estado_civil_lugar_fecha || '',
+            estado_civil_regimen: p.estado_civil_regimen || '',
+
+            domicilio: p.domicilio,
+            colonia: p.colonia,
+            telefono_principal: p.telefono_principal,
+            telefono_secundario: p.telefono_secundario,
+            correo_electronico: p.correo_electronico,
+            curp: p.curp,
+            rfc: p.rfc,
+          };
+        }),
+
       },
       generadoEl: new Date(),
     };
+
 
     return res.json({
       ok: true,
@@ -195,21 +262,39 @@ router.get('/pdf/:clienteId', async (req, res) => {
       },
       generales: {
         fechaRegistro: registros[0]?.createdAt ?? null,
-        personas: registros.map((p, i) => ({
-          indice: i + 1,
-          nombre_completo: p.nombre_completo,
-          lugar_nacimiento: p.lugar_nacimiento,
-          fecha_nacimiento: p.fecha_nacimiento,
-          ocupacion: p.ocupacion,
-          estado_civil: p.estado_civil,
-          domicilio: p.domicilio,
-          colonia: p.colonia,
-          telefono_principal: p.telefono_principal,
-          telefono_secundario: p.telefono_secundario,
-          correo_electronico: p.correo_electronico,
-          curp: p.curp,
-          rfc: p.rfc,
-        })),
+        personas: registros.map((p, i) => {
+          const display =
+            composeLugarNacimiento(p.lugar_nacimiento_ciudad, p.lugar_nacimiento_estado) ||
+            p.lugar_nacimiento;
+
+          return {
+            indice: i + 1,
+            nombre_completo: p.nombre_completo,
+
+            // ✅ lugar nacimiento (nuevo + legacy)
+            lugar_nacimiento: p.lugar_nacimiento,
+            lugar_nacimiento_estado: p.lugar_nacimiento_estado || '',
+            lugar_nacimiento_ciudad: p.lugar_nacimiento_ciudad || '',
+            lugar_nacimiento_display: display,
+
+            fecha_nacimiento: p.fecha_nacimiento,
+            ocupacion: p.ocupacion,
+
+            // ✅ estado civil + campos condicionales
+            estado_civil: p.estado_civil,
+            estado_civil_con_quien: p.estado_civil_con_quien || '',
+            estado_civil_lugar_fecha: p.estado_civil_lugar_fecha || '',
+            estado_civil_regimen: p.estado_civil_regimen || '',
+
+            domicilio: p.domicilio,
+            colonia: p.colonia,
+            telefono_principal: p.telefono_principal,
+            telefono_secundario: p.telefono_secundario,
+            correo_electronico: p.correo_electronico,
+            curp: p.curp,
+            rfc: p.rfc,
+          };
+        }),
       },
       generadoEl: new Date(),
     };
@@ -283,11 +368,43 @@ router.get('/:id', async (req, res) => {
 // PUT /api/clientes-generales/645f...
 router.put('/:id', async (req, res) => {
   try {
-    const actualizado = await ClienteGeneral.findByIdAndUpdate(
-      req.params.id,
-      req.body,
-      { new: true, runValidators: true }
-    );
+    const body = { ...req.body };
+
+    if (
+      'lugar_nacimiento_estado' in body ||
+      'lugar_nacimiento_ciudad' in body
+    ) {
+      const estado = body.lugar_nacimiento_estado || '';
+      const ciudad = body.lugar_nacimiento_ciudad || '';
+      const composed = composeLugarNacimiento(ciudad, estado);
+
+      if (!body.lugar_nacimiento && composed) {
+        body.lugar_nacimiento = composed;
+      }
+    }
+
+    // ✅ si están actualizando estado_civil, limpiar extras cuando NO sea Casado/a
+    if ('estado_civil' in body) {
+      const estadoCivil = String(body.estado_civil || '').trim();
+
+      if (!isCasado(estadoCivil)) {
+        body.estado_civil_con_quien = '';
+        body.estado_civil_lugar_fecha = '';
+        body.estado_civil_regimen = '';
+      } else {
+        // normaliza strings para evitar undefined
+        if ('estado_civil_con_quien' in body) body.estado_civil_con_quien = String(body.estado_civil_con_quien || '').trim();
+        if ('estado_civil_lugar_fecha' in body) body.estado_civil_lugar_fecha = String(body.estado_civil_lugar_fecha || '').trim();
+        if ('estado_civil_regimen' in body) body.estado_civil_regimen = String(body.estado_civil_regimen || '').trim();
+      }
+    }
+
+      const actualizado = await ClienteGeneral.findByIdAndUpdate(
+        req.params.id,
+        body,
+        { new: true, runValidators: true }
+      );
+
 
     if (!actualizado) {
       return res.status(404).json({ message: 'Registro no encontrado.' });
@@ -299,6 +416,8 @@ router.put('/:id', async (req, res) => {
     res.status(500).json({ message: 'Error al actualizar datos generales', error: error.message });
   }
 });
+
+
 
 // 🔹 (Opcional) Eliminar un registro de datos generales
 // DELETE /api/clientes-generales/645f...

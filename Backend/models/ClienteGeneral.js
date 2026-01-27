@@ -10,9 +10,14 @@ const clienteGeneralSchema = new mongoose.Schema({
 
   nombre_completo: { type: String, required: true },
   lugar_nacimiento: { type: String, required: true },
+  lugar_nacimiento_estado: { type: String, default: '' },
+  lugar_nacimiento_ciudad: { type: String, default: '' },
   fecha_nacimiento: { type: Date, required: true },
   ocupacion: { type: String, required: true },
   estado_civil: { type: String, required: true },
+  estado_civil_con_quien: { type: String, default: '' }, 
+  estado_civil_lugar_fecha: { type: String, default: '' },
+  estado_civil_regimen: { type: String, default: '' },
   domicilio: { type: String, required: true },
   colonia: { type: String, required: true },
 

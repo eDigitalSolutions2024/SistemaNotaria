@@ -14,6 +14,24 @@ const formatDate = (date) => {
   return `${day}/${month}/${year}`;
 };
 
+const isCasado = (estadoCivil = "") => String(estadoCivil || "").trim() === "Casado/a";
+
+
+const composeLugarNacimiento = (ciudad = "", estado = "") => {
+  const c = String(ciudad || "").trim();
+  const e = String(estado || "").trim();
+  if (c && e) return `${c}, ${e}`;
+  if (c) return c;
+  if (e) return e;
+  return "";
+};
+
+const getLugarNacimientoDisplay = (p) => {
+  const display = composeLugarNacimiento(p.lugar_nacimiento_ciudad, p.lugar_nacimiento_estado);
+  return display || p.lugar_nacimiento || "";
+};
+
+
 const ConsultarGenerales = () => {
   const [clientes, setClientes] = useState([]);
   const [loadingClientes, setLoadingClientes] = useState(true);
@@ -108,7 +126,7 @@ const ConsultarGenerales = () => {
     setClienteSeleccionado(id);
 
     // Buscar datos del cliente en el arreglo original
-    const cli = clientes.find((c) => c.id === id) || null;
+    const cli = clientes.find((c) => (c._id ?? c.id) === id) || null;
     setDatosCliente(cli);
 
     // Traer datos generales del backend
@@ -280,10 +298,26 @@ const ConsultarGenerales = () => {
                     <tr key={p._id || idx}>
                       <td>{idx + 1}</td>
                       <td>{p.nombre_completo}</td>
-                      <td>{p.lugar_nacimiento}</td>
+                      <td>{getLugarNacimientoDisplay(p)}</td>
                       <td>{formatDate(p.fecha_nacimiento)}</td>
                       <td>{p.ocupacion}</td>
-                      <td>{p.estado_civil}</td>
+                      <td>
+                        <div>{p.estado_civil}</div>
+
+                        {isCasado(p.estado_civil) && (
+                          <div className="cg-ec-extra">
+                            <div>
+                              <strong>Con quién:</strong> {p.estado_civil_con_quien || "—"}
+                            </div>
+                            <div>
+                              <strong>Lugar y fecha:</strong> {p.estado_civil_lugar_fecha || "—"}
+                            </div>
+                            <div>
+                              <strong>Régimen:</strong> {p.estado_civil_regimen || "—"}
+                            </div>
+                          </div>
+                        )}
+                      </td>
                       <td>{p.domicilio}</td>
                       <td>{p.colonia}</td>
                       <td>{p.telefono_principal}</td>

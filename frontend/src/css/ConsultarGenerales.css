@@ -1,6 +1,6 @@
 .consultar-generales-container {
   width: 100%;
-  max-width: 1400px;
+  max-width: 2000px;
   margin: 0 auto;
   min-height: 100vh;
   padding: 30px 40px;
@@ -149,3 +149,15 @@
     grid-template-columns: 1fr;
   }
 }
+
+.cg-ec-extra{
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.35;
+  color: #374151;
+}
+
+.cg-ec-extra strong{
+  font-weight: 700;
+}
+

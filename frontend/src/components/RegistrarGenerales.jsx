@@ -54,6 +54,8 @@ const selectStyles = {
 };
 
 
+
+
 export default function RegistrarGenerales() {
   const [clientes, setClientes] = useState([]);
   const [loadingClientes, setLoadingClientes] = useState(true);
@@ -70,14 +72,26 @@ export default function RegistrarGenerales() {
 
   const [searchCliente, setSearchCliente] = useState("");
 
-  // 🔹 Función para crear un objeto "persona" vacío
   function crearPersonaVacia() {
     return {
       nombre_completo: "",
+
+      // ✅ legacy (se autogenera)
       lugar_nacimiento: "",
+      lugar_nacimiento_estado: "",
+      lugar_nacimiento_ciudad: "",
+
       fecha_nacimiento: "",
       ocupacion: "",
+
+      // ✅ estado civil (ahora será select)
       estado_civil: "",
+
+      // ✅ SOLO cuando estado_civil === "Casado/a"
+      estado_civil_con_quien: "",
+      estado_civil_lugar_fecha: "",
+      estado_civil_regimen: "",
+
       domicilio: "",
       colonia: "",
       telefono_principal: "",
@@ -87,6 +101,8 @@ export default function RegistrarGenerales() {
       rfc: "",
     };
   }
+
+
 
   // 🔹 Cargar clientes al montar el componente
   useEffect(() => {
@@ -117,15 +133,44 @@ export default function RegistrarGenerales() {
     setClienteSeleccionado(e.target.value);
   };
 
+  const composeLugarNacimiento = (ciudad = "", estado = "") => {
+    const c = String(ciudad || "").trim();
+    const e = String(estado || "").trim();
+    if (c && e) return `${c}, ${e}`;
+    if (c) return c;
+    if (e) return e;
+    return "";
+  };
+
+  const isCasado = (estadoCivil = "") => String(estadoCivil || "").trim() === "Casado/a";
+
+
+
   // 🔹 Manejar cambios en los campos de una persona
   const handleChangePersona = (index, field, value) => {
     const nuevas = [...personas];
-    nuevas[index] = {
-      ...nuevas[index],
-      [field]: value,
-    };
+    const next = { ...nuevas[index], [field]: value };
+
+    // ✅ si cambia estado/ciudad, autocomponer legacy lugar_nacimiento
+    if (field === "lugar_nacimiento_estado" || field === "lugar_nacimiento_ciudad") {
+      const ciudad = next.lugar_nacimiento_ciudad;
+      const estado = next.lugar_nacimiento_estado;
+      next.lugar_nacimiento = composeLugarNacimiento(ciudad, estado);
+    }
+
+    // ✅ si cambia estado civil y ya NO es Casado/a, limpiar campos extra
+    if (field === "estado_civil") {
+      if (!isCasado(value)) {
+        next.estado_civil_con_quien = "";
+        next.estado_civil_lugar_fecha = "";
+        next.estado_civil_regimen = "";
+      }
+    }
+
+    nuevas[index] = next;
     setPersonas(nuevas);
   };
+
 
   // 🔹 Añadir otra persona (botón +)
   const handleAddPersona = () => {
@@ -151,7 +196,8 @@ export default function RegistrarGenerales() {
       // Validar campos obligatorios
       const camposObligatorios = [
         "nombre_completo",
-        "lugar_nacimiento",
+        "lugar_nacimiento_estado",
+        "lugar_nacimiento_ciudad",
         "fecha_nacimiento",
         "ocupacion",
         "estado_civil",
@@ -171,6 +217,31 @@ export default function RegistrarGenerales() {
           return false;
         }
       }
+
+      // ✅ Validación condicional para Casado/a
+      if (String(p.estado_civil || "").trim() === "Casado/a") {
+        const extra = [
+          ["estado_civil_con_quien", "Con quién se casó"],
+          ["estado_civil_lugar_fecha", "Lugar y fecha"],
+          ["estado_civil_regimen", "Régimen"],
+        ];
+
+        for (const [campo, label] of extra) {
+          if (!p[campo] || String(p[campo]).trim() === "") {
+            setMensaje(`Falta llenar "${label}" en la persona ${i + 1}.`);
+            return false;
+          }
+        }
+
+        // (opcional) validar régimen permitido
+        const reg = String(p.estado_civil_regimen || "").trim();
+        const validRegs = ["Bienes separados", "Conyugal"];
+        if (reg && !validRegs.includes(reg)) {
+          setMensaje(`El régimen en la persona ${i + 1} no es válido.`);
+          return false;
+        }
+      }
+
 
       // Validación básica de correo
       if (p.correo_electronico && !/\S+@\S+\.\S+/.test(p.correo_electronico)) {
@@ -305,17 +376,39 @@ export default function RegistrarGenerales() {
                 />
               </div>
 
-              <div className="form-group">
+              <div className="form-group birthplace-group">
                 <label>Lugar de nacimiento *</label>
-                <input
-                  type="text"
-                  value={p.lugar_nacimiento}
-                  onChange={(e) =>
-                    handleChangePersona(index, "lugar_nacimiento", e.target.value)
-                  }
-                  required
-                />
+
+                <div className="birthplace-grid">
+                  <div className="birthplace-field">
+                    <label className="sub-label">Estado *</label>
+                    <input
+                      type="text"
+                      value={p.lugar_nacimiento_estado || ""}
+                      onChange={(e) =>
+                        handleChangePersona(index, "lugar_nacimiento_estado", e.target.value)
+                      }
+                      required
+                    />
+                  </div>
+
+                  <div className="birthplace-field">
+                    <label className="sub-label">Ciudad *</label>
+                    <input
+                      type="text"
+                      value={p.lugar_nacimiento_ciudad || ""}
+                      onChange={(e) =>
+                        handleChangePersona(index, "lugar_nacimiento_ciudad", e.target.value)
+                      }
+                      required
+                    />
+                  </div>
+                </div>
+
+                {/* opcional: debug/preview del legacy */}
+                {/* <small className="help-text">Se guardará como: {p.lugar_nacimiento}</small> */}
               </div>
+
 
               <div className="form-group">
                 <label>Fecha de nacimiento *</label>
@@ -346,14 +439,19 @@ export default function RegistrarGenerales() {
 
               <div className="form-group">
                 <label>Estado civil *</label>
-                <input
-                  type="text"
+                <select
                   value={p.estado_civil}
-                  onChange={(e) =>
-                    handleChangePersona(index, "estado_civil", e.target.value)
-                  }
+                  onChange={(e) => handleChangePersona(index, "estado_civil", e.target.value)}
                   required
-                />
+                >
+                  <option value="">Selecciona una opción...</option>
+                  <option value="Soltero/a">Soltero/a</option>
+                  <option value="Casado/a">Casado/a</option>
+                  <option value="Viudo/a">Viudo/a</option>
+                  <option value="Divorciado/a">Divorciado/a</option>
+                  <option value="Separado/a">Separado/a</option>
+                  <option value="Concubinato/Union de Hecho">Concubinato/Union de Hecho</option>
+                </select>
               </div>
 
               <div className="form-group">
@@ -368,6 +466,57 @@ export default function RegistrarGenerales() {
                 />
               </div>
             </div>
+
+            {String(p.estado_civil || "").trim() === "Casado/a" && (
+                <div className="form-row form-row-casado">
+                  <div className="form-group">
+                    <label>Con quién se casó *</label>
+                    <input
+                      type="text"
+                      value={p.estado_civil_con_quien || ""}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        handleChangePersona(index, "estado_civil_con_quien", val);
+
+                        if (String(val).trim() !== "Casado/a") {
+                          handleChangePersona(index, "estado_civil_con_quien", "");
+                          handleChangePersona(index, "estado_civil_lugar_fecha", "");
+                          handleChangePersona(index, "estado_civil_regimen", "");
+                        }
+                      }}
+                      required
+                    />
+                  </div>
+
+                  <div className="form-group">
+                    <label>Lugar y fecha *</label>
+                    <input
+                      type="text"
+                      value={p.estado_civil_lugar_fecha || ""}
+                      onChange={(e) =>
+                        handleChangePersona(index, "estado_civil_lugar_fecha", e.target.value)
+                      }
+                      placeholder="Ej. Cd. Juárez, Chih, 15/01/2020"
+                      required
+                    />
+                  </div>
+
+                  <div className="form-group">
+                    <label>Régimen *</label>
+                    <select
+                      value={p.estado_civil_regimen || ""}
+                      onChange={(e) =>
+                        handleChangePersona(index, "estado_civil_regimen", e.target.value)
+                      }
+                      required
+                    >
+                      <option value="">Selecciona...</option>
+                      <option value="Bienes separados">Bienes separados</option>
+                      <option value="Conyugal">Conyugal</option>
+                    </select>
+                  </div>
+                </div>
+              )}
 
             {/* Fila 3: Colonia, Teléfono principal, Teléfono secundario */}
             <div className="form-row">

@@ -67,8 +67,9 @@ function generarHTMLDatosGenerales(pdfData) {
             </tr>
             <tr>
               <th>Lugar de nacimiento</th>
-              <td>${escapeHtml(persona.lugar_nacimiento)}</td>
+              <td>${escapeHtml(persona.lugar_nacimiento_display || persona.lugar_nacimiento)}</td>
             </tr>
+
             <tr>
               <th>Fecha de nacimiento</th>
               <td>${formatDate(persona.fecha_nacimiento)}</td>
@@ -81,6 +82,26 @@ function generarHTMLDatosGenerales(pdfData) {
               <th>Estado civil</th>
               <td>${escapeHtml(persona.estado_civil)}</td>
             </tr>
+
+            ${
+              String(persona.estado_civil || '').trim() === 'Casado/a'
+                ? `
+            <tr>
+              <th>Con quién se casó</th>
+              <td>${escapeHtml(persona.estado_civil_con_quien || '')}</td>
+            </tr>
+            <tr>
+              <th>Lugar y fecha</th>
+              <td>${escapeHtml(persona.estado_civil_lugar_fecha || '')}</td>
+            </tr>
+            <tr>
+              <th>Régimen</th>
+              <td>${escapeHtml(persona.estado_civil_regimen || '')}</td>
+            </tr>
+            `
+                : ''
+            }
+
             <tr>
               <th>Domicilio</th>
               <td>${escapeHtml(persona.domicilio)}</td>

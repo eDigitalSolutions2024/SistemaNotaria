@@ -81,11 +81,13 @@
 
 
 /* Hacer que cada input use mejor todo el espacio del grid */
-.form-row {
+.form-row{
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr)) !important; 
-  gap: 20px !important;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  align-items: end;
 }
+
 
 /* Para que algunos campos ocupen más espacio si es necesario */
 .form-row .form-group.full-width {
@@ -355,3 +357,22 @@ input:required:valid {
 .react-select__control {
   min-height: 52px !important;
 }
+
+.birthplace-group .sub-label{
+  display: block;
+  font-size: 12px;
+  margin: 6px 0 6px;
+  color: #4b5563;
+  font-weight: 600;
+}
+
+.birthplace-grid{
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.birthplace-field input{
+  width: 100%;
+}
+
