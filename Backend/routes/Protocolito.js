@@ -635,6 +635,7 @@ router.get('/export', async (req, res) => {
 
     const rows = docs.map(d => ({
       numeroTramite: d.numeroTramite ?? '',
+      volumen: d.volumen ?? '',               // ✅ NUEVO
       tipoTramite: d.tipoTramite ?? '',
       cliente: d.cliente ?? '',
       fecha: d.fecha ? dayjs(d.fecha).format('DD/MM/YYYY') : '',
@@ -781,11 +782,12 @@ router.get('/export', async (req, res) => {
 
       // Columnas (porcentajes que suman 100%)
       const COLS = [
-        { key: 'numeroTramite', title: '# Trámite', width: Math.round(PAGE.width * 0.12) },
+        { key: 'numeroTramite', title: '# Trámite', width: Math.round(PAGE.width * 0.10) },
         { key: 'tipoTramite',   title: 'Tipo',      width: Math.round(PAGE.width * 0.16) },
         { key: 'cliente',       title: 'Cliente',   width: Math.round(PAGE.width * 0.30) },
         { key: 'fecha',         title: 'Fecha',     width: Math.round(PAGE.width * 0.12) },
         { key: 'abogado',       title: 'Abogado',   width: Math.round(PAGE.width * 0.16) },
+        { key: 'volumen',       title: 'Vol.',      width: Math.round(PAGE.width * 0.05) },
         { key: 'observaciones', title: 'Observ.',   width: PAGE.width }, // se corrige abajo
       ];
       const sumExceptLast = COLS.slice(0, -1).reduce((a, c) => a + c.width, 0);
@@ -1024,9 +1026,9 @@ router.get('/export', async (req, res) => {
     const wb = XLSX.utils.book_new();
 
     // Hoja 1: listado protocolitos
-    const header = ['# Trámite', 'Tipo', 'Cliente', 'Fecha', 'Abogado', 'Observ.'];
+    const header = ['# Trámite', 'Volumen', 'Tipo', 'Cliente', 'Fecha', 'Abogado', 'Observ.'];
     const aoa = [header, ...rows.map(r => [
-      r.numeroTramite, r.tipoTramite, r.cliente, r.fecha, r.abogado, r.observaciones
+      r.numeroTramite, r.volumen, r.tipoTramite, r.cliente, r.fecha, r.abogado, r.observaciones
     ])];
     const ws = XLSX.utils.aoa_to_sheet(aoa);
     XLSX.utils.book_append_sheet(wb, ws, 'Protocolito');
