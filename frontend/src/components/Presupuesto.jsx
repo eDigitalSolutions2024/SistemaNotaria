@@ -151,7 +151,9 @@ export default function Presupuesto() {
       try {
         setLoadingClientes(true);
         setError('');
-        const res = await api.get('/clientes');
+        const res = await api.get('/clientes/by-servicio', {
+          params: { servicio: 'Presupuesto' }
+        });
         setClientes(res.data || []);
       } catch (err) {
         console.error(err);

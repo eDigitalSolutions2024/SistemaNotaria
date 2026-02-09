@@ -12,7 +12,8 @@ export default function FormCliente({ onCreado }) {
   const [abogados, setAbogados] = useState([]);
 
   // errores de validación por campo
-  const [errors, setErrors] = useState({ telefono: '', tipoServicio: '' });
+  const [errors, setErrors] = useState({ nombre: '', telefono: '', tipoServicio: '' });
+
 
   useEffect(() => {
     const obtenerAbogados = async () => {
@@ -27,27 +28,83 @@ export default function FormCliente({ onCreado }) {
     obtenerAbogados();
   }, []);
 
+  const stripAccents = (s='') =>
+  String(s).normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+
+const isAllSameLetter = (word) => {
+  const w = stripAccents(word).toLowerCase().replace(/[^a-zñ]/g, '');
+  if (w.length < 4) return false;
+  return /^([a-zñ])\1+$/.test(w); // aaaa, bbbb...
+};
+
+const hasLowVariety = (full) => {
+  const letters = stripAccents(full).toLowerCase().replace(/[^a-zñ]/g, '');
+  if (letters.length < 8) return false;
+  const freq = {};
+  for (const ch of letters) freq[ch] = (freq[ch] || 0) + 1;
+  const max = Math.max(...Object.values(freq));
+  return (max / letters.length) >= 0.8; // 80% misma letra
+};
+
+
   const validate = () => {
-    const newErrors = { telefono: '', tipoServicio: '' };
+  const newErrors = { nombre: '', telefono: '', tipoServicio: '' };
 
-    // Teléfono: mínimo 10 dígitos (ignorando símbolos)
-    const telRaw = (telefono || '').trim();
-    const digits = telRaw.replace(/\D/g, '');
-    if (!digits) {
-      newErrors.telefono = 'Por favor ingresa el número de teléfono.';
-    } else if (digits.length < 10) {
-      newErrors.telefono = 'El teléfono debe ser un numero valido .';
+  // ✅ NOMBRE (super blindado)
+  const n = (nombre || '').trim().replace(/\s+/g, ' ');
+  const nNorm = stripAccents(n).toLowerCase();
+
+  if (!n) {
+    newErrors.nombre = 'Por favor ingresa el nombre del cliente.';
+  } else if (!/^[A-Za-zÁÉÍÓÚÜÑáéíóúüñ' -]+$/.test(n)) {
+    newErrors.nombre = 'El nombre solo puede contener letras, espacios, guion y apóstrofe.';
+  } else if (n.length < 8) {
+    newErrors.nombre = 'Captura el nombre completo (mínimo 8 caracteres).';
+  } else {
+    const parts = n.split(' ').filter(Boolean);
+    if (parts.length < 2) {
+      newErrors.nombre = 'Captura Nombre y Apellido.';
+    } else {
+      const banned = /\b(cliente|test|prueba|demo|asdf|qwerty|desconocido|sin nombre)\b/i;
+      if (banned.test(nNorm)) {
+        newErrors.nombre = 'No se permiten nombres genéricos como "Cliente", "Test", etc.';
+      } else if (/^cliente(\s*\d+|\s*[a-zñ])?$/.test(nNorm.replace(/\s+/g, ''))) {
+        newErrors.nombre = 'No se permiten nombres tipo "Cliente 1" o "Cliente X".';
+      } else if (parts.some(p => isAllSameLetter(p))) {
+        newErrors.nombre = 'El nombre parece inválido (letras repetidas). Captura el nombre real.';
+      } else if (hasLowVariety(n)) {
+        newErrors.nombre = 'El nombre parece inválido (relleno). Captura el nombre real.';
+      } else {
+        // evita "Juan X"
+        const tokens = parts
+          .map(p => stripAccents(p).toLowerCase().replace(/[^a-zñ]/g, ''))
+          .filter(Boolean);
+
+        if (tokens[1] && /^[a-zñ]$/.test(tokens[1])) {
+          newErrors.nombre = 'Captura el apellido real (no se permite "X").';
+        }
+      }
     }
+  }
 
-    // Tipo de servicio obligatorio
-    if (!tipoServicio) {
-      newErrors.tipoServicio = 'Selecciona el tipo de servicio.';
-    }
+  // ✅ Teléfono
+  const telRaw = (telefono || '').trim();
+  const digits = telRaw.replace(/\D/g, '');
+  if (!digits) {
+    newErrors.telefono = 'Por favor ingresa el número de teléfono.';
+  } else if (digits.length < 10) {
+    newErrors.telefono = 'El teléfono debe ser un numero valido.';
+  }
 
-    setErrors(newErrors);
-    // es válido si no hay mensajes
-    return !newErrors.telefono && !newErrors.tipoServicio;
-  };
+  // ✅ Tipo de servicio
+  if (!tipoServicio) {
+    newErrors.tipoServicio = 'Selecciona el tipo de servicio.';
+  }
+
+  setErrors(newErrors);
+  return !newErrors.nombre && !newErrors.telefono && !newErrors.tipoServicio;
+};
+
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -125,11 +182,12 @@ export default function FormCliente({ onCreado }) {
           <label>Nombre del cliente:</label>
           <input
             type="text"
-            className="form-control"
+            className={`form-control ${errors.nombre ? 'is-invalid' : ''}`}
             value={nombre}
             onChange={(e) => setNombre(e.target.value)}
             required
           />
+          {errors.nombre && <div className="invalid-feedback">{errors.nombre}</div>}
         </div>
 
         {/* Teléfono obligatorio con mínimo 10 dígitos */}
@@ -175,6 +233,15 @@ export default function FormCliente({ onCreado }) {
                 onChange={() => setTipoServicio('Trámite')}
               />
               <label>Trámite</label>
+
+              <input
+                type="checkbox"
+                checked={tipoServicio === 'Presupuesto'}
+                onChange={() => setTipoServicio('Presupuesto')}
+              />
+              <label>Presupuesto</label>
+
+
             </div>
             {errors.tipoServicio && (
               <div style={{ color: '#d00', fontSize: 12, marginTop: 4 }}>
