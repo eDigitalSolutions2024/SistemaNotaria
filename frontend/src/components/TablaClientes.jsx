@@ -301,6 +301,7 @@ const TablaClientes = forwardRef((props, ref) => {
     { when: (row) => row.accion === 'Registro cita', style: { backgroundColor: '#d1ecf1' } },
     { when: (row) => row.accion === 'No quiso trámite', style: { backgroundColor: '#f8d7da' } },
     { when: (row) => row.accion === 'En proceso de trámite', style: { backgroundColor: '#fff3cd' } },
+    { when: (row) => row.accion === 'PRESUPUESTO', style: { backgroundColor: '#b69a3f65' } },
   ];
 
   const exportarExcel = () => {

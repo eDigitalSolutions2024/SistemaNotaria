@@ -72,6 +72,33 @@ function validateRealClientName(nombre = '') {
   // Normalizado para comparar
   const norm = stripAccents(original).toLowerCase();
 
+
+    // Palabras prohibidas (si aparecen como palabra dentro del nombre)
+const BANNED_WORDS = new Set([
+  'notario', 'notaria', 'notaría', // por si llega con acento
+  'lic', 'lic.', 'licenciado', 'licenciada',
+  'abogado', 'dra', 'dr', 'doctor', 'doctora',
+  'juez', 'magistrado', 'secretario',
+]);
+
+// Frases prohibidas (si el nombre contiene la frase completa)
+const BANNED_PHRASES = [
+  'carlos javier espinoza leyva',
+  'carlos javier','carlos espinoza', 'carlos leyva', 'javier espinoza', 'javier leyva'
+  // agrega aquí variaciones que quieras bloquear
+  // 'carlos espinoza leyva',
+];
+
+
+  // ✅ Bloqueo por frases completas (contiene)
+for (const phrase of BANNED_PHRASES) {
+  const p = stripAccents(phrase).toLowerCase().trim().replace(/\s+/g, ' ');
+  if (norm.includes(p)) {
+    return { ok: false, mensaje: 'Nombre no permitido. Captura el nombre real del cliente.' };
+  }
+}
+
+
   // Lista negra de tokens
   const bannedTokens = new Set([
     'x','xx','xxx',
@@ -80,16 +107,19 @@ function validateRealClientName(nombre = '') {
     'sinnombre','sin','nombre',
     'desconocido','anonimo','anonima',
     'na','n/a',
-    'asdf','qwerty'
+    'asdf','qwerty', 
   ]);
+
+
+
 
   const tokens = norm
     .split(/\s+/)
     .map(t => t.replace(/[^a-z0-9ñ]/g, ''))
     .filter(Boolean);
 
-  if (tokens.some(t => bannedTokens.has(t))) {
-    return { ok: false, mensaje: 'No se permiten nombres genéricos como "Cliente", "Test", "X", etc.' };
+  if (tokens.some(t => bannedTokens.has(t) || BANNED_WORDS.has(t))) {
+    return { ok: false, mensaje: 'No se permiten nombres genéricos como "Cliente", "Test", "X", etc o de cargos (Notario/Notaría/Lic, etc).' };
   }
 
   // Bloqueo "cliente 1" / "cliente x" / "cliente123"
