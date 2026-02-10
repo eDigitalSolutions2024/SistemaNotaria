@@ -162,6 +162,59 @@ const nombreFinal = vName.nombreLimpio;
 
 
 
+// ✅ CASO ESPECIAL: PRESUPUESTO
+// - SÍ guarda abogado asignado (para mostrar nombre)
+// - PERO NO lo marca ocupado
+if (String(tipoServicio).toLowerCase() === 'presupuesto') {
+  const ultimo = await Cliente.findOne().sort({ _id: -1 }).exec();
+  const nuevoId = ultimo ? ultimo._id + 1 : 2001;
+
+  // 1) Elegir abogado para mostrar (preferido si mandan uno, si no el primero por orden)
+  let abogadoMostrar = null;
+
+  if (abogadoPreferido) {
+    abogadoMostrar = await Abogado.findOne({ _id: abogadoPreferido }); // 👈 sin filtro disponible
+  }
+
+  if (!abogadoMostrar) {
+    abogadoMostrar = await Abogado.findOne().sort({ orden: 1 }); // 👈 el primero por orden
+  }
+
+  const nuevoCliente = new Cliente({
+    _id: nuevoId,
+    nombre: nombreFinal,
+    numero_telefono,
+    servicio: tipoServicio,
+
+    // presupuesto no ocupa flujo normal
+    tieneCita: false,
+    estado: 'Finalizado',
+    en_espera: false,
+
+    // ✅ guardar para que se vea el nombre en tabla
+    abogado_asignado: abogadoMostrar ? abogadoMostrar._id : null,
+    abogado_preferido: abogadoMostrar ? abogadoMostrar._id : null,
+
+    accion: 'PRESUPUESTO',
+    motivo: 'PRESUPUESTO',
+  });
+
+  await nuevoCliente.save();
+
+  const io = req.app.get('io');
+  io.emit('clienteActualizado');
+
+  return res.status(200).json({
+    mensaje: 'Cliente registrado como PRESUPUESTO (no ocupa abogado)',
+    cliente: nuevoCliente,
+    abogado: abogadoMostrar ? { id: abogadoMostrar._id, nombre: abogadoMostrar.nombre } : null
+  });
+}
+
+
+
+
+
     console.log("Body recibido:", req.body);
 
     const ultimo = await Cliente.findOne().sort({ _id: -1 }).exec();

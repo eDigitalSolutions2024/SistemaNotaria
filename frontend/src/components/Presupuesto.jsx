@@ -124,14 +124,21 @@ export default function Presupuesto() {
       .map((y) => ({ value: y, label: String(y) }));
   }, []);
 
-  const porcentajeHonorariosOptions = useMemo(
-    () =>
-      Array.from({ length: 10 }, (_, i) => {
-        const v = i + 1;
-        return { value: v, label: `${v}%` };
-      }),
-    []
-  );
+  const porcentajeHonorariosOptions = useMemo(() => {
+  // 1.0 a 10.0 en incrementos de 0.5 => 19 valores
+  return Array.from({ length: 19 }, (_, i) => {
+    const v = 1 + i * 0.5;
+
+    // evita el típico 2.5000000004
+    const clean = Math.round(v * 10) / 10;
+
+    // label bonito: 2% en vez de 2.0%
+    const labelNum = Number.isInteger(clean) ? String(clean) : clean.toFixed(1);
+
+    return { value: clean, label: `${labelNum}%` };
+  });
+}, []);
+
 
   // Cliente seleccionado completo (para obtener idCliente number)
   const selectedCliente = useMemo(() => {

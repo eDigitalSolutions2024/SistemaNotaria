@@ -25,18 +25,22 @@ const TablaClientes = forwardRef((props, ref) => {
     CITA: 'Registro cita',
     NO_TRAMITE: 'No quiso trámite',
     PRO_TRAMITE: 'en proceso de trámite',
+    PRESUPUESTO: 'PRESUPUESTO',
   };
 
   function fieldMetaByAction(accion) {
-    switch (accion) {
-      case ACTION.INICIAR:
-        return { as: 'input', type: 'text', placeholder: 'Tipo de trámite' };
-      case ACTION.CITA:
-        return { as: 'input', type: 'date', placeholder: 'Fecha' };
-      default:
-        return { as: 'textarea', type: 'text', placeholder: 'Motivo' };
-    }
+  switch (accion) {
+    case ACTION.INICIAR:
+      return { as: 'input', type: 'text', placeholder: 'Tipo de trámite' };
+    case ACTION.CITA:
+      return { as: 'input', type: 'date', placeholder: 'Fecha' };
+    case ACTION.PRESUPUESTO:
+      return { as: 'textarea', type: 'text', placeholder: 'PRESUPUESTO' };
+    default:
+      return { as: 'textarea', type: 'text', placeholder: 'Motivo' };
   }
+}
+
 
   useImperativeHandle(ref, () => ({
     recargarClientes: fetchClientes,
@@ -125,19 +129,34 @@ const TablaClientes = forwardRef((props, ref) => {
     {
       name: 'Acción',
       cell: (row) => {
-        const seleccion = accionesSeleccionadas[row.id] || '';
-        const meta = fieldMetaByAction(seleccion);
-
         const servicio = (row.servicio || '').toString().toLowerCase();
-        const base = ['Iniciar trámite', 'Registro cita', 'No quiso trámite'];
-        const opciones = (servicio === 'tramite' || servicio === 'trámite')
-          ? ['Finalizar trámite', ...base.slice(1)]
-          : base;
+        const isPresupuesto = servicio === 'presupuesto';
+
+        const seleccion = accionesSeleccionadas[row.id] || '';
+        const seleccionEfectiva = isPresupuesto ? ACTION.PRESUPUESTO : seleccion;
+        const meta = fieldMetaByAction(seleccionEfectiva);
+
+        const base = [ACTION.INICIAR, ACTION.CITA, ACTION.NO_TRAMITE];
+
+        const opciones = isPresupuesto
+          ? [ACTION.PRESUPUESTO]
+          : (servicio === 'tramite' || servicio === 'trámite')
+              ? ['Finalizar trámite', ...base.slice(1)]
+              : base;
+
+        // ✅ Autollenado “una sola vez”
+        if (isPresupuesto && accionesSeleccionadas[row.id] !== ACTION.PRESUPUESTO) {
+          setTimeout(() => {
+            setAccionesSeleccionadas((prev) => ({ ...prev, [row.id]: ACTION.PRESUPUESTO }));
+            setMotivos((prev) => ({ ...prev, [row.id]: 'PRESUPUESTO' }));
+          }, 0);
+        }
 
         return (
           <div style={{ minWidth: 220 }}>
             <select
-              value={seleccion}
+              value={isPresupuesto ? ACTION.PRESUPUESTO : seleccion}
+              disabled={isPresupuesto}
               onChange={(e) => {
                 const val = e.target.value;
                 setAccionesSeleccionadas((prev) => ({ ...prev, [row.id]: val }));
@@ -148,6 +167,7 @@ const TablaClientes = forwardRef((props, ref) => {
               }}
               className="form-select form-select-sm mb-1"
             >
+
               <option value="">-- Selec --</option>
               {opciones.map((accion, i) => (
                 <option key={i} value={accion}>
@@ -161,19 +181,25 @@ const TablaClientes = forwardRef((props, ref) => {
                 className="form-control form-control-sm"
                 rows="1"
                 placeholder={meta.placeholder}
-                value={motivos[row.id] || ''}
-                onChange={(e) => setMotivos((prev) => ({ ...prev, [row.id]: e.target.value.toUpperCase(),
-
-                 }))}
+                value={isPresupuesto ? 'PRESUPUESTO' : (motivos[row.id] || '')}
+                disabled={isPresupuesto}
+                onChange={(e) =>
+                  setMotivos((prev) => ({ ...prev, [row.id]: e.target.value.toUpperCase() }))
+                }
               />
+
             ) : (
               <input
                 className="form-control form-control-sm"
                 type={meta.type}
                 placeholder={meta.placeholder}
-                value={motivos[row.id] || ''}
-                onChange={(e) => setMotivos((prev) => ({ ...prev, [row.id]: e.target.value.toUpperCase() }))}
+                value={isPresupuesto ? 'PRESUPUESTO' : (motivos[row.id] || '')}
+                disabled={isPresupuesto}
+                onChange={(e) =>
+                  setMotivos((prev) => ({ ...prev, [row.id]: e.target.value.toUpperCase() }))
+                }
               />
+
             )}
           </div>
         );
@@ -183,19 +209,22 @@ const TablaClientes = forwardRef((props, ref) => {
     },
     {
       name: 'Liberar',
-      cell: (row) =>
-        row.abogado && row.estado === 'Asignado' ? (
-          <button
-            className="btn btn-danger btn-sm"
-            onClick={() => liberarAbogado(row.id, motivos[row.id], accionesSeleccionadas[row.id])}
-          >
-            Liberar
-          </button>
-        ) : (
-          '---'
-        ),
-      width: '100px',
-      minWidth: '100px',
+      cell: (row) => {
+  const servicio = (row.servicio || '').toString().toLowerCase();
+  const isPresupuesto = servicio === 'presupuesto';
+
+  return row.abogado && row.estado === 'Asignado' && !isPresupuesto ? (
+    <button
+      className="btn btn-danger btn-sm"
+      onClick={() => liberarAbogado(row.id)}
+    >
+      Liberar
+    </button>
+  ) : (
+    '---'
+  );
+},
+
     },
     {
       name: 'Servicio',

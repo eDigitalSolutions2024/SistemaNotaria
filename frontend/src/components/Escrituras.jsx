@@ -101,8 +101,19 @@ const norm = (s) =>
 // Muestra en el picker tanto "Iniciar trámite" como "Finalizar trámite"
 const isEligible = (c) => {
   const a = norm(c?.accion);
-  return a.includes('iniciar') || a.includes('finalizar');
+  const s = norm(c?.servicio);
+  const m = norm(c?.motivo);
+
+  // deja: iniciar / finalizar / presupuesto
+  return (
+    a.includes('iniciar') ||
+    a.includes('finalizar') ||
+    a.includes('presupuesto') ||
+    s.includes('presupuesto') ||
+    m.includes('presupuesto')
+  );
 };
+
 
 // ====== TESTAMENTO: helpers HH:mm ======
 const HHMM_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
