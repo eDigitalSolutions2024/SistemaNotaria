@@ -3,6 +3,8 @@ const express = require('express');
 const router = express.Router();
 const path = require('path');
 const fs = require('fs');
+const axios = require("axios");
+const { uploadMediaFromUrl, sendDocumentById } = require("../services/whatsapp");
 
 const Presupuesto = require('../models/Presupuesto');
 const PDFDocument = require('pdfkit');
@@ -331,17 +333,55 @@ const fitOneLine = (doc, text, maxW) => {
   }
 });
 
-// Crear presupuesto
-router.post('/', async (req, res) => {
+router.post("/", async (req, res) => {
   try {
     const presupuesto = new Presupuesto(req.body);
     await presupuesto.save();
+
+    // ✅ responde rápido al frontend
     res.status(201).json(presupuesto);
+
+    const total = Number(presupuesto.totalPresupuesto || 0);
+    if (total < 100000) return;
+
+    const notarioPhone = process.env.NOTARIO_PHONE;
+
+    // OJO: aquí SÍ puede ser localhost porque TU servidor lo descarga (Meta no)
+    const baseUrl = process.env.PUBLIC_BASE_URL || "http://localhost:8020";
+    const pdfUrl = `${baseUrl}/api/presupuestos/${presupuesto._id}/pdf`;
+
+    setImmediate(async () => {
+      try {
+        // 1) Subir PDF a Meta
+        const up = await uploadMediaFromUrl({ fileUrl: pdfUrl, mimeType: "application/pdf" });
+        console.log("✅ Media subido:", up?.id);
+
+        // 2) Enviar PDF por WhatsApp usando media_id
+        const sent = await sendDocumentById({
+          to: notarioPhone,
+          mediaId: up.id,
+          filename: `presupuesto_${presupuesto._id}.pdf`,
+          caption: `Nuevo presupuesto. Total: ${money(total)}`,
+        });
+
+        console.log("✅ WhatsApp/PDF enviado:", sent);
+      } catch (e) {
+        console.error(
+          "⚠️ WhatsApp/PDF falló (no afecta guardado):",
+          e?.response?.data || e.message
+        );
+      }
+    });
   } catch (err) {
-    console.error('Error al crear presupuesto:', err);
-    res.status(500).json({ message: 'Error al crear presupuesto', error: err.message });
+    console.error("Error al crear presupuesto:", err);
+    if (!res.headersSent) {
+      return res.status(500).json({ message: "Error al crear presupuesto", error: err.message });
+    }
   }
 });
+
+
+
 
 // Listar (con filtros)
 router.get('/', async (req, res) => {

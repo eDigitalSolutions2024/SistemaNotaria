@@ -84,7 +84,7 @@ const BANNED_WORDS = new Set([
 // Frases prohibidas (si el nombre contiene la frase completa)
 const BANNED_PHRASES = [
   'carlos javier espinoza leyva',
-  'carlos javier','carlos espinoza', 'carlos leyva', 'javier espinoza', 'javier leyva'
+  'carlos javier','carlos espinoza', 'carlos leyva', 'javier espinoza', 'javier leyva', 'enrique villalba'
   // agrega aquí variaciones que quieras bloquear
   // 'carlos espinoza leyva',
 ];
@@ -175,6 +175,10 @@ router.post('/', async (req, res) => {
     const abogadoPreferido = req.body.abogadoPreferido ?? req.body.abogado_preferido ?? null;
     const numero_telefono  = req.body.numero_telefono ?? ''; // ← NUEVO
 
+// ✅ NUEVA REGLA: siempre debe venir abogado seleccionado
+if (!abogadoPreferido) {
+  return res.status(400).json({ mensaje: 'Debes seleccionar un abogado.' });
+}
 
     const allowedServicios = new Set(['Asesoría', 'Trámite', 'Presupuesto']);
 if (!allowedServicios.has(tipoServicio)) {
@@ -253,7 +257,7 @@ if (String(tipoServicio).toLowerCase() === 'presupuesto') {
     let abogadoAsignado = null;
 
     // Si tiene cita y mandaron abogadoPreferido, se intenta asignar a ese abogado
-    if (tieneCita && abogadoPreferido) {
+    if (abogadoPreferido) {
       const abogado = await Abogado.findOne({ _id: abogadoPreferido, disponible: true });
       if (abogado) {
         abogadoAsignado = abogado;
@@ -286,7 +290,7 @@ if (String(tipoServicio).toLowerCase() === 'presupuesto') {
     }
 
     // Si no se asignó por preferencia, aplicar lógica automática
-    if (!abogadoAsignado) {
+    /*if (!abogadoAsignado) {
       console.log("🔍 Abogado encontrado:", abogadoAsignado);
       abogadoAsignado = await Abogado.findOne({ disponible: true }).sort({ orden: 1 });
 
@@ -296,7 +300,7 @@ if (String(tipoServicio).toLowerCase() === 'presupuesto') {
         abogadoAsignado.ubicacion = 'Sin sala'; // ✅ Inicializar ubicación
         await abogadoAsignado.save(); // ← no se toca
       }
-    }
+    }*/
 
     const nuevoCliente = new Cliente({
       _id: nuevoId,

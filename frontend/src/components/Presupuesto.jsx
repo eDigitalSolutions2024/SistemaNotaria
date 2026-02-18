@@ -34,6 +34,10 @@ const parseNum = (v) => {
   return isNaN(n) ? 0 : n;
 };
 
+
+const MIN_TOTAL_HONORARIOS = 5000;
+
+
 const initialForm = {
   clienteId: '',
 
@@ -317,6 +321,12 @@ export default function Presupuesto() {
     form.honorariosCalc.totalHonorarios,
   ]);
 
+const honorariosMinOk = useMemo(
+  () => totalHonorariosNum >= MIN_TOTAL_HONORARIOS,
+  [totalHonorariosNum]
+);
+
+
   const totalPresupuesto = useMemo(() => totalCargos + totalHonorariosNum, [
     totalCargos,
     totalHonorariosNum,
@@ -338,6 +348,17 @@ export default function Presupuesto() {
       setError('Primero captura Valor de operación, Valor Terreno y Valor Construcción y verifica que la suma coincida.');
       return;
     }
+
+    if (totalHonorariosNum < MIN_TOTAL_HONORARIOS) {
+  setError(
+    `El total de honorarios debe ser mínimo ${MIN_TOTAL_HONORARIOS.toLocaleString('es-MX', {
+      style: 'currency',
+      currency: 'MXN',
+    })}.`
+  );
+  return;
+}
+
 
     const body = {
       // ⚠️ así lo tienes hoy: manda _id string
@@ -555,6 +576,15 @@ export default function Presupuesto() {
                 />
               </div>
             ))}
+
+            {datosCalculo.puedeContinuar && !honorariosMinOk && (
+  <div className="pres-alert pres-alert-error" style={{ marginTop: 10 }}>
+    El total de honorarios debe ser mínimo{' '}
+    {MIN_TOTAL_HONORARIOS.toLocaleString('es-MX', { style: 'currency', currency: 'MXN' })}.
+  </div>
+)}
+
+
           </div>
 
           <div className="pres-card">
@@ -639,9 +669,14 @@ export default function Presupuesto() {
               {totalPresupuesto.toLocaleString('es-MX', { style: 'currency', currency: 'MXN' })}
             </span>
 
-            <button type="submit" className="pres-btn-primary" disabled={saving || bloquearAbajo}>
+            <button
+              type="submit"
+              className="pres-btn-primary"
+              disabled={saving || bloquearAbajo || !honorariosMinOk}
+            >
               {saving ? 'Guardando…' : 'Guardar presupuesto'}
             </button>
+
           </div>
         </section>
       </form>

@@ -12,7 +12,8 @@ export default function FormCliente({ onCreado }) {
   const [abogados, setAbogados] = useState([]);
 
   // errores de validación por campo
-  const [errors, setErrors] = useState({ nombre: '', telefono: '', tipoServicio: '' });
+  const [errors, setErrors] = useState({ nombre: '', telefono: '', tipoServicio: '', abogado: '' });
+
 
 
   useEffect(() => {
@@ -48,7 +49,7 @@ const hasLowVariety = (full) => {
 
 
   const validate = () => {
-  const newErrors = { nombre: '', telefono: '', tipoServicio: '' };
+  const newErrors = { nombre: '', telefono: '', tipoServicio: '', abogado: '' };
 
   // ✅ NOMBRE (super blindado)
   const n = (nombre || '').trim().replace(/\s+/g, ' ');
@@ -101,8 +102,16 @@ const hasLowVariety = (full) => {
     newErrors.tipoServicio = 'Selecciona el tipo de servicio.';
   }
 
+  // ✅ Abogado obligatorio (con o sin cita)
+if (!abogadoPreferido) {
+  newErrors.abogado = 'Selecciona un abogado.';
+}
+
+
   setErrors(newErrors);
-  return !newErrors.nombre && !newErrors.telefono && !newErrors.tipoServicio;
+
+  return !newErrors.nombre && !newErrors.telefono && !newErrors.tipoServicio && !newErrors.abogado;
+
 };
 
 
@@ -113,25 +122,8 @@ const hasLowVariety = (full) => {
     if (!validate()) return;
 
     try {
-      let abogadoAsignadoNum = null;
+      const abogadoAsignadoNum = abogadoPreferido !== '' ? Number(abogadoPreferido) : null;
 
-      if (tieneCita) {
-        abogadoAsignadoNum = abogadoPreferido !== '' ? Number(abogadoPreferido) : null;
-      } else {
-        // asignación automática simple (puedes mantenerla como estaba)
-        try {
-          const resAbogado = await fetch(`${API_URL}/abogados`);
-          const dataAbogado = await resAbogado.json();
-          const lista = Array.isArray(dataAbogado) ? dataAbogado : [];
-          if (resAbogado.ok && lista.length > 0) {
-            abogadoAsignadoNum = Number(lista[0]._id); // IDs numéricos
-          } else {
-            setMensaje('⚠️ No hay abogados disponibles. El cliente se registrará sin asignar.');
-          }
-        } catch {
-          setMensaje('⚠️ Error al buscar abogado disponible');
-        }
-      }
 
       const payload = {
         nombre,
@@ -165,7 +157,8 @@ const hasLowVariety = (full) => {
         setTipoServicio('');
         setTieneCita(false);
         setAbogadoPreferido('');
-        setErrors({ telefono: '', tipoServicio: '' });
+        setErrors({ nombre:'', telefono: '', tipoServicio: '', abogado: '' });
+
       } else {
         setMensaje('Error: ' + (data?.mensaje || 'No se pudo registrar'));
       }
@@ -263,28 +256,33 @@ const hasLowVariety = (full) => {
             </div>
           </div>
 
-          {tieneCita && (
-            <div className="form-group mt-2">
-              <label>Abogado con el que tiene cita:</label>
-              <select
-                className="form-control"
-                value={abogadoPreferido}
-                onChange={(e) => setAbogadoPreferido(e.target.value)}
-              >
-                <option value="">-- Selecciona un abogado --</option>
-                {(abogados || [])
-                  .filter(a => {
-                    const r = String(a.role || '').toLowerCase();
-                    return r === 'abogado' || r === 'asistente';
-                  })
-                  .map((abogado) => (
-                    <option key={abogado._id} value={abogado._id}>
-                      {abogado.nombre}
-                    </option>
-                  ))}
-              </select>
-            </div>
-          )}
+          <div className="form-group mt-2">
+  <label>
+    {tieneCita ? 'Abogado con el que tiene cita' : 'Selecciona abogado'}{' '}
+    <span style={{ color: '#d00' }}>*</span>
+  </label>
+
+  <select
+    className={`form-control ${errors.abogado ? 'is-invalid' : ''}`}
+    value={abogadoPreferido}
+    onChange={(e) => setAbogadoPreferido(e.target.value)}
+  >
+    <option value="">-- Selecciona un abogado --</option>
+    {(abogados || [])
+      .filter(a => {
+        const r = String(a.role || '').toLowerCase();
+        return r === 'abogado' || r === 'asistente';
+      })
+      .map((abogado) => (
+        <option key={abogado._id} value={abogado._id}>
+          {abogado.nombre}
+        </option>
+      ))}
+  </select>
+
+  {errors.abogado && <div className="invalid-feedback">{errors.abogado}</div>}
+</div>
+
         </div>
 
         <button type="submit" className="btn btn-primary">Registrar cliente</button>
