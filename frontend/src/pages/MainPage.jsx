@@ -11,6 +11,7 @@ import RegistrarGenerales from '../components/RegistrarGenerales';
 import ConsultarGenerales from '../components/ConsultarGenerales';
 import Presupuesto from '../components/Presupuesto';
 import EscrituraEstatus from '../components/EscriturasEstatus';
+import Calendario from '../components/Calendario';
 
 import { useAuth } from '../auth/AuthContext';
 import Login from '../components/Login';
@@ -66,6 +67,7 @@ function AuthedApp() {
     };
   }, [logout, INACTIVITY_LIMIT]);
 
+
   const [seccion, setSeccion] = useState(
     role === 'PROTOCOLITO' ? 'registrar-generales' : 'registrar-cliente'
   );
@@ -86,6 +88,19 @@ function AuthedApp() {
     setMostrarSubmenuRecibos(false);
     if (isMobile()) setSidebarOpen(false);
   };
+
+   useEffect(() => {
+    const target = localStorage.getItem("postLoginGoTo");
+    if (target) {
+      localStorage.removeItem("postLoginGoTo");
+      go(target); // go('calendario')
+    }
+  }, []);
+
+  const conectarOutlook = () => {
+    window.location.href = "http://localhost:8020/auth/microsoft/login";
+  };
+
 
   const renderContenido = () => {
     // 🔒 Si el usuario es PROTOCOLITO, SIEMPRE ve RegistrarGenerales
@@ -155,6 +170,9 @@ function AuthedApp() {
 
       case 'presupuesto':
         return <Presupuesto />;
+
+      case 'calendario':
+        return <Calendario />;
 
       default:
         return <RegistrarCliente />;
@@ -343,6 +361,12 @@ function AuthedApp() {
                 <li title="Presupuesto" style={itemStyle} onClick={() => go('presupuesto')}>
                   <span style={iconStyle}>📑</span>
                   {sidebarOpen && <span>Presupuesto</span>}
+                </li>
+
+                {/* Calendario */}
+                <li title="Calendario" style={itemStyle} onClick={() => go('calendario')}>
+                  <span style={iconStyle}>🗓️</span>
+                  {sidebarOpen && <span>Calendario</span>}
                 </li>
               </>
             )}

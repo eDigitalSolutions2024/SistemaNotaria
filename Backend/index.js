@@ -5,6 +5,15 @@ const http = require('http');
 const path = require('path');
 const dotenv = require('dotenv');
 
+dotenv.config({
+  path: path.resolve(
+    __dirname,
+    process.env.NODE_ENV === 'production'
+      ? '.env.production'
+      : '.env.development'
+  ),
+});
+
 const session = require('express-session');
 // Fix para connect-mongo (soporta default y común)
 const MongoStoreImport = require('connect-mongo');
@@ -17,14 +26,10 @@ const escriturasRoutes = require('./routes/escrituras');
 
 const auth = require('./middleware/auth');
 
-dotenv.config({
-  path: path.resolve(
-    __dirname,
-    process.env.NODE_ENV === 'production'
-      ? '.env.production'
-      : '.env.development'
-  ),
-});
+const calendarRoutes = require('./routes/calendar');
+const microsoftRoutes = require('./routes/microsoft');
+
+
 
 // 1) Crear app y server primero
 const app = express();
@@ -171,6 +176,9 @@ app.use('/api/plantillas', require('./routes/plantillas'));
 app.use('/api/escrituras', escriturasRoutes);
 app.use('/api/clientes-generales', require('./routes/clientesGenerales'));
 app.use('/api/presupuestos', require('./routes/presupuestos'));
+
+app.use('/api/calendar', calendarRoutes);
+app.use('/auth/microsoft', microsoftRoutes);
 
 
 app.get('/', (_req, res) =>
