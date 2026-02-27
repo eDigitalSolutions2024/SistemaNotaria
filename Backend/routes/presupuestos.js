@@ -335,28 +335,73 @@ const fitOneLine = (doc, text, maxW) => {
 
 router.post("/", async (req, res) => {
   try {
-    const presupuesto = new Presupuesto(req.body);
+    // ✅ NO confiar en responsable del body si puedes evitarlo.
+    // Si tienes auth middleware y viene req.user, úsalo.
+    const responsableReal =
+      (req.user?.nombre || req.user?.name || req.user?.fullName || req.user?.username || "")
+        .trim() || String(req.body?.responsable || "").trim();
+
+    const clienteId = req.body?.cliente;
+
+    if (!clienteId) {
+      return res.status(400).json({ message: "Falta cliente." });
+    }
+    if (!responsableReal) {
+      return res.status(400).json({ message: "Falta responsable (login)." });
+    }
+
+    // ✅ RANGO DEL DÍA
+    // OJO: esto usa la zona horaria del server.
+    // Recomendación: configurar TZ=America/Chihuahua (o la que usen) en el server/PM2.
+    const now = new Date();
+    const start = new Date(now);
+    start.setHours(0, 0, 0, 0);
+    const end = new Date(now);
+    end.setHours(23, 59, 59, 999);
+
+    // ✅ CONTAR presupuestos del mismo cliente por el mismo abogado en el mismo día
+    const count = await Presupuesto.countDocuments({
+      cliente: clienteId,
+      responsable: responsableReal,
+      createdAt: { $gte: start, $lte: end },
+    });
+
+    if (count >= 2) {
+      return res.status(409).json({
+        message:
+          "Ya hiciste 2 presupuestos hoy con este cliente. Si necesitas modificarlo, acude con nosotros.",
+        code: "PRESUPUESTO_DIA_LIMITE",
+      });
+    }
+
+    // ✅ Forzar responsable real (para que no lo falsifiquen desde el frontend)
+    const presupuesto = new Presupuesto({
+      ...req.body,
+      responsable: responsableReal,
+    });
+
     await presupuesto.save();
 
     // ✅ responde rápido al frontend
     res.status(201).json(presupuesto);
 
+    // ===== lo demás igual (WhatsApp) =====
     const total = Number(presupuesto.totalPresupuesto || 0);
     if (total < 100000) return;
 
     const notarioPhone = process.env.NOTARIO_PHONE;
 
-    // OJO: aquí SÍ puede ser localhost porque TU servidor lo descarga (Meta no)
     const baseUrl = process.env.PUBLIC_BASE_URL || "http://localhost:8020";
     const pdfUrl = `${baseUrl}/api/presupuestos/${presupuesto._id}/pdf`;
 
     setImmediate(async () => {
       try {
-        // 1) Subir PDF a Meta
-        const up = await uploadMediaFromUrl({ fileUrl: pdfUrl, mimeType: "application/pdf" });
+        const up = await uploadMediaFromUrl({
+          fileUrl: pdfUrl,
+          mimeType: "application/pdf",
+        });
         console.log("✅ Media subido:", up?.id);
 
-        // 2) Enviar PDF por WhatsApp usando media_id
         const sent = await sendDocumentById({
           to: notarioPhone,
           mediaId: up.id,
@@ -366,10 +411,7 @@ router.post("/", async (req, res) => {
 
         console.log("✅ WhatsApp/PDF enviado:", sent);
       } catch (e) {
-        console.error(
-          "⚠️ WhatsApp/PDF falló (no afecta guardado):",
-          e?.response?.data || e.message
-        );
+        console.error("⚠️ WhatsApp/PDF falló (no afecta guardado):", e?.response?.data || e.message);
       }
     });
   } catch (err) {

@@ -1112,6 +1112,32 @@ router.post('/', async (req, res) => {
   }
 });
 
+// ✅ NUEVO: todos los presupuestos (para selector global)
+router.get('/presupuestos', async (req, res) => {
+  try {
+    const presup = await Presupuesto.find({}).sort({ fecha: -1 }).lean();
+
+    const nums = [...new Set(presup.map(p => p.cliente).filter(v => v != null))];
+
+    // ✅ Cliente usa _id (Number)
+    const clientes = await Cliente.find(
+      { _id: { $in: nums } },
+      { _id: 1, nombre: 1 }
+    ).lean();
+
+    const map = new Map(clientes.map(c => [String(c._id), c.nombre]));
+
+    const out = presup.map(p => ({
+      ...p,
+      clienteNombre: map.get(String(p.cliente)) || '—',
+    }));
+
+    res.json(out);
+  } catch (e) {
+    res.status(500).json({ mensaje: 'Error cargando presupuestos' });
+  }
+});
+
 router.get('/presupuestos/cliente/:clienteNumero', async (req, res) => {
   try {
     const raw = req.params.clienteNumero;
@@ -1685,5 +1711,9 @@ router.get('/testamento/check', async (req, res) => {
     res.status(500).json({ mensaje: 'Error verificando horario', detalle: e.message });
   }
 });
+
+
+
+
 
 module.exports = router;

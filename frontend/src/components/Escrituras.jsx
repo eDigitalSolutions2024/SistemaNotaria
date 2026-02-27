@@ -104,14 +104,14 @@ const isEligible = (c) => {
   const s = norm(c?.servicio);
   const m = norm(c?.motivo);
 
-  // deja: iniciar / finalizar / presupuesto
-  return (
-    a.includes('iniciar') ||
-    a.includes('finalizar') ||
-    a.includes('presupuesto') ||
-    s.includes('presupuesto') ||
-    m.includes('presupuesto')
-  );
+  // ⛔ excluir cualquier registro que sea presupuesto
+  const esPresupuesto =
+    a.includes('presupuesto') || s.includes('presupuesto') || m.includes('presupuesto');
+
+  if (esPresupuesto) return false;
+
+  // ✅ permitir iniciar / finalizar
+  return a.includes('iniciar') || a.includes('finalizar');
 };
 
 
@@ -136,6 +136,8 @@ const TIPOS_MONTOS_KEYWORDS = [
   'COMPRAVENTA',
   'PROTOCOLIZACION',
   'DONACION',
+  'ADJUDICACION',
+  
 ];
 
 // 💰 Solo estos tipos de trámite llevan montos (impuestos, avalúo, etc.)
@@ -920,6 +922,71 @@ async function fetchPresupuestosCliente(apiBase, clienteNumero) {
   }
 }
 
+async function fetchPresupuestosAll(apiBase) {
+  try {
+    // 👇 AJUSTA AQUÍ a tu ruta real si es otra
+    const { data } = await axios.get(`${apiBase}/escrituras/presupuestos`);
+    const arr = Array.isArray(data) ? data : [];
+
+    const normed = arr.map((p) => {
+      const cargos = p.cargos || {};
+      const honor = p.honorariosCalc || {};
+
+      const totalImpuestos =
+        p.totalImpuestos != null || p.total_impuestos != null
+          ? numSafe(p.totalImpuestos ?? p.total_impuestos)
+          : sumKeys(cargos, PRES_IMPUESTOS_KEYS);
+
+      const totalGastosExtra =
+        p.totalGastosExtra != null || p.total_gastos_extra != null
+          ? numSafe(p.totalGastosExtra ?? p.total_gastos_extra)
+          : sumKeys(cargos, PRES_GASTOS_KEYS);
+
+      const valorAvaluo =
+        p.valorAvaluo != null || p.valor_avaluo != null
+          ? numSafe(p.valorAvaluo ?? p.valor_avaluo)
+          : p.avaluo != null && p.avaluo !== 0
+          ? numSafe(p.avaluo)
+          : numSafe(p.valorOperacion);
+
+      const totalHonorarios =
+        p.totalHonorarios != null ||
+        p.total_honorarios != null ||
+        honor.totalHonorarios != null ||
+        honor.total_honorarios != null
+          ? numSafe(
+              p.totalHonorarios ??
+                p.total_honorarios ??
+                honor.totalHonorarios ??
+                honor.total_honorarios
+            )
+          : 0;
+
+      const descripcion =
+        p.descripcion || p.concepto || p.observaciones || p.tipoTramite || '';
+
+      const fecha = p.fecha || p.createdAt || null;
+
+      return {
+        id: String(p._id || p.id),
+        clienteNombre: p.clienteNombre || p.cliente || p.nombreCliente || '—',
+        fecha,
+        descripcion,
+        totalImpuestos,
+        valorAvaluo,
+        totalGastosExtra,
+        totalHonorarios,
+        raw: p,
+      };
+    });
+
+    return normed;
+  } catch (e) {
+    console.error('Error cargando presupuestos (all):', e);
+    return [];
+  }
+}
+
 
 
 
@@ -1036,55 +1103,24 @@ async function fetchPresupuestosCliente(apiBase, clienteNumero) {
 
 
 const openPresupuestoPicker = async (target) => {
-  if (target === 'new') {
-    const clienteNumero =
-      selectedCliente?.idCliente ??
-      selectedCliente?.numeroCliente ??
-      selectedCliente?.id ??
-      null;
-
-    if (!clienteNumero) {
-      setMsg({
-        type: 'warn',
-        text: 'Primero selecciona un cliente para buscar sus presupuestos.',
-      });
-      return;
-    }
-
-    setPresupTarget('new');
-    setPresupOpen(true);
-    setPresupLoading(true);
-
-    try {
-      const lista = await fetchPresupuestosCliente(API, clienteNumero);
-
-      const nombreCliente =
-        selectedCliente?.nombre ||
-        selectedCliente?.clienteNombre ||
-        selectedCliente?.cliente ||
-        '';
-
-      const rowsNorm = lista.map((p) => ({
-        ...p, // ← aquí vienen: id, cliente, fecha, descripcion, montos
-        clienteNombre:
-          p.clienteNombre ||
-          p.cliente ||
-          p.nombreCliente ||
-          nombreCliente ||
-          '',
-      }));
-
-      setPresupRows(rowsNorm);
-    } catch {
-      setPresupRows([]);
-    } finally {
-      setPresupLoading(false);
-    }
-  } else {
-    setMsg({
+  if (target !== 'new') {
+    return setMsg({
       type: 'warn',
       text: 'Selector de presupuesto aún no disponible en edición.',
     });
+  }
+
+  setPresupTarget('new');
+  setPresupOpen(true);
+  setPresupLoading(true);
+
+  try {
+    const lista = await fetchPresupuestosAll(API);
+    setPresupRows(lista);
+  } catch {
+    setPresupRows([]);
+  } finally {
+    setPresupLoading(false);
   }
 };
 
@@ -2321,7 +2357,7 @@ if (sugerido != null) {
         variant="outlined"
         size="small"
         onClick={() => openPresupuestoPicker('new')}
-        disabled={!selectedCliente}
+        
       >
         Elegir presupuesto…
       </Button>

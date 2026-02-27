@@ -12,11 +12,11 @@ const api = axios.create({
 
 const REGISTRO_PUBLICO_TABLAS = {
   2025: [
-    { min: 0, max: 100000, fee: 3015 },
-    { min: 100000, max: 200000, fee: 4220 },
-    { min: 200000, max: 400000, fee: 8234 },
-    { min: 400000, max: 700000, fee: 14256 },
-    { min: 700000, max: Infinity, fee: 20278 },
+    { min: 0, max: 100001, fee: 3015 },
+    { min: 100001, max: 200001, fee: 4220 },
+    { min: 200001, max: 400001, fee: 8234 },
+    { min: 400001, max: 700001, fee: 14256 },
+    { min: 700001, max: Infinity, fee: 20278 },
   ],
 };
 
@@ -176,21 +176,15 @@ export default function Presupuesto() {
     fetchClientes();
   }, []);
 
-  const clienteOptions = useMemo(() => {
-    const list = [...(clientes || [])].reverse();
+ const clienteOptions = useMemo(() => {
+  const list = [...(clientes || [])]
+    .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
 
-    const opts = list.map((c) => ({
-      value: c._id || c.id || c._doc?._id,
-      label: `${c.idCliente || c.idClienteNumero || c.id || ''} - ${c.nombre || c.nombreCliente || ''}`,
-    }));
-
-    if (opts.length) {
-      console.log('[DEBUG clienteOptions[0]]', opts[0]);
-      console.log('[DEBUG cliente raw[0]]', clientes[0]);
-    }
-
-    return opts;
-  }, [clientes]);
+  return list.map((c) => ({
+    value: c._id || c.id || c._doc?._id,
+    label: `${c.idCliente || c.idClienteNumero || c.id || ''} - ${c.nombre || c.nombreCliente || ''}`,
+  }));
+}, [clientes]);
 
   const selectedClienteOption = useMemo(() => {
     return clienteOptions.find((o) => o.value === form.clienteId) || null;
