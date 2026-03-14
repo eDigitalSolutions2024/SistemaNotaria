@@ -105,8 +105,13 @@ export default function Protocolito({ onOpenRecibo }) {
   const canSeeReciboBtn =
   isAbogado || canDeliver; // abogado/asistente + recepcion/admin
 
+  const canTakeProtocolito = !['RECEPCION', 'recepcion'].includes(user?.role);
+
 const canModifyRecibos =
-  canDeliver; // solo recepcion/admin
+  canDeliver; // generar / adjuntar recibo
+
+const canJustifyRecibos =
+  isAdmin; // solo admin puede justificar
 
 
 
@@ -627,12 +632,17 @@ const descargarPlantilla = (id) => {
   };
 
   const startAdd = () => {
-    setAdding(true);
-    setNewRow(emptyRow);
-    setSelectedCliente(null);
-    setNewSubtipo('');
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-  };
+  if (!canTakeProtocolito) {
+    setMsg({ type: 'warn', text: 'Tu usuario no tiene permiso para tomar número de protocolito' });
+    return;
+  }
+
+  setAdding(true);
+  setNewRow(emptyRow);
+  setSelectedCliente(null);
+  setNewSubtipo('');
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+};
 
   const handleSelectFile = async (e) => {
     const file = e.target.files?.[0];
@@ -1090,7 +1100,11 @@ if (estado === 'no') {
 
       {/* Barra de acciones */}
       <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
-        <button className="btn btn-primary" onClick={startAdd} disabled={adding || editingId}>+ Agregar trámite</button>
+        {canTakeProtocolito && (
+          <button className="btn btn-primary" onClick={startAdd} disabled={adding || editingId}>
+            + Agregar trámite
+          </button>
+        )}
 
         {/* Importar Excel */}
         <input
@@ -1381,16 +1395,35 @@ if (estado === 'no') {
             <div><b>Trámite:</b> {missingRow?.numeroTramite ?? '—'}</div>
             <div><b>Cliente:</b> {missingRow?.cliente ?? '—'}</div>
             <div style={{ display: 'grid', gap: 8 }}>
-              <Button variant="contained" onClick={() => { closeMissing(); goToGenerarRecibo(missingRow); }}>
-                Generar recibo
-              </Button>
-              <Button variant="outlined" onClick={() => { setAttachQ(''); setAttachRows([]); setAttachSelectedId(null); setAttachOpen(true); searchReceipts(''); }}>
-                Adjuntar recibo existente
-              </Button>
-              <Button variant="text" onClick={() => setJustifyOpen(true)}>
-                Capturar justificante (sin recibo)
-              </Button>
-            </div>
+  <Button
+    variant="contained"
+    onClick={() => {
+      closeMissing();
+      goToGenerarRecibo(missingRow);
+    }}
+  >
+    Generar recibo
+  </Button>
+
+  <Button
+    variant="outlined"
+    onClick={() => {
+      setAttachQ('');
+      setAttachRows([]);
+      setAttachSelectedId(null);
+      setAttachOpen(true);
+      searchReceipts('');
+    }}
+  >
+    Adjuntar recibo existente
+  </Button>
+
+  {canJustifyRecibos && (
+    <Button variant="text" onClick={() => setJustifyOpen(true)}>
+      Capturar justificante (sin recibo)
+    </Button>
+  )}
+</div>
           </div>
         </DialogContent>
         <DialogActions>

@@ -169,6 +169,48 @@ function numSafe(v) {
   return Number.isFinite(n) ? n : 0;
 }
 
+function normText(s) {
+  return String(s || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim();
+}
+
+function isTestamentoTipo(tipo) {
+  return /testamento/i.test(String(tipo || ''));
+}
+
+const TRAMITES_CON_MONTOS_PATTERNS = [
+  /\besc\b/,
+  /\bescr\b/,
+  /\bescrit\b/,
+  /\bescritura\b/,
+  /\besscritura\b/,
+  /\bcompra\s*venta\b/,
+  /\bcompraventa\b/,
+  /\bcv\b/,
+  /\bc\s+v\b/,
+  /\bproto\b/,
+  /\bprotocolizacion\b/,
+  /\bdon\b/,
+  /\bdonacion\b/,
+  /\badj\b/,
+  /\badjudicacion\b/,
+];
+
+function isTramiteConMontos(tipo) {
+  const t = normText(tipo)
+    .replace(/[./-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (!t) return false;
+  if (isTestamentoTipo(t)) return false;
+
+  return TRAMITES_CON_MONTOS_PATTERNS.some((rx) => rx.test(t));
+}
+
 function mapPresupuestoToRow(p) {
   const cargos = p.cargos || {};
   const honor  = p.honorariosCalc || {};
@@ -453,6 +495,67 @@ router.get('/', async (req, res) => {
   }
 });
 
+
+
+function buildEscriturasSummary(docs = []) {
+  const resumenPorAbogado = new Map();
+
+  let totalHonorariosGlobal = 0;
+  let totalImpuestosGlobal = 0;
+
+  let conPresupuesto = 0;
+  let sinPresupuesto = 0;
+
+  for (const d of docs) {
+    const abogado = String(d.abogado || 'Sin abogado').trim() || 'Sin abogado';
+    const honorarios = Number(d.totalHonorarios) || 0;
+    const impuestos = Number(d.totalImpuestos) || 0;
+
+    totalHonorariosGlobal += honorarios;
+    totalImpuestosGlobal += impuestos;
+
+    // Consideraremos que "tiene presupuesto" si trae cualquiera de estos montos > 0
+    const tienePresupuesto =
+      (Number(d.totalHonorarios) || 0) > 0 ||
+      (Number(d.totalImpuestos) || 0) > 0 ||
+      (Number(d.totalGastosExtra) || 0) > 0 ||
+      (Number(d.valorAvaluo) || 0) > 0;
+
+    if (tienePresupuesto) conPresupuesto++;
+    else sinPresupuesto++;
+
+    if (!resumenPorAbogado.has(abogado)) {
+  resumenPorAbogado.set(abogado, {
+    abogado,
+    tramites: 0,
+    conPresupuesto: 0,
+    sinPresupuesto: 0,
+    totalHonorarios: 0,
+    totalImpuestos: 0,
+  });
+}
+
+const item = resumenPorAbogado.get(abogado);
+item.tramites += 1;
+item.totalHonorarios += honorarios;
+item.totalImpuestos += impuestos;
+
+if (tienePresupuesto) item.conPresupuesto += 1;
+else item.sinPresupuesto += 1;
+  }
+
+  return {
+    porAbogado: Array.from(resumenPorAbogado.values()).sort((a, b) =>
+      a.abogado.localeCompare(b.abogado, 'es', { sensitivity: 'base' })
+    ),
+    totalHonorariosGlobal,
+    totalImpuestosGlobal,
+    conPresupuesto,
+    sinPresupuesto,
+    totalTramites: docs.length,
+  };
+}
+
 // GET /escrituras/export?format=excel|pdf&from=YYYY-MM-DD&to=YYYY-MM-DD&cliente=...&abogado=...&volumen=...
 router.get('/export', async (req, res) => {
   try {
@@ -550,8 +653,7 @@ router.get('/export', async (req, res) => {
 }
 
 ]);
-
-
+const summary = buildEscriturasSummary(docs);
     /* ===================== PDF ===================== */
     if (String(format).toLowerCase() === 'pdf') {
       res.setHeader('Content-Type', 'application/pdf');
@@ -764,11 +866,99 @@ const reciboJustificante =
 
       // Render
       const yHeader = drawPageHeader();
-      let y = drawTableHeader(yHeader);
-      rows.forEach(r => { y = drawRow(y, r); });
+let y = drawTableHeader(yHeader);
+rows.forEach(r => { y = drawRow(y, r); });
 
-      doc.end();
-      return;
+// =====================
+// RESUMEN FINAL PDF
+// =====================
+function ensureSpace(heightNeeded = 120) {
+  if (y + heightNeeded > PAGE.bottom) {
+    doc.addPage();
+    y = drawPageHeader();
+  }
+}
+
+
+
+ensureSpace(180);
+
+y += 14;
+doc.fontSize(13).fillColor('#000').text('Resumen general', PAGE.left, y);
+y = doc.y + 8;
+
+doc.fontSize(10).fillColor('#222');
+doc.text(`Total de trámites: ${summary.totalTramites}`, PAGE.left, y);
+y = doc.y + 4;
+doc.text(`Con presupuesto: ${summary.conPresupuesto}`, PAGE.left, y);
+y = doc.y + 4;
+doc.text(`Sin presupuesto: ${summary.sinPresupuesto}`, PAGE.left, y);
+y = doc.y + 4;
+doc.text(`Suma total honorarios: ${moneyFmt(summary.totalHonorariosGlobal)}`, PAGE.left, y);
+y = doc.y + 4;
+doc.text(`Suma total impuestos: ${moneyFmt(summary.totalImpuestosGlobal)}`, PAGE.left, y);
+y = doc.y + 10;
+
+doc.fontSize(12).fillColor('#000').text('Detalle por abogado', PAGE.left, y);
+y = doc.y + 8;
+
+// mini tabla
+const summaryCols = [
+  { title: 'Abogado', key: 'abogado', width: Math.round(PAGE.width * 0.28) },
+  { title: 'Trámites', key: 'tramites', width: Math.round(PAGE.width * 0.10) },
+  { title: 'Con pres.', key: 'conPresupuesto', width: Math.round(PAGE.width * 0.12) },
+  { title: 'Sin pres.', key: 'sinPresupuesto', width: Math.round(PAGE.width * 0.12) },
+  { title: 'Honorarios', key: 'totalHonorarios', width: Math.round(PAGE.width * 0.19) },
+  { title: 'Impuestos', key: 'totalImpuestos', width: Math.round(PAGE.width * 0.19) },
+];
+
+const summaryHeaderH = 18;
+
+const drawSummaryHeader = () => {
+  let x = PAGE.left;
+  doc.fontSize(9).fillColor('#000');
+  summaryCols.forEach(col => {
+    doc.rect(x, y, col.width, summaryHeaderH).stroke();
+    doc.text(col.title, x + 4, y + 4, { width: col.width - 8 });
+    x += col.width;
+  });
+  y += summaryHeaderH;
+};
+
+const drawSummaryRow = (row) => {
+  const values = {
+  abogado: row.abogado,
+  tramites: String(row.tramites),
+  conPresupuesto: String(row.conPresupuesto),
+  sinPresupuesto: String(row.sinPresupuesto),
+  totalHonorarios: moneyFmt(row.totalHonorarios),
+  totalImpuestos: moneyFmt(row.totalImpuestos),
+};
+
+  const rowH = 18;
+
+  if (y + rowH > PAGE.bottom) {
+    doc.addPage();
+    y = drawPageHeader();
+    drawSummaryHeader();
+  }
+
+  let x = PAGE.left;
+  summaryCols.forEach(col => {
+    doc.rect(x, y, col.width, rowH).stroke();
+    doc.text(String(values[col.key] ?? ''), x + 4, y + 4, {
+      width: col.width - 8,
+    });
+    x += col.width;
+  });
+  y += rowH;
+};
+
+drawSummaryHeader();
+summary.porAbogado.forEach(drawSummaryRow);
+
+doc.end();
+return;
     }
 
     /* ===================== EXCEL (igual que ya tenías) ===================== */
@@ -794,29 +984,76 @@ const reciboJustificante =
 { header: 'Recibo vinculado', key: 'reciboVinculado', width: 16 },
 
     ];
-const reciboNumero = r.reciboFinalDoc?._id ? String(r.reciboFinalDoc._id).slice(-5).toUpperCase() : '';
+//const reciboNumero = r.reciboFinalDoc?._id ? String(r.reciboFinalDoc._id).slice(-5).toUpperCase() : '';
 
     docs.forEach(r => {
-      ws.addRow({
-        numeroControl: r.numeroControl,
-        fecha: r.fecha ? new Date(r.fecha).toISOString().slice(0, 10) : '',
-        cliente: r.cliente,
-        tipoTramite: r.tipoTramite,
-        abogado: r.abogado,
-        volumen: r.volumen ?? '',
-        folioDesde: r.folioDesde ?? '',
-        folioHasta: r.folioHasta ?? '',
-        totalImpuestos: r.totalImpuestos ?? '',
-        valorAvaluo: r.valorAvaluo ?? '',
-        totalGastosExtra: r.totalGastosExtra ?? '',
-        totalHonorarios: r.totalHonorarios ?? '',
-        estatus_entrega: r.estatus_entrega ?? '',
-        estatus_recibo: r.estatus_recibo ?? '',
-        observaciones: r.observaciones || '',
-        recibo: reciboNumero ? (r.reciboEsVinculado ? `${reciboNumero} (VINC)` : reciboNumero) : '',
-  reciboVinculado: r.reciboEsVinculado ? 'SI' : '',
-      });
-    });
+  const reciboNumero = r.reciboFinal?._id
+    ? String(r.reciboFinal._id).slice(-5).toUpperCase()
+    : '';
+
+  ws.addRow({
+    numeroControl: r.numeroControl,
+    fecha: r.fecha ? new Date(r.fecha).toISOString().slice(0, 10) : '',
+    cliente: r.cliente,
+    tipoTramite: r.tipoTramite,
+    abogado: r.abogado,
+    volumen: r.volumen ?? '',
+    folioDesde: r.folioDesde ?? '',
+    folioHasta: r.folioHasta ?? '',
+    totalImpuestos: r.totalImpuestos ?? '',
+    valorAvaluo: r.valorAvaluo ?? '',
+    totalGastosExtra: r.totalGastosExtra ?? '',
+    totalHonorarios: r.totalHonorarios ?? '',
+    estatus_entrega: r.estatus_entrega ?? '',
+    estatus_recibo: r.estatus_recibo ?? '',
+    observaciones: r.observaciones || '',
+    recibo: reciboNumero
+      ? (r.reciboEsVinculado ? `${reciboNumero} (VINC)` : reciboNumero)
+      : '',
+    reciboVinculado: r.reciboEsVinculado ? 'SI' : '',
+  });
+});
+
+    // =====================
+// RESUMEN FINAL EXCEL
+// =====================
+const moneyNumFmt = '$#,##0.00';
+
+ws.addRow([]);
+ws.addRow(['RESUMEN GENERAL']);
+ws.addRow(['Total de trámites', summary.totalTramites]);
+ws.addRow(['Con presupuesto', summary.conPresupuesto]);
+ws.addRow(['Sin presupuesto', summary.sinPresupuesto]);
+ws.addRow(['Suma total honorarios', summary.totalHonorariosGlobal]);
+ws.addRow(['Suma total impuestos', summary.totalImpuestosGlobal]);
+
+// formato moneda a las filas de totales
+ws.getCell(`B${ws.lastRow.number - 1}`).numFmt = moneyNumFmt; // honorarios
+ws.getCell(`B${ws.lastRow.number}`).numFmt = moneyNumFmt;     // impuestos
+
+ws.addRow([]);
+ws.addRow(['DETALLE POR ABOGADO']);
+ws.addRow([
+  'Abogado',
+  'Trámites',
+  'Con presupuesto',
+  'Sin presupuesto',
+  'Total honorarios',
+  'Total impuestos'
+]);
+
+summary.porAbogado.forEach(item => {
+  const row = ws.addRow([
+    item.abogado,
+    item.tramites,
+    item.conPresupuesto,
+    item.sinPresupuesto,
+    item.totalHonorarios,
+    item.totalImpuestos,
+  ]);
+  row.getCell(5).numFmt = moneyNumFmt;
+  row.getCell(6).numFmt = moneyNumFmt;
+});
 
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', 'attachment; filename="escrituras.xlsx"');
@@ -940,7 +1177,7 @@ router.post('/', async (req, res) => {
       }
     }
 
-    const { clienteId, clienteNumero } = req.body || {}; // ✅ clienteNumero opcional
+    const { clienteId, clienteNumero, presupuestoId } = req.body || {};// ✅ clienteNumero opcional
     const now = new Date();
 
     let base = {
@@ -988,6 +1225,32 @@ router.post('/', async (req, res) => {
         base.cliente = String(num);
         clienteNumParaPresupuesto = num;
       }
+    }
+
+
+
+        // =========================
+    // 2.5) Candado backend: trámites con montos requieren presupuesto
+    // =========================
+    const tipoFinal = String(base.tipoTramite || '').trim();
+    const requierePresupuesto = isTramiteConMontos(tipoFinal);
+
+    let presupuestoDoc = null;
+
+    if (requierePresupuesto) {
+      if (!presupuestoId) {
+        return res.status(400).json({
+          mensaje: 'Este trámite requiere seleccionar un presupuesto antes de tomar número de escritura.'
+        });
+      }
+
+      presupuestoDoc = await Presupuesto.findById(presupuestoId).lean();
+      if (!presupuestoDoc) {
+        return res.status(400).json({
+          mensaje: 'El presupuesto seleccionado no existe.'
+        });
+      }
+
     }
 
     // =========================
@@ -1062,44 +1325,58 @@ router.post('/', async (req, res) => {
       if (totalHonorarios !== undefined) base.totalHonorarios = totalHonorarios;
     }
 
+        // =========================
+    // 6) ✅ AUTO-LLENADO DESDE EL PRESUPUESTO SELECCIONADO
     // =========================
-    // 6) ✅ AUTO-LLENADO DESDE PRESUPUESTO (si NO vienen montos)
-    // =========================
-    if (!montosYaVienen && Number.isFinite(clienteNumParaPresupuesto)) {
-      const pres = await Presupuesto
-        .findOne({ cliente: clienteNumParaPresupuesto })
-        .sort({ createdAt: -1 })
-        .lean();
+    if (!montosYaVienen && presupuestoDoc) {
+      const pres = presupuestoDoc;
+      const cargos = pres.cargos || {};
+      const honor = pres.honorariosCalc || {};
 
-      if (pres) {
-        const cargos = pres.cargos || {};
-        const honor = pres.honorariosCalc || {};
+      const impuestosKeys = [
+        'isr', 'isrAdquisicion',
+        'traslacionDominio', 'traslacionDominio2', 'traslacionDominioRecargos',
+        'ivaLocalComerc', 'actosJuridicos',
+        'impuestoCedular', 'impuestoPredial',
+      ];
 
-        const sumKeys = (obj, keys) =>
-          keys.reduce((acc, k) => acc + (Number(obj?.[k]) || 0), 0);
+      const gastosKeys = [
+        'registroPublico', 'registroPubVtaHip', 'registroPubPoderes', 'registroPubOtros', 'registroPublicoRecargos',
+        'solicPermiso', 'avisoPermiso', 'costoAvaluo', 'gastosGestiones',
+        'tramiteForaneo', 'otrosConceptos',
+        'certificados1', 'certificados2', 'certificados3',
+      ];
 
-        const impuestosKeys = [
-          'isr','isrAdquisicion',
-          'traslacionDominio','traslacionDominio2','traslacionDominioRecargos',
-          'ivaLocalComerc','actosJuridicos',
-          'impuestoCedular','impuestoPredial',
-        ];
+      base.valorAvaluo = numOrNull(
+        pres.valorAvaluo ??
+        pres.valor_avaluo ??
+        pres.avaluo ??
+        pres.valorOperacion ??
+        0
+      );
 
-        const gastosKeys = [
-          'registroPublico','registroPubVtaHip','registroPubPoderes','registroPubOtros','registroPublicoRecargos',
-          'solicPermiso','avisoPermiso','costoAvaluo','gastosGestiones',
-          'tramiteForaneo','otrosConceptos',
-          'certificados1','certificados2','certificados3',
-        ];
+      base.totalHonorarios = numOrNull(
+        pres.totalHonorarios ??
+        pres.total_honorarios ??
+        honor.totalHonorarios ??
+        honor.total_honorarios ??
+        0
+      );
 
-        base.valorAvaluo = numOrNull(pres.avaluo ?? pres.valorOperacion ?? 0);
-        base.totalHonorarios = numOrNull(honor.totalHonorarios ?? 0);
-        base.totalImpuestos = numOrNull(sumKeys(cargos, impuestosKeys));
-        base.totalGastosExtra = numOrNull(sumKeys(cargos, gastosKeys));
+      base.totalImpuestos = numOrNull(
+        pres.totalImpuestos ??
+        pres.total_impuestos ??
+        sumKeys(cargos, impuestosKeys)
+      );
 
-        // opcional: empujar tipoTramite desde el presupuesto si quieres
-        // if (pres.tipoTramite) base.tipoTramite = pres.tipoTramite;
-      }
+      base.totalGastosExtra = numOrNull(
+        pres.totalGastosExtra ??
+        pres.total_gastos_extra ??
+        sumKeys(cargos, gastosKeys)
+      );
+
+      // opcional: guardar referencia al presupuesto
+      base.presupuestoId = pres._id;
     }
 
     // Crear
@@ -1312,6 +1589,7 @@ const MAX_FOLIO_USABLE = 298;
   'fecha',
   'abogado',
   'observaciones',
+  'presupuestoId',
 
   // ✅ nuevos del modal estatus
   'documentos',
@@ -1367,6 +1645,48 @@ if ('documentos' in body) base.documentos = docsObj;
       fecha         : base.fecha         ?? current.fecha,
       abogado       : base.abogado       ?? current.abogado,
     };
+
+    // === Candado backend: si el trámite final requiere presupuesto, debe existir ===
+const tipoFinalEdit = String(merged.tipoTramite || '').trim();
+const requierePresupuestoEdit = isTramiteConMontos(tipoFinalEdit);
+
+// presupuestoId final = lo que mandan en body o lo que ya tenía
+const presupuestoIdBody =
+  body.presupuestoId === undefined
+    ? undefined
+    : (body.presupuestoId === null || body.presupuestoId === '' ? null : body.presupuestoId);
+
+const presupuestoIdFinal =
+  presupuestoIdBody !== undefined
+    ? presupuestoIdBody
+    : (current.presupuestoId ?? null);
+
+let presupuestoDocEdit = null;
+
+if (requierePresupuestoEdit) {
+  if (!presupuestoIdFinal) {
+    return res.status(400).json({
+      mensaje: 'Este trámite requiere presupuesto seleccionado.'
+    });
+  }
+
+  presupuestoDocEdit = await Presupuesto.findById(presupuestoIdFinal).lean();
+  if (!presupuestoDocEdit) {
+    return res.status(400).json({
+      mensaje: 'El presupuesto seleccionado no existe.'
+    });
+  }
+
+  const clienteFinalNum = Number(merged.cliente);
+  if (
+    Number.isFinite(clienteFinalNum) &&
+    Number(presupuestoDocEdit.cliente) !== clienteFinalNum
+  ) {
+    return res.status(400).json({
+      mensaje: 'El presupuesto seleccionado no corresponde al cliente de esta escritura.'
+    });
+  }
+}
 
     if (!merged.numeroControl || !merged.tipoTramite || !merged.cliente || !merged.fecha || !merged.abogado) {
       return res.status(400).json({ mensaje: 'Todos los campos son obligatorios' });
@@ -1529,6 +1849,7 @@ if (touchedMontos && hasMontoValue) {
           fecha        : merged.fecha,
           abogado      : merged.abogado,
           ...(out.observaciones !== undefined ? { observaciones: out.observaciones } : {}),
+          ...(presupuestoIdBody !== undefined ? { presupuestoId: presupuestoIdBody } : {}),
           ...(out.volumen     !== undefined ? { volumen: out.volumen } : {}),
           ...(out.folioDesde  !== undefined ? { folioDesde: out.folioDesde } : {}),
           ...(out.folioHasta  !== undefined ? { folioHasta: out.folioHasta } : {}),

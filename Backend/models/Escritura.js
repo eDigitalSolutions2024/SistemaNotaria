@@ -33,6 +33,14 @@ const EscrituraSchema = new Schema(
     totalGastosExtra: { type: Number, default: null, set: numOrNull },
     totalHonorarios: { type: Number, default: null, set: numOrNull },
 
+    // referencia al presupuesto usado para esta escritura
+    presupuestoId: {
+      type: Schema.Types.ObjectId,
+      ref: 'Presupuesto',
+      default: null,
+      index: true,
+    },
+
     // ===== CAMPOS operativos / estatus =====
     observaciones: { type: String, default: '' },
     estatus_entrega: {

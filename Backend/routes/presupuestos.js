@@ -277,6 +277,29 @@ const fitOneLine = (doc, text, maxW) => {
         });
 
         y += rowH;
+
+        // espacio extra entre I.S.R Adquisición y Tras. de Dominio
+    if (label === 'I.S.R. Adquisición') {
+      y += 6; // prueba con 4, 6 u 8 según cómo lo quieras ver
+    }
+
+    // espacios extra entre conceptos de Reg. Pub.
+    if (
+      label === 'Registro Público' ||
+      label === 'Reg. Pub. Vta/Hipot' ||
+      label === 'Reg. Pub. Poderes'
+    ) {
+      y += 6;
+    }
+
+        // espacios extra en columna derecha
+    if (
+      label === 'IVA Local Comerc' ||
+      label === 'Gastos y Gestiones'
+    ) {
+      y += 6;
+    }
+
       });
     };
 

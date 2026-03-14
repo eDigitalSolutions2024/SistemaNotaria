@@ -107,6 +107,10 @@ export default function Presupuesto() {
   const [success, setSuccess] = useState('');
   const [openConsulta, setOpenConsulta] = useState(false);
 
+  const [openClienteExpress, setOpenClienteExpress] = useState(false);
+const [clienteExpressNombre, setClienteExpressNombre] = useState('');
+const [savingClienteExpress, setSavingClienteExpress] = useState(false);
+
   useEffect(() => {
     console.log('[DEBUG form.clienteId]', form.clienteId);
   }, [form.clienteId]);
@@ -157,24 +161,27 @@ export default function Presupuesto() {
     return Number.isFinite(n) ? n : null;
   }, [selectedCliente]);
 
-  useEffect(() => {
-    const fetchClientes = async () => {
-      try {
-        setLoadingClientes(true);
-        setError('');
-        const res = await api.get('/clientes/by-servicio', {
-          params: { servicio: 'Presupuesto' }
-        });
-        setClientes(res.data || []);
-      } catch (err) {
-        console.error(err);
-        setError('Error al cargar clientes');
-      } finally {
-        setLoadingClientes(false);
-      }
-    };
-    fetchClientes();
-  }, []);
+  const fetchClientes = async () => {
+  try {
+    setLoadingClientes(true);
+    setError('');
+    const res = await api.get('/clientes/by-servicio', {
+      params: { servicio: 'Presupuesto' }
+    });
+    setClientes(res.data || []);
+    return res.data || [];
+  } catch (err) {
+    console.error(err);
+    setError('Error al cargar clientes');
+    return [];
+  } finally {
+    setLoadingClientes(false);
+  }
+};
+
+useEffect(() => {
+  fetchClientes();
+}, []);
 
  const clienteOptions = useMemo(() => {
   const list = [...(clientes || [])]
@@ -218,6 +225,57 @@ export default function Presupuesto() {
       clienteId: option?.value || '',
     }));
   };
+
+
+  const handleCrearClienteExpress = async () => {
+  setError('');
+  setSuccess('');
+
+  const nombre = clienteExpressNombre.trim();
+
+  if (!nombre) {
+    setError('Escribe el nombre del cliente');
+    return;
+  }
+
+  try {
+    setSavingClienteExpress(true);
+
+    const body = {
+      nombre,
+      servicio: 'Presupuesto',
+      responsable: form.responsable || '',
+    };
+
+    const res = await api.post('/clientes/express-presupuesto', body);
+
+    const nuevoCliente = res.data;
+
+    await fetchClientes();
+
+    const nuevoId =
+      nuevoCliente?._id ||
+      nuevoCliente?.id ||
+      nuevoCliente?.cliente?._id ||
+      '';
+
+    if (nuevoId) {
+      setForm((prev) => ({
+        ...prev,
+        clienteId: nuevoId,
+      }));
+    }
+
+    setClienteExpressNombre('');
+    setOpenClienteExpress(false);
+    setSuccess('Cliente express creado correctamente');
+  } catch (err) {
+    console.error(err);
+    setError(err.response?.data?.message || 'Error al crear cliente express');
+  } finally {
+    setSavingClienteExpress(false);
+  }
+};
 
   // avalúo = valorOperacion
   useEffect(() => {
@@ -434,19 +492,35 @@ const honorariosMinOk = useMemo(
           <h2 className="pres-card-title">Datos del cliente</h2>
 
           <div className="pres-row">
-            <div className="pres-field pres-field-full">
-              <label>Cliente</label>
-              <Select
-                options={clienteOptions}
-                value={selectedClienteOption}
-                onChange={handleClienteChange}
-                isLoading={loadingClientes}
-                placeholder="Selecciona un cliente..."
-                classNamePrefix="pres-select"
-                isClearable
-              />
-            </div>
-          </div>
+  <div className="pres-field pres-field-full">
+    <label>Cliente</label>
+
+    <div className="pres-cliente-row">
+  <div className="pres-cliente-select">
+    <Select
+      options={clienteOptions}
+      value={selectedClienteOption}
+      onChange={handleClienteChange}
+      isLoading={loadingClientes}
+      placeholder="Selecciona un cliente..."
+      classNamePrefix="pres-select"
+      isClearable
+    />
+  </div>
+
+  <button
+    type="button"
+    className="pres-btn pres-cliente-btn"
+    onClick={() => {
+      setClienteExpressNombre('');
+      setOpenClienteExpress(true);
+    }}
+  >
+    + Cliente express
+  </button>
+</div>
+  </div>
+</div>
 
           <div className="pres-row pres-row-2">
             <div className="pres-field">
@@ -703,6 +777,73 @@ const honorariosMinOk = useMemo(
           setOpenConsulta(false);
         }}
       />
+
+
+
+      {openClienteExpress && (
+  <div
+    style={{
+      position: 'fixed',
+      inset: 0,
+      background: 'rgba(0,0,0,0.35)',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      zIndex: 9999,
+      padding: 16,
+    }}
+  >
+    <div
+      style={{
+        width: '100%',
+        maxWidth: 420,
+        background: '#fff',
+        borderRadius: 12,
+        padding: 20,
+        boxShadow: '0 20px 50px rgba(0,0,0,0.2)',
+      }}
+    >
+      <h3 style={{ marginTop: 0, marginBottom: 8 }}>Registrar cliente express</h3>
+      <p style={{ marginTop: 0, marginBottom: 16, color: '#555' }}>
+        Captura solo el nombre. El sistema lo registrará automáticamente para presupuesto.
+      </p>
+
+      <div className="pres-field">
+        <label>Nombre del cliente</label>
+        <input
+          type="text"
+          value={clienteExpressNombre}
+          onChange={(e) => setClienteExpressNombre(e.target.value)}
+          placeholder="Ej. Juan Pérez"
+          autoFocus
+        />
+      </div>
+
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 18 }}>
+        <button
+          type="button"
+          className="pres-btn"
+          onClick={() => {
+            setOpenClienteExpress(false);
+            setClienteExpressNombre('');
+          }}
+          disabled={savingClienteExpress}
+        >
+          Cancelar
+        </button>
+
+        <button
+          type="button"
+          className="pres-btn-primary"
+          onClick={handleCrearClienteExpress}
+          disabled={savingClienteExpress}
+        >
+          {savingClienteExpress ? 'Guardando...' : 'Guardar cliente'}
+        </button>
+      </div>
+    </div>
+  </div>
+)}
     </div>
   );
 }

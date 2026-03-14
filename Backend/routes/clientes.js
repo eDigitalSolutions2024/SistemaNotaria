@@ -447,6 +447,63 @@ router.get('/by-servicio', async (req, res) => {
 });
 
 
+router.post('/express-presupuesto', async (req, res) => {
+  try {
+    const nombre = req.body.nombre?.trim();
+    const abogadoPreferido = req.body.abogadoPreferido ?? null;
+    const numero_telefono = req.body.numero_telefono ?? '';
+
+    if (!nombre) {
+      return res.status(400).json({ mensaje: 'El nombre es obligatorio.' });
+    }
+
+    const vName = validateRealClientName(nombre);
+    if (!vName.ok) {
+      return res.status(400).json({ mensaje: vName.mensaje });
+    }
+
+    const nombreFinal = vName.nombreLimpio;
+
+    const ultimo = await Cliente.findOne().sort({ _id: -1 }).exec();
+    const nuevoId = ultimo ? ultimo._id + 1 : 2001;
+
+    let abogadoMostrar = null;
+
+    if (abogadoPreferido) {
+      abogadoMostrar = await Abogado.findOne({ _id: abogadoPreferido });
+    }
+
+    if (!abogadoMostrar) {
+      abogadoMostrar = await Abogado.findOne().sort({ orden: 1 });
+    }
+
+    const nuevoCliente = new Cliente({
+      _id: nuevoId,
+      nombre: nombreFinal,
+      numero_telefono,
+      servicio: 'Presupuesto',
+      tieneCita: false,
+      estado: 'Finalizado',
+      en_espera: false,
+      abogado_asignado: abogadoMostrar ? abogadoMostrar._id : null,
+      abogado_preferido: abogadoMostrar ? abogadoMostrar._id : null,
+      accion: 'PRESUPUESTO',
+      motivo: 'PRESUPUESTO',
+    });
+
+    await nuevoCliente.save();
+
+    const io = req.app.get('io');
+    io.emit('clienteActualizado');
+
+    return res.status(201).json(nuevoCliente);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ mensaje: 'Error al crear cliente express de presupuesto' });
+  }
+});
+
+
 // GET /clientes/:id  (trae un cliente por _id numérico)
 router.get('/:id', async (req, res) => {
   try {

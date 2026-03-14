@@ -130,25 +130,37 @@ async function checkHorarioTestamento({ apiBase, fecha, inicio, fin, excludeId }
 
 const isTestamentoTipo = (tipo) => /testamento/i.test(String(tipo || ''));
 
-const TIPOS_MONTOS_KEYWORDS = [
-  'ESCRITURA',
-  'COMPRA VENTA',
-  'COMPRAVENTA',
-  'PROTOCOLIZACION',
-  'DONACION',
-  'ADJUDICACION',
-  
+const TRAMITES_CON_MONTOS_PATTERNS = [
+  /\besc\b/,
+  /\bescr\b/,
+  /\bescrit\b/,
+  /\bescritura\b/,
+  /\besscritura\b/,
+  /\bcompra\s*venta\b/,
+  /\bcompraventa\b/,
+  /\bcv\b/,
+  /\bc\s+v\b/,
+  /\bproto\b/,
+  /\bprotocolizacion\b/,
+  /\bdon\b/,
+  /\bdonacion\b/,
+  /\badj\b/,
+  /\badjudicacion\b/,
 ];
 
 // 💰 Solo estos tipos de trámite llevan montos (impuestos, avalúo, etc.)
 const isTramiteConMontos = (tipo) => {
-  const t = norm(tipo);
+  const t = norm(tipo)
+    .replace(/[./-]+/g, ' ')   // C/V, COMPRA-VENTA, etc.
+    .replace(/\s+/g, ' ')
+    .trim();
+
   if (!t) return false;
 
   // Nunca aplicar montos a testamentos
-  if (isTestamentoTipo(tipo)) return false;
+  if (isTestamentoTipo(t)) return false;
 
-  return TIPOS_MONTOS_KEYWORDS.some((k) => t.includes(norm(k)));
+  return TRAMITES_CON_MONTOS_PATTERNS.some((rx) => rx.test(t));
 };
 
 
@@ -410,9 +422,16 @@ export default function Escrituras({ onOpenRecibo }) {
     isSpecialViewer ||
     roles.some((r) => ['ADMIN', 'RECEPCION', 'ABOGADO'].includes(r));
 
-  // 🔹 Quién puede HACER cosas con recibos (generar, adjuntar, justificar)
-  const canModifyRecibos =
-    roles.some((r) => ['ADMIN', 'RECEPCION'].includes(r));
+  // 🔹 Quién puede generar / adjuntar recibos
+const canModifyRecibos =
+  roles.some((r) => ['ADMIN', 'RECEPCION'].includes(r));
+
+// 🔹 Quién puede justificar recibos (solo admin)
+const canJustifyRecibos =
+  roles.some((r) => ['ADMIN'].includes(r));
+
+    const canTakeEscritura =
+  !roles.some((r) => ['RECEPCION'].includes(r));
 
   const [rows, setRows] = useState([]);
   const [editingId, setEditingId] = useState(null);
@@ -1076,7 +1095,7 @@ async function fetchPresupuestosAll(apiBase) {
           valorAvaluo: p.valorAvaluo ?? 0,
           totalGastosExtra: p.totalGastosExtra ?? 0,
           totalHonorarios: p.totalHonorarios ?? 0,
-          presupuestoId: p.presupuestoId ?? null, // opcional
+          presupuestoId: p.presupuestoId ?? p._id ?? p.id ?? null,
         }));
       } else {
         // si no hay presupuesto para ese cliente
@@ -1208,6 +1227,7 @@ const openPresupuestoPicker = async (target) => {
         valorAvaluo: row.valorAvaluo ?? row.valor_avaluo ?? null,
         totalGastosExtra: row.totalGastosExtra ?? row.total_gastos_extra ?? null,
         totalHonorarios: row.totalHonorarios ?? row.total_honorarios ?? null,
+        presupuestoId: row.presupuestoId ?? null,
       }
     }));
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -1248,6 +1268,15 @@ const openPresupuestoPicker = async (target) => {
 
   const onSaveNew = async () => {
   // 1) Validación central (obligatorios + folios + testamento HH:mm + montos si aplica)
+
+    if (!canTakeEscritura) {
+  return setMsg({
+    type: 'warn',
+    text: 'Tu usuario no tiene permiso para tomar número de escritura pública'
+  });
+}
+
+
   const errs = getNewFormErrors({
     newRow,
     newVolumen,
@@ -1266,6 +1295,14 @@ const openPresupuestoPicker = async (target) => {
   if (!cid) {
     return setMsg({ type: 'warn', text: 'Selecciona un cliente primero' });
   }
+
+  // 🔒 Candado: debe seleccionar presupuesto si el trámite usa montos
+if (isTramiteConMontos(newRow?.tipoTramite) && !newRow?.presupuestoId) {
+  return setMsg({
+    type: 'warn',
+    text: 'Debes seleccionar un presupuesto antes de guardar la escritura.'
+  });
+}
 
   // 3) Si es testamento: validar disponibilidad (solo una vez)
   const finalTipo = String(newRow.tipoTramite || '').trim();
@@ -1309,17 +1346,17 @@ const openPresupuestoPicker = async (target) => {
   try {
     // 5) Crear escritura (backend genera # de control)
     const postPayload = {
-      clienteId: cid,
-      // ✅ este es el que usa Presupuesto.cliente (ej. 2679)
+  clienteId: cid,
   clienteNumero: selectedCliente?.idCliente ?? selectedCliente?.id ?? selectedCliente?.numeroCliente ?? null,
+  presupuestoId: newRow?.presupuestoId ?? null,
 
-      volumen: newVolumen || null,
-      folioDesde: newFolioDesde ? Number(newFolioDesde) : null,
-      folioHasta: newFolioHasta ? Number(newFolioHasta) : null,
-      ...(isTestamentoTipo(finalTipo)
-        ? { horaLecturaInicio: newHoraInicio, horaLecturaFin: newHoraFin }
-        : {})
-    };
+  volumen: newVolumen || null,
+  folioDesde: newFolioDesde ? Number(newFolioDesde) : null,
+  folioHasta: newFolioHasta ? Number(newFolioHasta) : null,
+  ...(isTestamentoTipo(finalTipo)
+    ? { horaLecturaInicio: newHoraInicio, horaLecturaFin: newHoraFin }
+    : {})
+};
 
     const { data: resp } = await axios.post(`${API}/escrituras`, postPayload);
 
@@ -1351,26 +1388,27 @@ const openPresupuestoPicker = async (target) => {
     // 6) PUT de aseguramiento (por si POST ignora campos)
     if (createdId) {
       const payloadPut = {
-        numeroControl: Number(createdNumero || 0),
-        tipoTramite: finalTipo || undefined,
-        cliente: String(newRow.cliente || '').trim(),
-        fecha: newRow.fecha,
-        abogado: String(newRow.abogado || '').trim(),
-        ...(newVolumen ? { volumen: newVolumen } : {}),
-        ...(newFolioDesde ? { folioDesde: Number(newFolioDesde) } : {}),
-        ...(newFolioHasta ? { folioHasta: Number(newFolioHasta) } : {}),
-        ...(isTestamentoTipo(finalTipo)
-          ? { horaLecturaInicio: newHoraInicio, horaLecturaFin: newHoraFin }
-          : {}),
-        ...(aplicaMontos && userPusoMontos
-  ? {
-      totalImpuestos: Number(newRow.totalImpuestos),
-      valorAvaluo: Number(newRow.valorAvaluo),
-      totalGastosExtra: Number(newRow.totalGastosExtra),
-      totalHonorarios: Number(newRow.totalHonorarios)
-    }
-  : {})
-      };
+  numeroControl: Number(createdNumero || 0),
+  tipoTramite: finalTipo || undefined,
+  cliente: String(newRow.cliente || '').trim(),
+  fecha: newRow.fecha,
+  abogado: String(newRow.abogado || '').trim(),
+  presupuestoId: newRow?.presupuestoId ?? null,
+  ...(newVolumen ? { volumen: newVolumen } : {}),
+  ...(newFolioDesde ? { folioDesde: Number(newFolioDesde) } : {}),
+  ...(newFolioHasta ? { folioHasta: Number(newFolioHasta) } : {}),
+  ...(isTestamentoTipo(finalTipo)
+    ? { horaLecturaInicio: newHoraInicio, horaLecturaFin: newHoraFin }
+    : {}),
+  ...(aplicaMontos && userPusoMontos
+    ? {
+        totalImpuestos: Number(newRow.totalImpuestos),
+        valorAvaluo: Number(newRow.valorAvaluo),
+        totalGastosExtra: Number(newRow.totalGastosExtra),
+        totalHonorarios: Number(newRow.totalHonorarios)
+      }
+    : {})
+};
 
       const { data: updated } = await axios.put(`${API}/escrituras/${createdId}`, payloadPut);
 
@@ -1535,6 +1573,7 @@ const onSaveEdit = async (id) => {
     cliente: String(draft.cliente || '').trim(),
     fecha: draft.fecha,
     abogado: String(draft.abogado || '').trim(),
+      presupuestoId: draft.presupuestoId ?? null,
 
     ...(draft.volumen != null && String(draft.volumen).trim() !== '' ? { volumen: draft.volumen } : {}),
     ...(draft.folioDesde != null && String(draft.folioDesde).trim() !== '' ? { folioDesde: Number(draft.folioDesde) } : {}),
@@ -1596,47 +1635,54 @@ const onSaveEdit = async (id) => {
   };
 
     const startAdd = async () => {
-    // Candado por recibos pendientes
-    if (bloqueoPorRecibo) {
-      setMsg({
-        type: 'warn',
-        text: `No puedes tomar un nuevo número de escritura: tienes ${mySinReciboCount} escritura(s) sin recibo o justificante.`
-      });
-      return;
-    }
+  if (!canTakeEscritura) {
+    setMsg({
+      type: 'warn',
+      text: 'Tu usuario no tiene permiso para tomar número de escritura pública'
+    });
+    return;
+  }
 
-    setAdding(true);
-    setNewRow({ ...emptyRow, fecha: formatDateInput(new Date()) });
+  // Candado por recibos pendientes
+  if (bloqueoPorRecibo) {
+    setMsg({
+      type: 'warn',
+      text: `No puedes tomar un nuevo número de escritura: tienes ${mySinReciboCount} escritura(s) sin recibo o justificante.`
+    });
+    return;
+  }
 
-    setSelectedCliente(null);
-    setNewSubtipo('');
-    setNewVolumen('');
-    setNewFolioDesde('');
-    setNewFolioHasta('');
-    setNewHoraInicio('');
-    setNewHoraFin('');
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+  setAdding(true);
+  setNewRow({ ...emptyRow, fecha: formatDateInput(new Date()) });
 
-    // volumen automático (bloqueado)
-    try {
-      const vol = await fetchVolumenActual(API);
-      if (vol != null) {
-        setNewVolumen(String(vol));
-        setVolumenEditable(false);
-        const sugerido = await suggestNextFolioFor(API, vol);
-        if (sugerido != null) {
-          setNewFolioDesde(String(sugerido));
-          setNewFolioHasta((prev) => prev || String(sugerido));
-        }
-      } else {
-        setVolumenEditable(true);
-        setMsg({ type: 'warn', text: 'No fue posible determinar el volumen actual.' });
+  setSelectedCliente(null);
+  setNewSubtipo('');
+  setNewVolumen('');
+  setNewFolioDesde('');
+  setNewFolioHasta('');
+  setNewHoraInicio('');
+  setNewHoraFin('');
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+
+  try {
+    const vol = await fetchVolumenActual(API);
+    if (vol != null) {
+      setNewVolumen(String(vol));
+      setVolumenEditable(false);
+      const sugerido = await suggestNextFolioFor(API, vol);
+      if (sugerido != null) {
+        setNewFolioDesde(String(sugerido));
+        setNewFolioHasta((prev) => prev || String(sugerido));
       }
-    } catch {
+    } else {
       setVolumenEditable(true);
       setMsg({ type: 'warn', text: 'No fue posible determinar el volumen actual.' });
     }
-  };
+  } catch {
+    setVolumenEditable(true);
+    setMsg({ type: 'warn', text: 'No fue posible determinar el volumen actual.' });
+  }
+};
 
 
   const handleSelectFile = async (e) => {
@@ -2051,17 +2097,22 @@ const onSaveEdit = async (id) => {
       return (
         <div style={{ display: 'flex', alignItems: 'stretch', width: '100%', gap: 6 }}>
           <textarea
-            rows={3}
-            value={value}
-            onChange={(e) => {
-              const v = e.target.value;
-              setObsDrafts((prev) => (prev[id] === v ? prev : { ...prev, [id]: v }));
-            }}
-            onKeyDown={onKeyDown}
-            onKeyDownCapture={stopGrid}
-            onClick={stopGrid}
-            onFocus={stopGrid}
-            placeholder="Escribe aquí…  (Enter = guardar · Shift+Enter = salto de línea)"
+  rows={3}
+  value={value}
+  onChange={(e) => {
+    const v = e.target.value;
+    setObsDrafts((prev) => (prev[id] === v ? prev : { ...prev, [id]: v }));
+  }}
+  onBlur={async () => {
+    if (!obsSaving[id]) {
+      await saveObs(id, row);
+    }
+  }}
+  onKeyDown={onKeyDown}
+  onKeyDownCapture={stopGrid}
+  onClick={stopGrid}
+  onFocus={stopGrid}
+  placeholder="Escribe aquí… (Enter = guardar · Shift+Enter = salto de línea · al salir también guarda)"
             style={{
               width: '100%',
               minHeight: 56,
@@ -2146,13 +2197,15 @@ const onSaveEdit = async (id) => {
 
       {/* Barra de acciones */}
       <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
-        <button
-          className="btn btn-primary"
-          onClick={startAdd}
-          disabled={adding || editingId || bloqueoPorRecibo}
-        >
-          + Agregar escritura
-        </button>
+        {canTakeEscritura && (
+  <button
+    className="btn btn-primary"
+    onClick={startAdd}
+    disabled={adding || editingId || bloqueoPorRecibo}
+  >
+    + Agregar escritura
+  </button>
+)}
 
 {bloqueoPorRecibo && (
   <span style={{ fontSize: 12, color: '#b45309' }}>
@@ -2354,13 +2407,13 @@ if (sugerido != null) {
       }}
     >
       <Button
-        variant="outlined"
-        size="small"
-        onClick={() => openPresupuestoPicker('new')}
-        
-      >
-        Elegir presupuesto…
-      </Button>
+  variant={newRow?.presupuestoId ? "contained" : "outlined"}
+  color={newRow?.presupuestoId ? "success" : "primary"}
+  size="small"
+  onClick={() => openPresupuestoPicker('new')}
+>
+  {newRow?.presupuestoId ? 'Presupuesto seleccionado' : 'Elegir presupuesto…'}
+</Button>
     </div>
 
     <div
@@ -2372,41 +2425,33 @@ if (sugerido != null) {
       }}
     >
       <TextField
-        label="Total Impuestos (sistema)"
-        type="number"
-        size="small"
-        value={newRow.totalImpuestos ?? ''}
-        onChange={(e) =>
-          setNewRow((prev) => ({ ...prev, totalImpuestos: e.target.value }))
-        }
-      />
-      <TextField
-        label="Valor Avalúo (sistema)"
-        type="number"
-        size="small"
-        value={newRow.valorAvaluo ?? ''}
-        onChange={(e) =>
-          setNewRow((prev) => ({ ...prev, valorAvaluo: e.target.value }))
-        }
-      />
-      <TextField
-        label="Total Gastos Extra (sistema)"
-        type="number"
-        size="small"
-        value={newRow.totalGastosExtra ?? ''}
-        onChange={(e) =>
-          setNewRow((prev) => ({ ...prev, totalGastosExtra: e.target.value }))
-        }
-      />
-      <TextField
-        label="Total Honorarios (sistema)"
-        type="number"
-        size="small"
-        value={newRow.totalHonorarios ?? ''}
-        onChange={(e) =>
-          setNewRow((prev) => ({ ...prev, totalHonorarios: e.target.value }))
-        }
-      />
+  label="Total Impuestos (sistema)"
+  type="number"
+  size="small"
+  value={newRow.totalImpuestos ?? ''}
+  InputProps={{ readOnly: true }}
+/>
+<TextField
+  label="Valor Avalúo (sistema)"
+  type="number"
+  size="small"
+  value={newRow.valorAvaluo ?? ''}
+  InputProps={{ readOnly: true }}
+/>
+<TextField
+  label="Total Gastos Extra (sistema)"
+  type="number"
+  size="small"
+  value={newRow.totalGastosExtra ?? ''}
+  InputProps={{ readOnly: true }}
+/>
+<TextField
+  label="Total Honorarios (sistema)"
+  type="number"
+  size="small"
+  value={newRow.totalHonorarios ?? ''}
+  InputProps={{ readOnly: true }}
+/>
     </div>
   </>
 )}
@@ -2414,15 +2459,16 @@ if (sugerido != null) {
 
           <div style={{ whiteSpace: 'nowrap' }}>
   <button
-      onClick={onSaveNew}
-      disabled={
-        !isNewCoreComplete(newRow) ||
-        !isNewFoliosValid(newVolumen, newFolioDesde, newFolioHasta) ||
-        !isNewTestamentoValid(newRow?.tipoTramite, newHoraInicio, newHoraFin) ||
-        !selectedCliente ||
-        (isTramiteConMontos(newRow?.tipoTramite) && !isNewMoneyComplete(newRow))
-      }
-    >
+  onClick={onSaveNew}
+  disabled={
+    !isNewCoreComplete(newRow) ||
+    !isNewFoliosValid(newVolumen, newFolioDesde, newFolioHasta) ||
+    !isNewTestamentoValid(newRow?.tipoTramite, newHoraInicio, newHoraFin) ||
+    !selectedCliente ||
+    (isTramiteConMontos(newRow?.tipoTramite) && !newRow?.presupuestoId) ||
+    (isTramiteConMontos(newRow?.tipoTramite) && !isNewMoneyComplete(newRow))
+  }
+>
   Guardar
 </button>
 
@@ -2566,33 +2612,33 @@ if (sugerido != null) {
 {isTramiteConMontos(drafts[editingId]?.tipoTramite) && (
   <div style={{ gridColumn: '1 / -1', display: 'grid', gridTemplateColumns: 'repeat(4, minmax(180px, 1fr))', gap: 8 }}>
     <TextField
-      label="Total Impuestos (sistema)"
-      type="number"
-      size="small"
-      value={drafts[editingId]?.totalImpuestos ?? ''}
-      onChange={(e) => onChangeDraft(editingId, 'totalImpuestos', e.target.value)}
-    />
-    <TextField
-      label="Valor Avalúo (sistema)"
-      type="number"
-      size="small"
-      value={drafts[editingId]?.valorAvaluo ?? ''}
-      onChange={(e) => onChangeDraft(editingId, 'valorAvaluo', e.target.value)}
-    />
-    <TextField
-      label="Total Gastos Extra (sistema)"
-      type="number"
-      size="small"
-      value={drafts[editingId]?.totalGastosExtra ?? ''}
-      onChange={(e) => onChangeDraft(editingId, 'totalGastosExtra', e.target.value)}
-    />
-    <TextField
-      label="Total Honorarios (sistema)"
-      type="number"
-      size="small"
-      value={drafts[editingId]?.totalHonorarios ?? ''}
-      onChange={(e) => onChangeDraft(editingId, 'totalHonorarios', e.target.value)}
-    />
+  label="Total Impuestos (sistema)"
+  type="number"
+  size="small"
+  value={drafts[editingId]?.totalImpuestos ?? ''}
+  InputProps={{ readOnly: true }}
+/>
+<TextField
+  label="Valor Avalúo (sistema)"
+  type="number"
+  size="small"
+  value={drafts[editingId]?.valorAvaluo ?? ''}
+  InputProps={{ readOnly: true }}
+/>
+<TextField
+  label="Total Gastos Extra (sistema)"
+  type="number"
+  size="small"
+  value={drafts[editingId]?.totalGastosExtra ?? ''}
+  InputProps={{ readOnly: true }}
+/>
+<TextField
+  label="Total Honorarios (sistema)"
+  type="number"
+  size="small"
+  value={drafts[editingId]?.totalHonorarios ?? ''}
+  InputProps={{ readOnly: true }}
+/>
   </div>
 )}
 
@@ -2751,16 +2797,35 @@ if (sugerido != null) {
             <div><b># Control:</b> {missingRow?.numeroControl ?? '—'}</div>
             <div><b>Cliente:</b> {missingRow?.cliente ?? '—'}</div>
             <div style={{ display: 'grid', gap: 8 }}>
-              <Button variant="contained" onClick={() => { closeMissing(); goToGenerarRecibo(missingRow); }}>
-                Generar recibo
-              </Button>
-              <Button variant="outlined" onClick={() => { setAttachQ(''); setAttachRows([]); setAttachSelectedId(null); setAttachOpen(true); searchReceipts(''); }}>
-                Adjuntar recibo existente
-              </Button>
-              <Button variant="text" onClick={() => setJustifyOpen(true)}>
-                Capturar justificante (sin recibo)
-              </Button>
-            </div>
+  <Button
+    variant="contained"
+    onClick={() => {
+      closeMissing();
+      goToGenerarRecibo(missingRow);
+    }}
+  >
+    Generar recibo
+  </Button>
+
+  <Button
+    variant="outlined"
+    onClick={() => {
+      setAttachQ('');
+      setAttachRows([]);
+      setAttachSelectedId(null);
+      setAttachOpen(true);
+      searchReceipts('');
+    }}
+  >
+    Adjuntar recibo existente
+  </Button>
+
+  {canJustifyRecibos && (
+    <Button variant="text" onClick={() => setJustifyOpen(true)}>
+      Capturar justificante (sin recibo)
+    </Button>
+  )}
+</div>
           </div>
         </DialogContent>
         <DialogActions>
@@ -2910,7 +2975,7 @@ if (sugerido != null) {
           {presupLoading ? (
             <div style={{ padding: 16 }}>Cargando presupuestos…</div>
           ) : presupRows.length === 0 ? (
-            <div style={{ padding: 16 }}>No se encontraron presupuestos para este cliente.</div>
+            <div style={{ padding: 16 }}>No se encontraron presupuestos.</div>
           ) : (
             <div style={{ width: '100%' }}>
               <DataGrid
