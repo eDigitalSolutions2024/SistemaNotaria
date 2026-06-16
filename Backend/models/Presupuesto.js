@@ -59,7 +59,7 @@ const presupuestoSchema = new Schema(
 
     tipoTramite: {
       type: String,
-      enum: ['Compraventa', 'Donacion', 'Adjudicacion', 'Protocolizacion'],
+      enum: ['Compraventa', 'Donacion', 'Adjudicacion', 'Protocolizacion', 'Protocolizacion de Fusion/Subdivision','Garantia Hipotecaria'],
       default: 'Compraventa',
     },
 
@@ -80,6 +80,10 @@ const presupuestoSchema = new Schema(
     observaciones: { type: String, default: '' },
 
     fecha: { type: Date, default: Date.now },
+
+    usadoEnEscritura: { type: Boolean, default: false },
+escrituraId: { type: Schema.Types.ObjectId, ref: 'Escritura', default: null },
+fechaUsoEscritura: { type: Date, default: null },
   },
   { timestamps: true }
 );

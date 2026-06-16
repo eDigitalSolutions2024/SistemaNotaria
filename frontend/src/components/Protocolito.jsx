@@ -185,31 +185,37 @@ const canJustifyRecibos =
   const getRowKey = (r) => r?._id ?? r?.id ?? r?.numeroTramite;
 
   /** Guarda solo 'observaciones' usando tu PUT actual (requiere campos obligatorios) */
-  const saveObs = async (id, fallbackRow) => {
-    const row = rows.find((r) => getRowKey(r) === id) || fallbackRow;
-    if (!row) return;
+ const saveObs = async (id, fallbackRow) => {
+  const row = rows.find((r) => getRowKey(r) === id) || fallbackRow;
+  if (!row) return;
 
-    const payload = {
-      numeroTramite: Number(row.numeroTramite),
-      tipoTramite: (row.tipoTramite || row.motivo || row.servicio || row.accion || '').trim(),
-      cliente: String(row.cliente || '').trim(),
-      fecha: row.fecha,
-      abogado: String(row.abogado || '').trim(),
-      observaciones: String(obsDrafts[id] ?? '').trim(),
-    };
+  const nuevaObs = String(obsDrafts[id] ?? '').trim();
+  const actualObs = String(row.observaciones ?? '').trim();
 
-    try {
-      setObsSaving((p) => ({ ...p, [id]: true }));
-      await axios.put(`${API}/protocolito/${id}`, payload);
-      setMsg({ type: 'ok', text: 'Observaciones guardadas' });
-      await fetchData();
-      setObsDrafts((p) => ({ ...p, [id]: payload.observaciones }));
-    } catch (e) {
-      setMsg({ type: 'error', text: e?.response?.data?.mensaje || 'No se pudo guardar observaciones' });
-    } finally {
-      setObsSaving((p) => ({ ...p, [id]: false }));
-    }
+  if (nuevaObs === actualObs) return;
+
+  const payload = {
+    numeroTramite: Number(row.numeroTramite),
+    tipoTramite: String(row.tipoTramite || row.motivo || row.servicio || row.accion || '').trim(),
+    cliente: String(row.cliente || '').trim(),
+    fecha: row.fecha,
+    abogado: String(row.abogado || '').trim(),
+    observaciones: nuevaObs,
   };
+
+  try {
+    setObsSaving((p) => ({ ...p, [id]: true }));
+    await axios.put(`${API}/protocolito/${id}`, payload);
+    setMsg({ type: 'ok', text: 'Observaciones guardadas' });
+    await fetchData();
+    setObsDrafts((p) => ({ ...p, [id]: nuevaObs }));
+  } catch (e) {
+    console.error('saveObs error:', e?.response?.data || e);
+    setMsg({ type: 'error', text: e?.response?.data?.mensaje || 'No se pudo guardar observaciones' });
+  } finally {
+    setObsSaving((p) => ({ ...p, [id]: false }));
+  }
+};
 
   const openMissing = (row) => {
     setMissingRow(row || null);
@@ -977,66 +983,75 @@ if (estado === 'no') {
 
   // Columna de Observaciones (solo admin)
   const observacionesColumn = {
-    field: 'observaciones',
-    headerName: 'Observaciones',
-    flex: 1.4,
-    minWidth: 260,
-    sortable: false,
-    filterable: false,
-    renderCell: (params) => {
-      const row = params?.row || {};
-      const id = getRowKey(row) ?? params?.id;
-      const value = obsDrafts[id] ?? '';
+  field: 'observaciones',
+  headerName: 'Observaciones',
+  flex: 1.4,
+  minWidth: 260,
+  sortable: false,
+  filterable: false,
+  renderCell: (params) => {
+    const row = params?.row || {};
+    const id = getRowKey(row) ?? params?.id;
+    const value = obsDrafts[id] ?? '';
 
-      const stopGrid = (e) => {
-        e.stopPropagation();
-        if (e.nativeEvent?.stopImmediatePropagation) e.nativeEvent.stopImmediatePropagation();
-      };
+    const stopGrid = (e) => {
+      e.stopPropagation();
+      if (e.nativeEvent?.stopImmediatePropagation) {
+        e.nativeEvent.stopImmediatePropagation();
+      }
+    };
 
-      const onKeyDown = async (e) => {
-        stopGrid(e);
-        if (e.key === 'Enter' && e.shiftKey) return; // salto de línea
-        if (e.key === 'Enter') {
-          e.preventDefault();
-          if (!obsSaving[id]) await saveObs(id, row);
+    const onKeyDown = async (e) => {
+      stopGrid(e);
+      if (e.key === 'Enter' && e.shiftKey) return;
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        if (!obsSaving[id]) {
+          await saveObs(id, row);
         }
-      };
+      }
+    };
 
-      return (
-        <div style={{ display: 'flex', alignItems: 'stretch', width: '100%', gap: 6 }}>
-          <textarea
-            rows={3}
-            value={value}
-            onChange={(e) => {
-              const v = e.target.value;
-              setObsDrafts((prev) => (prev[id] === v ? prev : { ...prev, [id]: v }));
-            }}
-            onKeyDown={onKeyDown}
-            onKeyDownCapture={stopGrid}
-            onClick={stopGrid}
-            onFocus={stopGrid}
-            placeholder="Escribe aquí…  (Enter = guardar · Shift+Enter = salto de línea)"
-            style={{
-              width: '100%',
-              minHeight: 56,
-              resize: 'vertical',
-              padding: 6,
-              borderRadius: 8,
-              border: '1px solid #ddd',
-              lineHeight: 1.35,
-              fontSize: 13,
-              boxSizing: 'border-box'
-            }}
-          />
-          {obsSaving[id] && (
-            <span style={{ fontSize: 12, alignSelf: 'center', whiteSpace: 'nowrap' }}>
-              Guardando…
-            </span>
-          )}
-        </div>
-      );
-    }
-  };
+    return (
+      <div style={{ display: 'flex', alignItems: 'stretch', width: '100%', gap: 6 }}>
+        <textarea
+          rows={3}
+          value={value}
+          onChange={(e) => {
+            const v = e.target.value;
+            setObsDrafts((prev) => (prev[id] === v ? prev : { ...prev, [id]: v }));
+          }}
+          onBlur={async () => {
+            if (!obsSaving[id]) {
+              await saveObs(id, row);
+            }
+          }}
+          onKeyDown={onKeyDown}
+          onKeyDownCapture={stopGrid}
+          onClick={stopGrid}
+          onFocus={stopGrid}
+          placeholder="Escribe aquí… (Enter = guardar · Shift+Enter = salto de línea · al salir también guarda)"
+          style={{
+            width: '100%',
+            minHeight: 56,
+            resize: 'vertical',
+            padding: 6,
+            borderRadius: 8,
+            border: '1px solid #ddd',
+            lineHeight: 1.35,
+            fontSize: 13,
+            boxSizing: 'border-box'
+          }}
+        />
+        {obsSaving[id] && (
+          <span style={{ fontSize: 12, alignSelf: 'center', whiteSpace: 'nowrap' }}>
+            Guardando…
+          </span>
+        )}
+      </div>
+    );
+  }
+};
 
   // === Construcción de columnas ===
   const showActionsColumn = isAdmin || canSeeReciboBtn;

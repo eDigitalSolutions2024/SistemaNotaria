@@ -510,6 +510,7 @@ const [estatusRow, setEstatusRow] = useState(null);
   const [presupLoading, setPresupLoading] = useState(false);
   const [presupRows, setPresupRows] = useState([]);
   const [presupTarget, setPresupTarget] = useState(null); // 'new' | (en futuro: id de edición)
+  const [presupQ, setPresupQ] = useState('');
 
 
   // --- Modal: lectura de justificante ---
@@ -1130,6 +1131,7 @@ const openPresupuestoPicker = async (target) => {
   }
 
   setPresupTarget('new');
+  setPresupQ('');
   setPresupOpen(true);
   setPresupLoading(true);
 
@@ -1145,10 +1147,11 @@ const openPresupuestoPicker = async (target) => {
 
 
   const closePresupuestoPicker = () => {
-    setPresupOpen(false);
-    setPresupRows([]);
-    setPresupTarget(null);
-  };
+  setPresupOpen(false);
+  setPresupRows([]);
+  setPresupQ('');
+  setPresupTarget(null);
+};
 
   // ✅ Aplica el presupuesto seleccionado al formulario correspondiente
   const applyPresupuestoToTarget = (presupuesto) => {
@@ -2191,6 +2194,25 @@ const onSaveEdit = async (id) => {
     }
   ];
 
+
+    const filteredPresupRows = React.useMemo(() => {
+    const query = norm(presupQ);
+    if (!query) return presupRows;
+
+    return presupRows.filter((r) => {
+      const cliente = norm(r?.clienteNombre || r?.cliente || '');
+      const descripcion = norm(r?.descripcion || '');
+      const fecha = norm(r?.fecha || '');
+
+      return (
+        cliente.includes(query) ||
+        descripcion.includes(query) ||
+        fecha.includes(query)
+      );
+    });
+  }, [presupRows, presupQ]);
+
+
   return (
     <div style={{ padding: 16 }}>
       <h2>Escrituras</h2>
@@ -2972,14 +2994,24 @@ if (sugerido != null) {
       <Dialog open={presupOpen} onClose={closePresupuestoPicker} fullWidth maxWidth="md">
         <DialogTitle>Seleccionar presupuesto</DialogTitle>
         <DialogContent dividers>
+
+          <TextField
+            fullWidth
+            size="small"
+            placeholder="Buscar por nombre del cliente, descripción o fecha…"
+            value={presupQ}
+            onChange={(e) => setPresupQ(e.target.value)}
+          />
+
+
           {presupLoading ? (
             <div style={{ padding: 16 }}>Cargando presupuestos…</div>
-          ) : presupRows.length === 0 ? (
+          ) : filteredPresupRows.length === 0 ? (
             <div style={{ padding: 16 }}>No se encontraron presupuestos.</div>
           ) : (
             <div style={{ width: '100%' }}>
               <DataGrid
-                rows={presupRows}
+                rows={filteredPresupRows}
                 getRowId={(r) => r.id}
                 autoHeight
                 loading={presupLoading}

@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const jwt = require('jsonwebtoken');
 const Abogado = require('../models/Abogado');
 const Cliente = require('../models/Cliente');
 const Sala = require('../models/Sala');
@@ -107,7 +108,18 @@ for (const phrase of BANNED_PHRASES) {
     'sinnombre','sin','nombre',
     'desconocido','anonimo','anonima',
     'na','n/a',
-    'asdf','qwerty', 
+    'asdf','qwerty',
+    // genéricos de persona
+    'particular','persona','individuo','sujeto',
+    'fulano','mengano','zutano','perengano',
+    // números cardinales
+    'uno','dos','tres','cuatro','cinco',
+    'seis','siete','ocho','nueve','diez',
+    'once','doce','trece','catorce','quince',
+    // números ordinales
+    'primero','primera','segundo','segunda',
+    'tercero','tercera','cuarto','cuarta',
+    'quinto','quinta','sexto','sexta',
   ]);
 
 
@@ -200,6 +212,16 @@ const nombreFinal = vName.nombreLimpio;
 // - SÍ guarda abogado asignado (para mostrar nombre)
 // - PERO NO lo marca ocupado
 if (String(tipoServicio).toLowerCase() === 'presupuesto') {
+  // Límite: el mismo usuario no puede registrar el mismo nombre más de 2 veces hoy
+  const userId = getUserIdFromReq(req);
+  const vecesHoy = await contarNombreHoyPorUsuario(nombreFinal, userId);
+  if (vecesHoy >= 2) {
+    return res.status(429).json({
+      mensaje: 'Ya registraste este nombre de cliente 2 veces hoy. No es posible registrarlo de nuevo.',
+      code: 'CLIENTE_NOMBRE_LIMITE',
+    });
+  }
+
   const ultimo = await Cliente.findOne().sort({ _id: -1 }).exec();
   const nuevoId = ultimo ? ultimo._id + 1 : 2001;
 
@@ -231,6 +253,7 @@ if (String(tipoServicio).toLowerCase() === 'presupuesto') {
 
     accion: 'PRESUPUESTO',
     motivo: 'PRESUPUESTO',
+    creadoPor: userId,
   });
 
   await nuevoCliente.save();
@@ -447,6 +470,45 @@ router.get('/by-servicio', async (req, res) => {
 });
 
 
+function escapeRegex(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// Extrae el identificador del usuario desde el JWT (si viene) o usa fallback
+function getUserIdFromReq(req) {
+  try {
+    const auth = req.headers.authorization || '';
+    const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
+    if (token) {
+      const payload = jwt.verify(token, process.env.JWT_SECRET || 'dev_secret');
+      return String(payload._id || payload.id || payload.nombre || payload.username || '');
+    }
+  } catch {}
+  return String(req.body?.responsable || req.ip || 'anon');
+}
+
+// Cuenta cuántas veces el usuario ya registró ese mismo nombre normalizado hoy
+async function contarNombreHoyPorUsuario(nombreFinal, userId) {
+  const stripped = stripAccents(nombreFinal).toLowerCase().replace(/\s+/g, ' ').trim();
+  const now = new Date();
+  const start = new Date(now); start.setHours(0, 0, 0, 0);
+  const end   = new Date(now); end.setHours(23, 59, 59, 999);
+
+  // Busca candidatos del mismo usuario hoy cuyo primer token coincida (solo servicio Presupuesto)
+  const firstToken = escapeRegex(stripped.split(' ')[0]);
+  const candidatos = await Cliente.find({
+    creadoPor: userId,
+    servicio: 'Presupuesto',
+    hora_llegada: { $gte: start, $lte: end },
+    nombre: { $regex: new RegExp(firstToken, 'i') },
+  }).lean();
+
+  // Filtra en memoria normalizando acentos y mayúsculas
+  return candidatos.filter(
+    (c) => stripAccents(c.nombre || '').toLowerCase().replace(/\s+/g, ' ').trim() === stripped
+  ).length;
+}
+
 router.post('/express-presupuesto', async (req, res) => {
   try {
     const nombre = req.body.nombre?.trim();
@@ -463,6 +525,16 @@ router.post('/express-presupuesto', async (req, res) => {
     }
 
     const nombreFinal = vName.nombreLimpio;
+
+    // Límite: el mismo usuario no puede registrar el mismo nombre más de 2 veces hoy
+    const userId = getUserIdFromReq(req);
+    const vecesHoy = await contarNombreHoyPorUsuario(nombreFinal, userId);
+    if (vecesHoy >= 2) {
+      return res.status(429).json({
+        mensaje: 'Ya registraste este nombre de cliente 2 veces hoy. No es posible registrarlo de nuevo.',
+        code: 'CLIENTE_NOMBRE_LIMITE',
+      });
+    }
 
     const ultimo = await Cliente.findOne().sort({ _id: -1 }).exec();
     const nuevoId = ultimo ? ultimo._id + 1 : 2001;
@@ -489,6 +561,7 @@ router.post('/express-presupuesto', async (req, res) => {
       abogado_preferido: abogadoMostrar ? abogadoMostrar._id : null,
       accion: 'PRESUPUESTO',
       motivo: 'PRESUPUESTO',
+      creadoPor: userId,
     });
 
     await nuevoCliente.save();

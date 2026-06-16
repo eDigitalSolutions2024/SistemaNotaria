@@ -7,7 +7,16 @@ const axios = require("axios");
 const { uploadMediaFromUrl, sendDocumentById } = require("../services/whatsapp");
 
 const Presupuesto = require('../models/Presupuesto');
+const Cliente = require('../models/Cliente');
 const PDFDocument = require('pdfkit');
+
+function stripAccents(s = '') {
+  return String(s).normalize('NFD').replace(/[̀-ͯ]/g, '');
+}
+
+function escapeRegex(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 
 const money = (n) =>
   (Number(n) || 0).toLocaleString('es-MX', { style: 'currency', currency: 'MXN' });
@@ -300,6 +309,15 @@ const fitOneLine = (doc, text, maxW) => {
       y += 6;
     }
 
+    // Línea de firma justo debajo de Actos Jurídicos
+    if (label === 'Actos Jurídicos') {
+      y += 4;
+      doc.save();
+      doc.lineWidth(0.7).moveTo(x, y).lineTo(x + colWidth - 8, y).stroke();
+      doc.restore();
+      y += 5;
+    }
+
       });
     };
 
@@ -374,17 +392,39 @@ router.post("/", async (req, res) => {
     }
 
     // ✅ RANGO DEL DÍA
-    // OJO: esto usa la zona horaria del server.
-    // Recomendación: configurar TZ=America/Chihuahua (o la que usen) en el server/PM2.
     const now = new Date();
     const start = new Date(now);
     start.setHours(0, 0, 0, 0);
     const end = new Date(now);
     end.setHours(23, 59, 59, 999);
 
-    // ✅ CONTAR presupuestos del mismo cliente por el mismo abogado en el mismo día
+    // ✅ LÍMITE POR NOMBRE: buscar todos los IDs de clientes con el mismo nombre
+    // (cubre el bypass de crear duplicados del mismo cliente)
+    const clienteDoc = await Cliente.findById(clienteId).lean();
+    const nombreCliente = clienteDoc?.nombre || '';
+    const nombreStripped = stripAccents(nombreCliente).toLowerCase().replace(/\s+/g, ' ').trim();
+
+    // IDs del cliente actual + cualquier duplicado con el mismo nombre (case-insensitive + sin acentos)
+    let clienteIdsAContar = [clienteId];
+    if (nombreStripped) {
+      const dupes = await Cliente.find({
+        nombre: { $regex: new RegExp('^' + escapeRegex(nombreCliente) + '$', 'i') },
+      }).lean().select('_id');
+      const dupeIds = dupes.map((d) => d._id);
+
+      // Segunda pasada en memoria para variantes con/sin acentos
+      const candidatos = await Cliente.find({
+        nombre: { $regex: new RegExp(escapeRegex(nombreStripped.split(' ')[0]), 'i') },
+      }).lean().select('_id nombre');
+      const extraIds = candidatos
+        .filter((c) => stripAccents(c.nombre || '').toLowerCase().replace(/\s+/g, ' ').trim() === nombreStripped)
+        .map((c) => c._id);
+
+      clienteIdsAContar = [...new Set([...dupeIds, ...extraIds, clienteId])];
+    }
+
     const count = await Presupuesto.countDocuments({
-      cliente: clienteId,
+      cliente: { $in: clienteIdsAContar },
       responsable: responsableReal,
       createdAt: { $gte: start, $lte: end },
     });

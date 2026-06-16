@@ -13,6 +13,7 @@ const clienteSchema = new mongoose.Schema({
   servicio:{ type: String, default: ''},
   tieneCita: { type: Boolean, default: false},
   abogado_preferido: { type: Number, default: null },  // ID numérico del abogado con el que tiene cita
+  creadoPor: { type: String, default: '' },
 
 },{_id: false});
 

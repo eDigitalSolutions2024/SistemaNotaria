@@ -142,6 +142,43 @@ const numOrNull = (v) => {
   return Number.isFinite(n) ? n : null;
 };
 
+
+// ⬇️ PEGA AQUÍ
+function parseYMDLocal(s) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(s || ''));
+  if (!m) return null;
+  const y = +m[1], mo = +m[2] - 1, d = +m[3];
+  return new Date(y, mo, d);
+}
+
+function parseFechaLoose(v) {
+  if (!v) return null;
+  if (v instanceof Date && !isNaN(v)) return v;
+
+  const localYMD = parseYMDLocal(v);
+  if (localYMD) return localYMD;
+
+  const iso = new Date(v);
+  if (!isNaN(iso)) return iso;
+
+  const s = String(v).trim();
+  const rx = /^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})(?:[ ,T]+(\d{1,2}):(\d{2})(?::(\d{2}))?)?(?:[ .]*([ap]\.?m?\.?))?$/i;
+  const m = s.match(rx);
+  if (!m) return null;
+
+  let d  = parseInt(m[1], 10);
+  let mo = parseInt(m[2], 10) - 1;
+  let y  = parseInt(m[3], 10);
+  let hh = parseInt(m[4] || '0', 10);
+  let mi = parseInt(m[5] || '0', 10);
+  let ss = parseInt(m[6] || '0', 10);
+  const ampm = (m[7] || '').toLowerCase();
+
+  if (ampm.startsWith('p') && hh < 12) hh += 12;
+  if (ampm.startsWith('a') && hh === 12) hh = 0;
+
+  return new Date(y < 100 ? 2000 + y : y, mo, d, hh, mi, ss);
+}
 // --- Helpers para Presupuesto ---
 
 // mismos conceptos que usas al auto-llenar en POST /escrituras
@@ -556,6 +593,33 @@ else item.sinPresupuesto += 1;
   };
 }
 
+
+function formatDateDMYUTC(value) {
+  if (!value) return '—';
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return '—';
+
+  const dd = String(d.getUTCDate()).padStart(2, '0');
+  const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const yyyy = d.getUTCFullYear();
+
+  return `${dd}/${mm}/${yyyy}`;
+}
+
+function formatDateYMDUTC(value) {
+  if (!value) return '';
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return '';
+
+  const dd = String(d.getUTCDate()).padStart(2, '0');
+  const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const yyyy = d.getUTCFullYear();
+
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+
+
 // GET /escrituras/export?format=excel|pdf&from=YYYY-MM-DD&to=YYYY-MM-DD&cliente=...&abogado=...&volumen=...
 router.get('/export', async (req, res) => {
   try {
@@ -571,10 +635,16 @@ router.get('/export', async (req, res) => {
     const filter = {};
 
     if (from || to) {
-      filter.fecha = {};
-      if (from) filter.fecha.$gte = dayjs(from).startOf('day').toDate();
-      if (to)   filter.fecha.$lte = dayjs(to).endOf('day').toDate();
-    }
+  filter.fecha = {};
+
+  if (from) {
+    filter.fecha.$gte = new Date(`${from}T00:00:00.000Z`);
+  }
+
+  if (to) {
+    filter.fecha.$lte = new Date(`${to}T23:59:59.999Z`);
+  }
+}
     if (cliente) filter.cliente = { $regex: String(cliente).trim(), $options: 'i' };
 
     // Si tu abogado en Escritura es string, esto está bien:
@@ -687,7 +757,7 @@ const summary = buildEscriturasSummary(docs);
 
       // Mapeo a filas “planas” para tabla
       const rows = docs.map(r => {
-        const fecha = r.fecha ? dayjs(r.fecha).format('DD/MM/YYYY') : '—';
+        const fecha = formatDateDMYUTC(r.fecha);
         const folioStr =
           (r.folioDesde != null && r.folioHasta != null) ? `${r.folioDesde} a ${r.folioHasta}` : '—';
 
@@ -993,7 +1063,7 @@ return;
 
   ws.addRow({
     numeroControl: r.numeroControl,
-    fecha: r.fecha ? new Date(r.fecha).toISOString().slice(0, 10) : '',
+    fecha: formatDateYMDUTC(r.fecha),
     cliente: r.cliente,
     tipoTramite: r.tipoTramite,
     abogado: r.abogado,
@@ -1096,7 +1166,7 @@ router.post('/import', upload.single('file'), async (req, res) => {
           numeroControl,
           tipoTramite: String(r.tipoTramite || r.tipo || r['Tipo de trámite'] || '—'),
           cliente: String(r.cliente || r['Cliente'] || '—'),
-          fecha: r.fecha ? new Date(r.fecha) : new Date(),
+          fecha: r.fecha ? (parseYMDLocal(r.fecha) || parseFechaLoose(r.fecha) || new Date(r.fecha)) : new Date(),
           abogado: String(r.abogado || r['Abogado'] || '—'),
           observaciones: String(r.observaciones || ''),
           volumen,
@@ -1160,6 +1230,7 @@ router.get('/folio/next', async (req, res) => {
 
 // POST /escrituras
 router.post('/', async (req, res) => {
+  let base = null;
   try {
     // 🔐 Candado: máximo 5 escrituras sin recibo por abogado
     const userName = getUserNameFromReq(req);
@@ -1180,7 +1251,7 @@ router.post('/', async (req, res) => {
     const { clienteId, clienteNumero, presupuestoId } = req.body || {};// ✅ clienteNumero opcional
     const now = new Date();
 
-    let base = {
+    base = {
       numeroControl: await nextNumeroControl(),
       tipoTramite: 'Por definir',
       cliente: '—',
@@ -1212,7 +1283,9 @@ router.post('/', async (req, res) => {
         base.abogado = cli.abogado || base.abogado;
         base.tipoTramite =
           cli.motivo || cli.tipoTramite || cli.servicio || cli.accion || base.tipoTramite;
-        base.fecha = cli.hora_llegada ? new Date(cli.hora_llegada) : base.fecha;
+        base.fecha = cli.hora_llegada
+  ? (parseYMDLocal(cli.hora_llegada) || parseFechaLoose(cli.hora_llegada) || new Date(cli.hora_llegada))
+  : base.fecha;
       }
     }
 
@@ -1379,20 +1452,75 @@ router.post('/', async (req, res) => {
       base.presupuestoId = pres._id;
     }
 
+
+    console.log('POST req.body.fecha:', req.body.fecha);
+
+console.log('POST base.fecha final:', base.fecha);
+
+
+let presupuestoBloqueado = null;
+
+if (base.presupuestoId) {
+  presupuestoBloqueado = await Presupuesto.findOneAndUpdate(
+    {
+      _id: base.presupuestoId,
+      usadoEnEscritura: false,
+    },
+    {
+      $set: {
+        usadoEnEscritura: true,
+        fechaUsoEscritura: new Date(),
+      },
+    },
+    { new: true }
+  );
+
+  if (!presupuestoBloqueado) {
+    return res.status(400).json({
+      mensaje: 'Este presupuesto ya fue utilizado en otra escritura',
+    });
+  }
+}
+
+
     // Crear
-    const created = await Escritura.create(base);
-    res.status(201).json(created);
+const created = await Escritura.create(base);
+
+if (base.presupuestoId) {
+  await Presupuesto.findByIdAndUpdate(base.presupuestoId, {
+    $set: {
+      escrituraId: created._id,
+    },
+  });
+}
+
+res.status(201).json(created);
 
   } catch (e) {
-    if (e?.code === 11000) return res.status(409).json({ mensaje: 'El número de control ya existe' });
-    res.status(500).json({ mensaje: 'Error creando escritura', detalle: e.message });
+  if (base?.presupuestoId) {
+    await Presupuesto.findByIdAndUpdate(base.presupuestoId, {
+      $set: {
+        usadoEnEscritura: false,
+        escrituraId: null,
+        fechaUsoEscritura: null,
+      },
+    }).catch(() => {});
   }
+
+  if (e?.code === 11000) {
+    return res.status(409).json({ mensaje: 'El número de control ya existe' });
+  }
+
+  res.status(500).json({ mensaje: 'Error creando escritura', detalle: e.message });
+}
 });
 
 // ✅ NUEVO: todos los presupuestos (para selector global)
 router.get('/presupuestos', async (req, res) => {
   try {
-    const presup = await Presupuesto.find({}).sort({ fecha: -1 }).lean();
+    const presup = await Presupuesto.find({ usadoEnEscritura: false })
+      .sort({ fecha: -1 })
+      .lean();
 
     const nums = [...new Set(presup.map(p => p.cliente).filter(v => v != null))];
 
@@ -1574,11 +1702,10 @@ const MAX_FOLIO_USABLE = 298;
       return v;
     };
     const toDateOrNull = (v) => {
-      if (v === undefined) return undefined;
-      if (v === null || v === '') return null;
-      const d = new Date(v);
-      return Number.isNaN(d.getTime()) ? null : d;
-    };
+  if (v === undefined) return undefined;
+  if (v === null || v === '') return null;
+  return parseYMDLocal(v) || parseFechaLoose(v) || null;
+};
 
     // --- datos de entrada ---
     const body = req.body || {};
@@ -1837,7 +1964,9 @@ if (touchedMontos && hasMontoValue) {
 
 // Si touchedMontos pero NO hay valores, ignoramos para que NO se borren.
 
-
+console.log('PUT body.fecha:', body.fecha);
+console.log('PUT base.fecha:', base.fecha);
+console.log('PUT merged.fecha:', merged.fecha);
     // aplicar cambios: construir $set final con merged + out
     await Escritura.updateOne(
       { _id: req.params.id },

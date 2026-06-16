@@ -11,12 +11,12 @@ const api = axios.create({
 });
 
 const REGISTRO_PUBLICO_TABLAS = {
-  2025: [
-    { min: 0, max: 100001, fee: 3015 },
-    { min: 100001, max: 200001, fee: 4220 },
-    { min: 200001, max: 400001, fee: 8234 },
-    { min: 400001, max: 700001, fee: 14256 },
-    { min: 700001, max: Infinity, fee: 20278 },
+  2026: [
+    { min: 0, max: 100001, fee: 3127 },
+    { min: 100001, max: 200001, fee: 4375 },
+    { min: 200001, max: 400001, fee: 8538 },
+    { min: 400001, max: 700001, fee: 14782 },
+    { min: 700001, max: Infinity, fee: 21025 },
   ],
 };
 
@@ -48,7 +48,7 @@ const initialForm = {
   valorOperacion: '',
   valorTerreno: '',
   valorConstruccion: '',
-  anioRegistro: { value: 2025, label: '2025' },
+  anioRegistro: { value: 2026, label: '2026' },
 
   cargos: {
     isr: '',
@@ -64,7 +64,7 @@ const initialForm = {
     solicPermiso: '',
     avisoPermiso: '',
     ivaLocalComerc: '',
-    actosJuridicos: '',
+    actosJuridicos: 0,
     costoAvaluo: '',
     gastosGestiones: '',
     impuestoCedular: '',
@@ -121,6 +121,14 @@ const [savingClienteExpress, setSavingClienteExpress] = useState(false);
       { value: 'Donacion', label: 'Donación' },
       { value: 'Adjudicacion', label: 'Adjudicación' },
       { value: 'Protocolizacion', label: 'Protocolización' },
+      {
+        value: 'Protocolizacion de Fusion/Subdivision',
+        label: 'Protocolización de Fusión/Subdivisión'
+      },
+      {
+        value: 'Garantia Hipotecaria',
+        label: 'Garantía Hipotecaria'
+      }
     ],
     []
   );
@@ -310,35 +318,86 @@ useEffect(() => {
 
   // Traslación dominio (auto)
   useEffect(() => {
-    if (!datosCalculo.puedeContinuar) return;
+  if (!datosCalculo.puedeContinuar) return;
 
-    const valorOperacion = parseNum(form.valorOperacion);
-    const tramite = form.tipoTramite?.value || 'Compraventa';
-    const rateBase = tramite === 'Compraventa' ? 0.02 : 0.01;
+  const valorOperacion = parseNum(form.valorOperacion);
+  const tramite = form.tipoTramite?.value || 'Compraventa';
 
-    const base = valorOperacion * rateBase;
-    const valorUniversitario = base * 0.04;
-    const total = base + valorUniversitario;
-
+  // 🔥 CASO ESPECIAL
+  if (
+  tramite === 'Protocolizacion de Fusion/Subdivision' ||
+  tramite === 'Garantia Hipotecaria'
+) {
     setForm((prev) => ({
       ...prev,
-      cargos: { ...prev.cargos, traslacionDominio: round2(total) },
+      cargos: { ...prev.cargos, traslacionDominio: 0 },
     }));
-  }, [datosCalculo.puedeContinuar, form.valorOperacion, form.tipoTramite]);
+    return;
+  }
+
+  const rateBase = tramite === 'Compraventa' ? 0.02 : 0.01;
+
+  const base = valorOperacion * rateBase;
+  const valorUniversitario = base * 0.04;
+  const total = base + valorUniversitario;
+
+  setForm((prev) => ({
+    ...prev,
+    cargos: { ...prev.cargos, traslacionDominio: round2(total) },
+  }));
+}, [datosCalculo.puedeContinuar, form.valorOperacion, form.tipoTramite]);
+
+
 
   // Registro público (auto)
-  useEffect(() => {
-    if (!datosCalculo.puedeContinuar) return;
+ useEffect(() => {
+  if (!datosCalculo.puedeContinuar) return;
 
-    const valorOperacion = parseNum(form.valorOperacion);
-    const year = form.anioRegistro?.value || 2025;
-    const fee = getRegistroPublicoFee(year, valorOperacion);
+  const tramite = form.tipoTramite?.value || 'Compraventa';
+  const year = form.anioRegistro?.value || 2026;
 
-    setForm((prev) => ({
-      ...prev,
-      cargos: { ...prev.cargos, registroPublico: fee },
-    }));
-  }, [datosCalculo.puedeContinuar, form.valorOperacion, form.anioRegistro]);
+  // 🔥 CASO ESPECIAL
+ // 🔥 Protocolización = tarifa mínima
+if (tramite === 'Protocolizacion de Fusion/Subdivision') {
+  const tabla = REGISTRO_PUBLICO_TABLAS[year];
+  const minFee = tabla?.[0]?.fee || 0;
+
+  setForm((prev) => ({
+    ...prev,
+    cargos: { ...prev.cargos, registroPublico: minFee },
+  }));
+
+  return;
+}
+
+// 🔥 Garantía hipotecaria = tarifa máxima
+if (tramite === 'Garantia Hipotecaria') {
+  const tabla = REGISTRO_PUBLICO_TABLAS[year];
+  const maxFee = tabla?.[tabla.length - 1]?.fee || 0;
+
+  setForm((prev) => ({
+    ...prev,
+    cargos: { ...prev.cargos, registroPublico: maxFee },
+  }));
+
+  return;
+}
+
+  const valorOperacion = parseNum(form.valorOperacion);
+  const fee = getRegistroPublicoFee(year, valorOperacion);
+
+  setForm((prev) => ({
+    ...prev,
+    cargos: { ...prev.cargos, registroPublico: fee },
+  }));
+}, [
+  datosCalculo.puedeContinuar,
+  form.valorOperacion,
+  form.anioRegistro,
+  form.tipoTramite, // 🔥 IMPORTANTE
+]);
+
+
 
   // Honorarios (auto)
   useEffect(() => {
@@ -362,6 +421,20 @@ useEffect(() => {
       },
     }));
   }, [datosCalculo.puedeContinuar, form.valorOperacion, form.honorariosCalc.porcentaje]);
+
+  // Gastos y gestiones (auto)
+  useEffect(() => {
+    if (!datosCalculo.puedeContinuar) return;
+    const valorOperacion = parseNum(form.valorOperacion);
+    let gastos = 0;
+    if (valorOperacion <= 300000) gastos = 1500;
+    else if (valorOperacion <= 750000) gastos = 2000;
+    else gastos = 2500;
+    setForm((prev) => ({
+      ...prev,
+      cargos: { ...prev.cargos, gastosGestiones: gastos },
+    }));
+  }, [datosCalculo.puedeContinuar, form.valorOperacion]);
 
   const bloquearAbajo = !datosCalculo.puedeContinuar;
 
@@ -424,7 +497,7 @@ const honorariosMinOk = useMemo(
       valorTerreno: parseNum(form.valorTerreno),
       valorConstruccion: parseNum(form.valorConstruccion),
 
-      anioRegistro: form.anioRegistro?.value || 2025,
+      anioRegistro: form.anioRegistro?.value || 2026,
 
       cargos: Object.fromEntries(Object.entries(form.cargos).map(([k, v]) => [k, parseNum(v)])),
 
@@ -703,19 +776,23 @@ const honorariosMinOk = useMemo(
               ['certificados1', 'Certificados (1)'],
               ['certificados2', 'Certificados (2)'],
               ['certificados3', 'Certificados (3)'],
-            ].map(([name, label]) => (
-              <div className="pres-field" key={name}>
-                <label>{label}</label>
-                <input
-                  disabled={bloquearAbajo}
-                  type="number"
-                  step="0.01"
-                  name={name}
-                  value={form.cargos[name]}
-                  onChange={handleCargoChange}
-                />
-              </div>
-            ))}
+            ].map(([name, label]) => {
+              const isAutoOtros = name === 'gastosGestiones';
+              return (
+                <div className="pres-field" key={name}>
+                  <label>{label}</label>
+                  <input
+                    disabled={bloquearAbajo}
+                    readOnly={isAutoOtros}
+                    type="number"
+                    step="0.01"
+                    name={name}
+                    value={form.cargos[name]}
+                    onChange={handleCargoChange}
+                  />
+                </div>
+              );
+            })}
           </div>
         </section>
 
