@@ -12,10 +12,19 @@ const path = require('path');
 const Protocolito = require('../models/Protocolito');
 const Cliente     = require('../models/Cliente');
 const Abogado     = require('../models/Abogado');
-const Recibo = require('../models/Recibo'); // <-- AJUSTA la ruta/nombre real
-
+const Recibo = require('../models/Recibo');
 
 const auth = require('../middleware/auth');
+const { buildVariables, generarDocx, PLANTILLAS_DIR } = require('../services/plantillaService');
+
+// Catálogo de plantillas Word disponibles
+const MANIFIESTO_PLANTILLAS = [
+  { id: 'poderirrev',         type: 'poder',        label: 'PPCAAAD Irrevocable',    file: 'PPCAAAD Lim Inm Irrevocable en Acta El a El 202509.docx' },
+  { id: 'poderrev',           type: 'poder',        label: 'PPCAAAD Revocable',      file: 'PPCAAAD Lim Inm Revocable en Acta El a El 202509.docx' },
+  { id: 'poder-ppc-amplio',   type: 'poder',        label: 'PPC Amplio en Acta',     file: 'PPC Amplio en Acta 202510.docx' },
+  { id: 'poder-ppcaa-amplio', type: 'poder',        label: 'PPCAA Amplio en Acta',   file: 'PPCAA Amplio en Acta 202510.docx' },
+  { id: 'ratif-vehicular',    type: 'ratificacion', label: 'Ratificación Vehicular', file: 'Ratificación Vehicular 202510.docx' },
+];
 
 // === Upload (para /import) ===
 const upload = multer({
@@ -1206,5 +1215,87 @@ router.post('/:id/justificante', /*authMiddleware,*/ async (req, res) => {
 });
 
 
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /api/Protocolito/:protocolitoId/plantilla/:plantillaId
+// Genera el Word dinámico consultando el trámite en BD.
+// ─────────────────────────────────────────────────────────────────────────────
+router.get('/:protocolitoId/plantilla/:plantillaId', async (req, res) => {
+  const { protocolitoId, plantillaId } = req.params;
+
+  console.log(`[DOCX] ── Solicitud recibida ──────────────────────────`);
+  console.log(`[DOCX] protocolitoId: ${protocolitoId}`);
+  console.log(`[DOCX] plantillaId:   ${plantillaId}`);
+
+  // 1. Validar plantilla
+  const plantilla = MANIFIESTO_PLANTILLAS.find(p => p.id === plantillaId);
+  if (!plantilla) {
+    console.error(`[DOCX] ERROR: Plantilla no encontrada en MANIFIESTO: ${plantillaId}`);
+    return res.status(404).json({ ok: false, msg: `Plantilla '${plantillaId}' no encontrada` });
+  }
+
+  // 2. Consultar trámite en BD
+  let tramite;
+  try {
+    tramite = await Protocolito.findById(protocolitoId).lean();
+  } catch (e) {
+    console.error(`[DOCX] ERROR al consultar BD:`, e.message);
+    return res.status(400).json({ ok: false, msg: 'ID de trámite inválido' });
+  }
+  if (!tramite) {
+    console.error(`[DOCX] ERROR: Trámite no encontrado en BD: ${protocolitoId}`);
+    return res.status(404).json({ ok: false, msg: 'Trámite no encontrado en la base de datos' });
+  }
+
+  console.log(`[DOCX] trámite recibido:  ${tramite.tipoTramite}`);
+  console.log(`[DOCX] número:            ${tramite.numeroTramite}`);
+  console.log(`[DOCX] volumen:           ${tramite.volumen}`);
+  console.log(`[DOCX] abogado:           ${tramite.abogado}`);
+  console.log(`[DOCX] fecha almacenada en trámite: ${tramite.fecha}`);
+
+  // 3. Verificar que existe el archivo fuente
+  const srcPath = path.join(PLANTILLAS_DIR, plantilla.file);
+  if (!fs.existsSync(srcPath)) {
+    console.error(`[DOCX] ERROR: Archivo no existe: ${srcPath}`);
+    return res.status(404).json({ ok: false, msg: 'Archivo de plantilla no encontrado en el servidor' });
+  }
+  console.log(`[DOCX] plantilla usada:   ${srcPath}`);
+
+  // 4. Construir variables y generar DOCX
+  const escrituraData = {
+    numeroControl: tramite.numeroTramite,
+    volumen:       tramite.volumen != null ? String(tramite.volumen) : '',
+    abogado:       tramite.abogado  || '',
+    tipoTramite:   tramite.tipoTramite || '',
+    cliente:       tramite.cliente  || '',
+    fecha:         tramite.fecha    || null,
+  };
+
+  const variables = buildVariables(escrituraData);
+  console.log(`[DOCX] romano:            ${variables.VOLUMEN_ROMANO}`);
+  console.log(`[DOCX] iniciales:         ${variables.INICIALES}`);
+  console.log(`[DOCX] fecha formateada:  ${variables.FECHA}`);
+  console.log(`[DOCX] día:               ${variables.FECHA_DIA}`);
+  console.log(`[DOCX] día letras:        ${variables.FECHA_DIA_LETRAS}`);
+  console.log(`[DOCX] mes:               ${variables.FECHA_MES}`);
+  console.log(`[DOCX] año:               ${variables.FECHA_ANIO}`);
+  console.log(`[DOCX] año letras:        ${variables.FECHA_ANIO_LETRAS}`);
+  console.log(`[DOCX] fecha final generada: el día ${variables.FECHA_DIA} (${variables.FECHA_DIA_LETRAS}) del mes de ${variables.FECHA_MES} del año ${variables.FECHA_ANIO} (${variables.FECHA_ANIO_LETRAS})`);
+
+  try {
+    // generarDocx resuelve internamente PlantillasTemplate/ → Plantillas/ automáticamente
+    const buffer  = generarDocx(srcPath, variables);
+    const outName = `${plantilla.label}_Tramite${tramite.numeroTramite}.docx`;
+    console.log(`[DOCX] archivo generado:  ${outName} (${buffer.length} bytes)`);
+    console.log(`[DOCX] ✅ Enviando respuesta`);
+
+    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(outName)}"`);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+    res.send(buffer);
+  } catch (err) {
+    console.error(`[DOCX] ERROR generando DOCX:`, err.message);
+    res.status(500).json({ ok: false, msg: 'Error al generar el documento', detail: err.message });
+  }
+});
 
 module.exports = router;

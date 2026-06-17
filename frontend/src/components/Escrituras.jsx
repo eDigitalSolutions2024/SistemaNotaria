@@ -845,8 +845,12 @@ function getNewFormErrors({ newRow, newVolumen, newFolioDesde, newFolioHasta, ne
   };
 
   const closeTplMenu = () => { setTplAnchorEl(null); setTplRow(null); setTplOptions([]); };
-  const descargarPlantilla = (key) => {
-    window.location.href = `${API}/plantillas/${key}/download`;
+  const descargarPlantilla = (plantillaId) => {
+    const escrituraId = tplRow?._id;
+    const url = escrituraId
+      ? `${API}/plantillas/${plantillaId}/generar?escrituraId=${encodeURIComponent(escrituraId)}`
+      : `${API}/plantillas/${plantillaId}/download`;
+    window.location.href = url;
     closeTplMenu();
   };
 
@@ -2722,7 +2726,7 @@ if (sugerido != null) {
         <Menu anchorEl={tplAnchorEl} open={Boolean(tplAnchorEl)} onClose={closeTplMenu}>
           {tplOptions.length > 0
             ? tplOptions.map(p => (
-                <MenuItem key={p.key} onClick={() => descargarPlantilla(p.key)}>
+                <MenuItem key={p.id} onClick={() => descargarPlantilla(p.id)}>
                   {p.label}
                 </MenuItem>
               ))

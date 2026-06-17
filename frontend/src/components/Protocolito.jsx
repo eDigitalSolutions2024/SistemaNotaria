@@ -423,9 +423,15 @@ const canJustifyRecibos =
 
 const closeTplMenu = () => { setTplAnchorEl(null); setTplRow(null); setTplOptions([]); };
 
-// Descarga por id único
+// Descarga por id único — usa el endpoint dinámico que consulta la BD
 const descargarPlantilla = (id) => {
-  window.location.href = `${API}/plantillas/${id}/download`;
+  const row = tplRow;
+  if (row?._id) {
+    // /api/Protocolito/:protocolitoId/plantilla/:plantillaId
+    window.location.href = `${API}/Protocolito/${row._id}/plantilla/${id}`;
+  } else {
+    window.location.href = `${API}/plantillas/${id}/download`;
+  }
   closeTplMenu();
 };
 
