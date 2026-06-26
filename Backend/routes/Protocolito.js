@@ -15,15 +15,18 @@ const Abogado     = require('../models/Abogado');
 const Recibo = require('../models/Recibo');
 
 const auth = require('../middleware/auth');
-const { buildVariables, generarDocx, PLANTILLAS_DIR } = require('../services/plantillaService');
+const { buildVariables, generarDocx, PLANTILLAS_DIR, resolveFilePath } = require('../services/plantillaService');
 
 // Catálogo de plantillas Word disponibles
 const MANIFIESTO_PLANTILLAS = [
-  { id: 'poderirrev',         type: 'poder',        label: 'PPCAAAD Irrevocable',    file: 'PPCAAAD Lim Inm Irrevocable en Acta El a El 202509.docx' },
-  { id: 'poderrev',           type: 'poder',        label: 'PPCAAAD Revocable',      file: 'PPCAAAD Lim Inm Revocable en Acta El a El 202509.docx' },
-  { id: 'poder-ppc-amplio',   type: 'poder',        label: 'PPC Amplio en Acta',     file: 'PPC Amplio en Acta 202510.docx' },
-  { id: 'poder-ppcaa-amplio', type: 'poder',        label: 'PPCAA Amplio en Acta',   file: 'PPCAA Amplio en Acta 202510.docx' },
-  { id: 'ratif-vehicular',    type: 'ratificacion', label: 'Ratificación Vehicular', file: 'Ratificación Vehicular 202510.docx' },
+  { id: 'poderirrev',         type: 'poder',        label: 'PPCAAAD Irrevocable',               file: 'PPCAAAD Lim Inm Irrevocable en Acta El a El 202509.docx' },
+  { id: 'poderrev',           type: 'poder',        label: 'PPCAAAD Revocable',                 file: 'PPCAAAD Lim Inm Revocable en Acta El a El 202509.docx' },
+  { id: 'poder-ppc-amplio',   type: 'poder',        label: 'PPC Amplio en Acta',                file: 'PPC Amplio en Acta 202510.docx' },
+  { id: 'poder-ppcaa-amplio', type: 'poder',        label: 'PPCAA Amplio en Acta',              file: 'PPCAA Amplio en Acta 202510.docx' },
+  { id: 'ratif-vehicular',    type: 'ratificacion', label: 'Ratificación Vehicular',            file: 'Ratificación Vehicular 202510.docx' },
+  { id: 'compraventa-simple', type: 'compraventa',  label: 'EP Compraventa Simple',             file: 'EP Compraventa Simple.docx' },
+  { id: 'const-srl',          type: 'constitucion', label: 'EP Constitución de S de RL de CV',  file: 'EP Constitución de S de RL de CV.docx' },
+  { id: 'const-sociedades',   type: 'constitucion', label: 'EP Constitución de Sociedades',     file: 'EP Constitución de Sociedades.docx' },
 ];
 
 // === Upload (para /import) ===
@@ -1253,8 +1256,8 @@ router.get('/:protocolitoId/plantilla/:plantillaId', async (req, res) => {
   console.log(`[DOCX] abogado:           ${tramite.abogado}`);
   console.log(`[DOCX] fecha almacenada en trámite: ${tramite.fecha}`);
 
-  // 3. Verificar que existe el archivo fuente
-  const srcPath = path.join(PLANTILLAS_DIR, plantilla.file);
+  // 3. Verificar que existe el archivo fuente (tolerante a NFC/NFD en Windows)
+  const srcPath = resolveFilePath(PLANTILLAS_DIR, plantilla.file);
   if (!fs.existsSync(srcPath)) {
     console.error(`[DOCX] ERROR: Archivo no existe: ${srcPath}`);
     return res.status(404).json({ ok: false, msg: 'Archivo de plantilla no encontrado en el servidor' });

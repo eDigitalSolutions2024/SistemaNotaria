@@ -279,6 +279,7 @@ const ConsultarGenerales = () => {
                 <thead>
                   <tr>
                     <th>#</th>
+                    <th>Rol</th>
                     <th>Nombre completo</th>
                     <th>Lugar de nacimiento</th>
                     <th>Fecha de nacimiento</th>
@@ -297,6 +298,7 @@ const ConsultarGenerales = () => {
                   {generales.map((p, idx) => (
                     <tr key={p._id || idx}>
                       <td>{idx + 1}</td>
+                      <td>{p.rol || "—"}</td>
                       <td>{p.nombre_completo}</td>
                       <td>{getLugarNacimientoDisplay(p)}</td>
                       <td>{formatDate(p.fecha_nacimiento)}</td>

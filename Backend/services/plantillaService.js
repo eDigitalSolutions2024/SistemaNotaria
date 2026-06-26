@@ -3,6 +3,28 @@ const fs = require('fs');
 const PizZip = require('pizzip');
 const Docxtemplater = require('docxtemplater');
 
+/**
+ * Resuelve la ruta real de un archivo en `dir` con nombre `filename`,
+ * tolerando diferencias de normalización Unicode (NFC vs NFD).
+ * En Windows los archivos creados en macOS suelen quedar en NFD,
+ * mientras que los strings de JS son NFC.
+ */
+function resolveFilePath(dir, filename) {
+  const nfc = path.join(dir, filename.normalize('NFC'));
+  if (fs.existsSync(nfc)) return nfc;
+  const nfd = path.join(dir, filename.normalize('NFD'));
+  if (fs.existsSync(nfd)) return nfd;
+  // fallback: busca en el directorio ignorando normalización
+  try {
+    const normName = filename.normalize('NFD').toLowerCase();
+    const match = fs.readdirSync(dir).find(
+      f => f.normalize('NFD').toLowerCase() === normName
+    );
+    if (match) return path.join(dir, match);
+  } catch {}
+  return nfc; // devuelve algo; el llamador manejará el not-found
+}
+
 const {
   numToRoman,
   numToLetras,
@@ -70,7 +92,7 @@ function buildVariables(escritura = {}) {
  */
 function generarDocx(templateAbsPath, variables) {
   const fileName    = path.basename(templateAbsPath);
-  const templatePath = path.join(TEMPLATES_DIR, fileName);
+  const templatePath = resolveFilePath(TEMPLATES_DIR, fileName);
   const filePath    = fs.existsSync(templatePath) ? templatePath : templateAbsPath;
 
   const content = fs.readFileSync(filePath, 'binary');
@@ -88,4 +110,4 @@ function generarDocx(templateAbsPath, variables) {
   return doc.getZip().generate({ type: 'nodebuffer', compression: 'DEFLATE' });
 }
 
-module.exports = { buildVariables, generarDocx, PLANTILLAS_DIR };
+module.exports = { buildVariables, generarDocx, PLANTILLAS_DIR, TEMPLATES_DIR, resolveFilePath };

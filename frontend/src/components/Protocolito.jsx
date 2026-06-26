@@ -409,15 +409,16 @@ const canJustifyRecibos =
   setTplRow(row);
 
   const tipo = tipoFromRow(row);
-  const isPoder = incluye(tipo, 'poder');
-  const isRatif = incluye(tipo, 'ratific'); // ratificación/ratificacion
+  const isPoder        = incluye(tipo, 'poder');
+  const isRatif        = incluye(tipo, 'ratific');
+  const isCompraventa  = incluye(tipo, 'compraventa');
+  const isConstitucion = incluye(tipo, 'constituc');
 
   let opciones = [];
-  if (isPoder) {
-    opciones = plantillas.filter(p => p.type === 'poder');
-  } else if (isRatif) {
-    opciones = plantillas.filter(p => p.type === 'ratificacion');
-  }
+  if (isPoder)        opciones = plantillas.filter(p => p.type === 'poder');
+  else if (isRatif)        opciones = plantillas.filter(p => p.type === 'ratificacion');
+  else if (isCompraventa)  opciones = plantillas.filter(p => p.type === 'compraventa');
+  else if (isConstitucion) opciones = plantillas.filter(p => p.type === 'constitucion');
   setTplOptions(opciones);
 };
 
@@ -923,8 +924,10 @@ if (estado === 'no') {
   renderCell: (params) => {
     const t = tipoFromRow(params.row);
     const label =
-      incluye(t, 'poder') ? 'Descargar (Poder)' :
-      incluye(t, 'ratific') ? 'Descargar (Ratificación)' :
+      incluye(t, 'poder')       ? 'Descargar (Poder)' :
+      incluye(t, 'ratific')     ? 'Descargar (Ratificación)' :
+      incluye(t, 'compraventa') ? 'Descargar (Compraventa)' :
+      incluye(t, 'constituc')   ? 'Descargar (Constitución)' :
       'Descargar';
     return (
       <button

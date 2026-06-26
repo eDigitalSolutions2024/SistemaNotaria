@@ -6,17 +6,18 @@ const express = require('express');
 const router  = express.Router();
 
 const Escritura = require('../models/Escritura');
-const { buildVariables, generarDocx, PLANTILLAS_DIR } = require('../services/plantillaService');
+const { buildVariables, generarDocx, PLANTILLAS_DIR, TEMPLATES_DIR, resolveFilePath } = require('../services/plantillaService');
 const { injectPlaceholders } = require('../services/docxTransformer');
 
-const TEMPLATES_DIR = require('path').join(__dirname, '..', 'PlantillasTemplate');
-
 const MANIFIESTO = [
-  { id: 'poderirrev',         type: 'poder',        label: 'PPCAAAD Irrevocable',  file: 'PPCAAAD Lim Inm Irrevocable en Acta El a El 202509.docx' },
-  { id: 'poderrev',           type: 'poder',        label: 'PPCAAAD Revocable',    file: 'PPCAAAD Lim Inm Revocable en Acta El a El 202509.docx' },
-  { id: 'poder-ppc-amplio',   type: 'poder',        label: 'PPC Amplio en Acta',   file: 'PPC Amplio en Acta 202510.docx' },
-  { id: 'poder-ppcaa-amplio', type: 'poder',        label: 'PPCAA Amplio en Acta', file: 'PPCAA Amplio en Acta 202510.docx' },
-  { id: 'ratif-vehicular',    type: 'ratificacion', label: 'Ratificación Vehicular', file: 'Ratificación Vehicular 202510.docx' },
+  { id: 'poderirrev',         type: 'poder',        label: 'PPCAAAD Irrevocable',            file: 'PPCAAAD Lim Inm Irrevocable en Acta El a El 202509.docx' },
+  { id: 'poderrev',           type: 'poder',        label: 'PPCAAAD Revocable',              file: 'PPCAAAD Lim Inm Revocable en Acta El a El 202509.docx' },
+  { id: 'poder-ppc-amplio',   type: 'poder',        label: 'PPC Amplio en Acta',             file: 'PPC Amplio en Acta 202510.docx' },
+  { id: 'poder-ppcaa-amplio', type: 'poder',        label: 'PPCAA Amplio en Acta',           file: 'PPCAA Amplio en Acta 202510.docx' },
+  { id: 'ratif-vehicular',    type: 'ratificacion', label: 'Ratificación Vehicular',         file: 'Ratificación Vehicular 202510.docx' },
+  { id: 'compraventa-simple', type: 'compraventa',  label: 'EP Compraventa Simple',          file: 'EP Compraventa Simple.docx' },
+  { id: 'const-srl',          type: 'constitucion', label: 'EP Constitución de S de RL de CV', file: 'EP Constitución de S de RL de CV.docx' },
+  { id: 'const-sociedades',   type: 'constitucion', label: 'EP Constitución de Sociedades',  file: 'EP Constitución de Sociedades.docx' },
 ];
 
 // GET /api/plantillas  →  lista para poblar menús en el front
@@ -29,7 +30,7 @@ router.get('/:id/download', (req, res) => {
   const item = MANIFIESTO.find(p => p.id === req.params.id);
   if (!item) return res.status(404).json({ ok: false, msg: 'Plantilla no encontrada' });
 
-  const abs = path.join(PLANTILLAS_DIR, item.file);
+  const abs = resolveFilePath(PLANTILLAS_DIR, item.file);
   if (!fs.existsSync(abs)) return res.status(404).json({ ok: false, msg: 'Archivo no existe' });
 
   res.setHeader('Content-Disposition', `attachment; filename="${item.file}"`);
@@ -53,7 +54,7 @@ router.get('/:id/generar', async (req, res) => {
   }
   console.log(`[plantillas/generar] Plantilla: ${item.file}`);
 
-  const abs = path.join(PLANTILLAS_DIR, item.file);
+  const abs = resolveFilePath(PLANTILLAS_DIR, item.file);
   if (!fs.existsSync(abs)) {
     console.error(`[plantillas/generar] Archivo no existe: ${abs}`);
     return res.status(404).json({ ok: false, msg: 'Archivo no existe' });
@@ -115,7 +116,7 @@ router.post('/migrar', async (req, res) => {
     const resultados = [];
 
     for (const item of MANIFIESTO) {
-      const src = path.join(PLANTILLAS_DIR, item.file);
+      const src = resolveFilePath(PLANTILLAS_DIR, item.file);
       if (!fs.existsSync(src)) {
         resultados.push({ file: item.file, ok: false, msg: 'Archivo origen no encontrado' });
         continue;

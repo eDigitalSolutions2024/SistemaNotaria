@@ -61,6 +61,7 @@ export default function RegistrarGenerales() {
   const [loadingClientes, setLoadingClientes] = useState(true);
   const [errorClientes, setErrorClientes] = useState("");
   const [clienteSeleccionado, setClienteSeleccionado] = useState("");
+  const [clienteData, setClienteData] = useState(null);
 
   // Array de personas (cada elemento es un objeto con todos los campos)
   const [personas, setPersonas] = useState([
@@ -75,6 +76,7 @@ export default function RegistrarGenerales() {
   function crearPersonaVacia() {
     return {
       nombre_completo: "",
+      rol: "",
 
       // ✅ legacy (se autogenera)
       lugar_nacimiento: "",
@@ -127,6 +129,10 @@ export default function RegistrarGenerales() {
 
     fetchClientes();
   }, []);
+
+  const esPoder = Boolean(
+    clienteData?.motivo && clienteData.motivo.toUpperCase().includes("PODER")
+  );
 
   // 🔹 Manejar cambio en el select de cliente
   const handleChangeCliente = (e) => {
@@ -347,8 +353,14 @@ export default function RegistrarGenerales() {
               null
             }
             onChange={(option) => {
-              // option puede ser null si limpias el select
-              setClienteSeleccionado(option ? option.value : "");
+              const id = option ? option.value : "";
+              setClienteSeleccionado(id);
+              const data = id ? clientes.find((c) => (c._id ?? c.id) === id) || null : null;
+              setClienteData(data);
+              const motivo = data?.motivo || "";
+              if (!motivo.toUpperCase().includes("PODER")) {
+                setPersonas((prev) => prev.map((p) => ({ ...p, rol: "" })));
+              }
             }}
           />
           <small className="help-text">
@@ -362,7 +374,7 @@ export default function RegistrarGenerales() {
           <div key={index} className="persona-block">
             <h3>Persona {index + 1}</h3>
 
-            {/* Fila 1: Nombre, Lugar nacimiento, Fecha nacimiento */}
+            {/* Fila 1: Nombre, Rol, Lugar nacimiento, Fecha nacimiento */}
             <div className="form-row">
               <div className="form-group">
                 <label>Nombre completo *</label>
@@ -376,6 +388,34 @@ export default function RegistrarGenerales() {
                 />
               </div>
 
+              {esPoder && (
+                <div className="form-group">
+                  <label>Rol en el trámite</label>
+                  <div className="rol-selector">
+                    <label className={`rol-pill${p.rol === "Apoderado" ? " activo" : ""}`}>
+                      <input
+                        type="checkbox"
+                        checked={p.rol === "Apoderado"}
+                        onChange={() =>
+                          handleChangePersona(index, "rol", p.rol === "Apoderado" ? "" : "Apoderado")
+                        }
+                      />
+                      Apoderado <span style={{ fontSize: 12, opacity: 0.7 }}>(quien recibe)</span>
+                    </label>
+                    <label className={`rol-pill${p.rol === "Poderdante" ? " activo-poderdante" : ""}`}>
+                      <input
+                        type="checkbox"
+                        checked={p.rol === "Poderdante"}
+                        onChange={() =>
+                          handleChangePersona(index, "rol", p.rol === "Poderdante" ? "" : "Poderdante")
+                        }
+                      />
+                      Poderdante <span style={{ fontSize: 12, opacity: 0.7 }}>(quien otorga)</span>
+                    </label>
+                  </div>
+                </div>
+              )}
+  
               <div className="form-group birthplace-group">
                 <label>Lugar de nacimiento *</label>
 

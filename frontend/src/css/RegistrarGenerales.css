@@ -46,8 +46,8 @@
   font-size: 13px;
 }
 
-/* NO tocar el input interno de react-select */
-.form-group input:not(.react-select__input),
+/* NO tocar el input interno de react-select ni los checkboxes */
+.form-group input:not(.react-select__input):not([type="checkbox"]),
 .form-group select {
   width: 100%;
   padding: 10px 14px;
@@ -58,7 +58,7 @@
   background-color: #f9fafb;
 }
 
-.form-group input:not(.react-select__input):focus,
+.form-group input:not(.react-select__input):not([type="checkbox"]):focus,
 .form-group select:focus {
   outline: none;
   border-color: #3b82f6;
@@ -374,5 +374,57 @@ input:required:valid {
 
 .birthplace-field input{
   width: 100%;
+}
+
+/* ==== ROL SELECTOR (pills) ==== */
+.rol-selector {
+  display: flex;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.rol-pill {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 16px;
+  border: 2px solid #e5e7eb;
+  border-radius: 999px;
+  background: #f9fafb;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  color: #374151;
+  transition: all 0.2s ease;
+  user-select: none;
+}
+
+.rol-pill input[type="checkbox"] {
+  accent-color: #3b82f6;
+  width: 15px;
+  height: 15px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.rol-pill:hover {
+  border-color: #3b82f6;
+  background: #eff6ff;
+}
+
+.rol-pill.activo {
+  border-color: #3b82f6;
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.rol-pill.activo-poderdante {
+  border-color: #7c3aed;
+  background: #f5f3ff;
+  color: #5b21b6;
+}
+
+.rol-pill.activo-poderdante input[type="checkbox"] {
+  accent-color: #7c3aed;
 }
 

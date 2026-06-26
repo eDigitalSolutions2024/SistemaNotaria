@@ -21,6 +21,8 @@ const clienteGeneralSchema = new mongoose.Schema({
   domicilio: { type: String, required: true },
   colonia: { type: String, required: true },
 
+  rol: { type: String, enum: ['', 'Poderdante', 'Apoderado'], default: '' },
+
   telefono_principal: { type: String, required: true },
   telefono_secundario: { type: String, default: '' }, // opcional
 
