@@ -657,8 +657,19 @@ export default function EscrituraEstatus({ escrituraId, onClose }) {
             Historial de recibos (Control {row?.numeroControl ?? '—'})
           </h3>
 
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
             {loadingRecibos ? <span style={{ fontSize: 12, color: '#666' }}>Cargando…</span> : null}
+
+            {row?.presupuestoId && (
+              <Button
+                variant="outlined"
+                size="small"
+                color="secondary"
+                onClick={() => window.open(`${API}/presupuestos/${row.presupuestoId}/pdf`, '_blank')}
+              >
+                Ver presupuesto
+              </Button>
+            )}
 
             {canAttachRecibos ? (
               <Button variant="outlined" size="small" onClick={openAttachModal}>

@@ -1832,7 +1832,12 @@ if (requierePresupuestoEdit) {
 
     const out = { ...base }; // lo que enviaremos a $set
 
-    if (volumen === null && folioDesde === null && folioHasta === null) {
+    // Si el frontend no mandó ninguno de estos campos, no tocar los folios existentes.
+    const folioKeysPresent = 'volumen' in body || 'folioDesde' in body || 'folioHasta' in body;
+
+    if (!folioKeysPresent) {
+      // no-op: los folios actuales se conservan sin modificación
+    } else if (volumen === null && folioDesde === null && folioHasta === null) {
       out.volumen = null;
       out.folioDesde = null;
       out.folioHasta = null;
@@ -1850,30 +1855,11 @@ if (requierePresupuestoEdit) {
         if (invalidRange(effDesde, effHasta)) {
           return res.status(400).json({ mensaje: 'Rango de folio inválido' });
         }
-        const adj = await ajustarRangoAuto({ vol: effVol, d: effDesde, h: effHasta, excludeId: current._id });
-        effVol = adj.vol; effDesde = adj.d; effHasta = adj.h;
-
+        // No se auto-reubica: el usuario eligió explícitamente este rango.
+        // Solo se rechaza si hay traslape real con otra escritura.
         const choque = await hayTraslape(effVol, { d: effDesde, h: effHasta }, current._id);
         if (choque) {
-          const len = effHasta - effDesde + 1;
-          const slot = await siguienteSlot(effVol, len, current._id);
-          if (slot.vol && slot.d) {
-            effVol = slot.vol;
-            effDesde = slot.d;
-            effHasta = slot.d + len - 1;
-            if (effHasta > MAX_FOLIO_USABLE) {
-              const nv = incVolumenTag(effVol);
-              if (!nv) {
-                return res.status(409).json({ mensaje: 'Traslape de folio y no es posible incrementar el volumen automáticamente' });
-              }
-              effVol = nv;
-              effDesde = MIN_FOLIO_USABLE;
-              effHasta = MIN_FOLIO_USABLE + len - 1;
-            }
-
-          } else {
-            return res.status(409).json({ mensaje: 'Traslape de folio en este volumen' });
-          }
+          return res.status(409).json({ mensaje: `Traslape de folio en Volumen ${effVol} (${effDesde}-${effHasta}).` });
         }
 
         out.volumen = effVol;

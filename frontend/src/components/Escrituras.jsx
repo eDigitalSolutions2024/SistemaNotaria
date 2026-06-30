@@ -27,6 +27,7 @@ const emptyRow = {
   valorAvaluo: null,
   totalGastosExtra: null,
   totalHonorarios: null,
+  presupuestoId: null,
 
   // --- ESTATUS / CHECKLIST ---
   documentos: {},
@@ -376,6 +377,103 @@ const formatHorarioCell = (row) => {
 };
 
 // ----- componente -----
+function ReciboIndicator({ row, openReciboPdf, canModifyRecibos, openMissing, onViewJustify }) {
+  const numero = row?.numeroControl;
+  const estatus = row?.estatus_recibo;
+  const [estado, setEstado] = React.useState('loading');
+
+  React.useEffect(() => {
+    let alive = true;
+    if (estatus === 'JUSTIFICADO') { setEstado('justificado'); return; }
+    if (estatus === 'CON_RECIBO') { setEstado('si'); return; }
+    if (!numero) { setEstado('no'); return; }
+
+    (async () => {
+      try {
+        await axios.get(`${API}/recibos/by-control/${encodeURIComponent(numero)}/latest`);
+        if (alive) setEstado('si');
+      } catch {
+        if (alive) setEstado(estatus === 'JUSTIFICADO' ? 'justificado' : 'no');
+      }
+    })();
+    return () => { alive = false; };
+  }, [numero, estatus]);
+
+  if (estado === 'si') {
+    return (
+      <button
+        className="btn btn-primary"
+        style={{ padding: '6px 10px', fontSize: 13 }}
+        onClick={() => openReciboPdf(row)}
+      >
+        Recibo
+      </button>
+    );
+  }
+
+  if (estado === 'justificado') {
+    return (
+      <button
+        type="button"
+        onClick={() => onViewJustify(row)}
+        style={{
+          padding: '6px 10px',
+          fontSize: 13,
+          background: '#e6f4ea',
+          border: '1px solid #b7dfc5',
+          borderRadius: 6,
+          lineHeight: 1.2,
+          cursor: 'pointer'
+        }}
+        title="Ver justificante"
+      >
+        Justificado
+      </button>
+    );
+  }
+
+  if (estado === 'no') {
+    if (!canModifyRecibos) {
+      return (
+        <span
+          style={{
+            padding: '6px 10px',
+            fontSize: 13,
+            color: '#6b7280',
+            borderRadius: 6,
+            border: '1px solid #dcdcdc',
+            background: '#f9fafb'
+          }}
+          title="Sin recibo registrado"
+        >
+          Sin recibo
+        </span>
+      );
+    }
+
+    return (
+      <button
+        type="button"
+        onClick={() => openMissing(row)}
+        style={{
+          padding: '6px 10px',
+          fontSize: 13,
+          background: '#e9ecef',
+          border: '1px solid #dcdcdc',
+          borderRadius: 6,
+          lineHeight: 1.2,
+          cursor: 'pointer'
+        }}
+        title="Opciones para generar/adjuntar justificante"
+      >
+        No tiene recibo
+      </button>
+    );
+  }
+
+  return null;
+}
+
 // ----- componente -----
 export default function Escrituras({ onOpenRecibo }) {
   const { user } = useAuth();
@@ -434,6 +532,16 @@ const canJustifyRecibos =
   !roles.some((r) => ['RECEPCION'].includes(r));
 
   const [rows, setRows] = useState([]);
+
+  // ID de la escritura con mayor numeroControl — la única donde se pueden editar folios
+  const lastEscrituraId = React.useMemo(() => {
+    if (!rows || rows.length === 0) return null;
+    return rows.reduce(
+      (best, r) => Number(r.numeroControl) > Number(best.numeroControl) ? r : best,
+      rows[0]
+    )?._id ?? null;
+  }, [rows]);
+
   const [editingId, setEditingId] = useState(null);
   const [drafts, setDrafts] = useState({});
   const [adding, setAdding] = useState(false);
@@ -863,89 +971,6 @@ function getNewFormErrors({ newRow, newVolumen, newFolioDesde, newFolioHasta, ne
     return null;
   }
 }
-async function fetchPresupuestosCliente(apiBase, clienteNumero) {
-  if (!clienteNumero) return [];
-
-  try {
-    const { data } = await axios.get(
-      `${apiBase}/escrituras/presupuestos/cliente/${clienteNumero}`
-    );
-
-    const arr = Array.isArray(data) ? data : [];
-
-    const normed = arr.map((p) => {
-      const cargos = p.cargos || {};
-      const honor = p.honorariosCalc || {};
-
-      // 💰 Impuestos (acepta camelCase y snake_case)
-      const totalImpuestos =
-        p.totalImpuestos != null || p.total_impuestos != null
-          ? numSafe(p.totalImpuestos ?? p.total_impuestos)
-          : sumKeys(cargos, PRES_IMPUESTOS_KEYS);
-
-      // 💰 Gastos extra (camel + snake)
-      const totalGastosExtra =
-        p.totalGastosExtra != null || p.total_gastos_extra != null
-          ? numSafe(p.totalGastosExtra ?? p.total_gastos_extra)
-          : sumKeys(cargos, PRES_GASTOS_KEYS);
-
-      // 💰 Avalúo (camel + snake)
-      const valorAvaluo =
-        p.valorAvaluo != null || p.valor_avaluo != null
-          ? numSafe(p.valorAvaluo ?? p.valor_avaluo)
-          : p.avaluo != null && p.avaluo !== 0
-          ? numSafe(p.avaluo)
-          : numSafe(p.valorOperacion);
-
-      // 💰 Honorarios (camel + snake, y dentro de honorariosCalc)
-      const totalHonorarios =
-        p.totalHonorarios != null ||
-        p.total_honorarios != null ||
-        honor.totalHonorarios != null ||
-        honor.total_honorarios != null
-          ? numSafe(
-              p.totalHonorarios ??
-                p.total_honorarios ??
-                honor.totalHonorarios ??
-                honor.total_honorarios
-            )
-          : 0;
-
-      // Descripción amigable (ampliamos un poco)
-      const descripcion =
-        p.descripcion ||
-        p.concepto ||
-        p.observaciones ||
-        p.tipoTramite ||
-        '';
-
-      const fecha = p.fecha || p.createdAt || null;
-
-      return {
-        id: String(p._id || p.id),
-
-        cliente: p.cliente,
-        fecha,
-        descripcion,
-
-        totalImpuestos,
-        valorAvaluo,
-        totalGastosExtra,
-        totalHonorarios,
-
-        raw: p,
-      };
-    });
-
-    console.log('[RAW presupuestos]', arr);
-    console.log('[presupuestos normalizados]', normed);
-    return normed;
-  } catch (e) {
-    console.error('Error cargando presupuestos por cliente:', e);
-    return [];
-  }
-}
-
 async function fetchPresupuestosAll(apiBase) {
   try {
     // 👇 AJUSTA AQUÍ a tu ruta real si es otra
@@ -1127,14 +1152,7 @@ async function fetchPresupuestosAll(apiBase) {
 
 
 const openPresupuestoPicker = async (target) => {
-  if (target !== 'new') {
-    return setMsg({
-      type: 'warn',
-      text: 'Selector de presupuesto aún no disponible en edición.',
-    });
-  }
-
-  setPresupTarget('new');
+  setPresupTarget(target);
   setPresupQ('');
   setPresupOpen(true);
   setPresupLoading(true);
@@ -1174,22 +1192,13 @@ const openPresupuestoPicker = async (target) => {
     };
 
     if (presupTarget === 'new') {
-      setNewRow((prev) => ({
+      setNewRow((prev) => ({ ...prev, ...valores }));
+    } else {
+      setDrafts((prev) => ({
         ...prev,
-        ...valores,
+        [presupTarget]: { ...(prev[presupTarget] || {}), ...valores },
       }));
     }
-
-    // si más adelante quieres que funcione en edición:
-    // if (typeof presupTarget === 'string' && presupTarget !== 'new') {
-    //   setDrafts((prev) => ({
-    //     ...prev,
-    //     [presupTarget]: {
-    //       ...(prev[presupTarget] || {}),
-    //       ...valores,
-    //     },
-    //   }));
-    // }
 
     closePresupuestoPicker();
   };
@@ -1508,22 +1517,25 @@ const onSaveEdit = async (id) => {
   };
 
   // ---------- 1) Validaciones ----------
+  const isLastEscritura = id === lastEscrituraId;
+
   const errCore = validateEditCore(draft);
   if (errCore) return setMsg({ type: 'warn', text: errCore });
 
-  const errFolios = validateEditFolios(draft?.volumen, draft?.folioDesde, draft?.folioHasta);
-  if (errFolios) return setMsg({ type: 'warn', text: errFolios });
+  if (isLastEscritura) {
+    const errFolios = validateEditFolios(draft?.volumen, draft?.folioDesde, draft?.folioHasta);
+    if (errFolios) return setMsg({ type: 'warn', text: errFolios });
 
-  // Traslape local (solo si hay rango)
-  if (isNonEmpty(draft?.folioDesde) || isNonEmpty(draft?.folioHasta)) {
-    const vol = draft?.volumen ?? '';
-    const chk = foliosTraslapanLocal(rows, vol, draft?.folioDesde, draft?.folioHasta, id);
-    if (chk?.conflict) {
-      const r = chk.with || {};
-      return setMsg({
-        type: 'error',
-        text: `Folio ocupado en Volumen ${vol}. Traslapa con el control ${r?.numeroControl ?? 'desconocido'} (${fmtRange(r?.folioDesde ?? r?.folio, r?.folioHasta ?? r?.folio)}).`
-      });
+    if (isNonEmpty(draft?.folioDesde) || isNonEmpty(draft?.folioHasta)) {
+      const vol = draft?.volumen ?? '';
+      const chk = foliosTraslapanLocal(rows, vol, draft?.folioDesde, draft?.folioHasta, id);
+      if (chk?.conflict) {
+        const r = chk.with || {};
+        return setMsg({
+          type: 'error',
+          text: `Folio ocupado en Volumen ${vol}. Traslapa con el control ${r?.numeroControl ?? 'desconocido'} (${fmtRange(r?.folioDesde ?? r?.folio, r?.folioHasta ?? r?.folio)}).`
+        });
+      }
     }
   }
 
@@ -1553,19 +1565,6 @@ const onSaveEdit = async (id) => {
     }
   }
 
-  // Confirmación de folios
-  const okFolios = confirmFoliosBeforeSave({
-    volumen: draft?.volumen,
-    desde: draft?.folioDesde,
-    hasta: draft?.folioHasta,
-    tipo: draft?.tipoTramite,
-    control: draft?.numeroControl
-  });
-
-  if (!okFolios) {
-    return setMsg({ type: 'warn', text: 'Guardado cancelado por confirmación de folios.' });
-  }
-
   // ---------- 2) Payload ----------
   const aplicaMontos = isTramiteConMontos(draft?.tipoTramite);
 
@@ -1582,9 +1581,10 @@ const onSaveEdit = async (id) => {
     abogado: String(draft.abogado || '').trim(),
       presupuestoId: draft.presupuestoId ?? null,
 
-    ...(draft.volumen != null && String(draft.volumen).trim() !== '' ? { volumen: draft.volumen } : {}),
-    ...(draft.folioDesde != null && String(draft.folioDesde).trim() !== '' ? { folioDesde: Number(draft.folioDesde) } : {}),
-    ...(draft.folioHasta != null && String(draft.folioHasta).trim() !== '' ? { folioHasta: Number(draft.folioHasta) } : {}),
+    // folios: solo se envían si es la última escritura (único caso editable)
+    ...(isLastEscritura && draft.volumen != null && String(draft.volumen).trim() !== '' ? { volumen: draft.volumen } : {}),
+    ...(isLastEscritura && draft.folioDesde != null && String(draft.folioDesde).trim() !== '' ? { folioDesde: Number(draft.folioDesde) } : {}),
+    ...(isLastEscritura && draft.folioHasta != null && String(draft.folioHasta).trim() !== '' ? { folioHasta: Number(draft.folioHasta) } : {}),
 
     ...(isAdmin ? { observaciones: String(draft.observaciones || '').trim() } : {}),
     ...horasEdit,
@@ -1783,109 +1783,6 @@ const onSaveEdit = async (id) => {
     }
   };
 
-  // Indicador Recibo
-    const ReciboIndicator = ({ row }) => {
-    const numero = row?.numeroControl;
-    const estatus = row?.estatus_recibo;
-    const [estado, setEstado] = React.useState('loading');
-
-    React.useEffect(() => {
-      let alive = true;
-      if (estatus === 'JUSTIFICADO') { setEstado('justificado'); return; }
-      if (estatus === 'CON_RECIBO') { setEstado('si'); return; }
-      if (!numero) { setEstado('no'); return; }
-
-      (async () => {
-        try {
-          await axios.get(`${API}/recibos/by-control/${encodeURIComponent(numero)}/latest`);
-          if (alive) setEstado('si');
-        } catch {
-          if (alive) setEstado(estatus === 'JUSTIFICADO' ? 'justificado' : 'no');
-        }
-      })();
-      return () => { alive = false; };
-    }, [numero, estatus]);
-
-    // ✅ Hay recibo → cualquiera que tenga canSeeReciboBtn puede abrir el PDF
-    if (estado === 'si') {
-      return (
-        <button
-          className="btn btn-primary"
-          style={{ padding: '6px 10px', fontSize: 13 }}
-          onClick={() => openReciboPdf(row)}
-        >
-          Recibo
-        </button>
-      );
-    }
-
-    // ✅ Justificado → botón solo para ver el texto del justificante
-    if (estado === 'justificado') {
-      return (
-        <button
-          type="button"
-          onClick={() => { setJustifyViewRow(row); setJustifyViewOpen(true); }}
-          style={{
-            padding: '6px 10px',
-            fontSize: 13,
-            background: '#e6f4ea',
-            border: '1px solid #b7dfc5',
-            borderRadius: 6,
-            lineHeight: 1.2,
-            cursor: 'pointer'
-          }}
-          title="Ver justificante"
-        >
-          Justificado
-        </button>
-      );
-    }
-
-    // ⛔ NO hay recibo:
-    //    - Si NO puede modificar recibos → SOLO ve texto "Sin recibo" (no clic)
-    //    - Si SÍ puede modificar → botón "No tiene recibo" que abre el modal
-    if (estado === 'no') {
-      if (!canModifyRecibos) {
-        return (
-          <span
-            style={{
-              padding: '6px 10px',
-              fontSize: 13,
-              color: '#6b7280',
-              borderRadius: 6,
-              border: '1px solid #dcdcdc',
-              background: '#f9fafb'
-            }}
-            title="Sin recibo registrado"
-          >
-            Sin recibo
-          </span>
-        );
-      }
-
-      return (
-        <button
-          type="button"
-          onClick={() => openMissing(row)}
-          style={{
-            padding: '6px 10px',
-            fontSize: 13,
-            background: '#e9ecef',
-            border: '1px solid #dcdcdc',
-            borderRadius: 6,
-            lineHeight: 1.2,
-            cursor: 'pointer'
-          }}
-          title="Opciones para generar/adjuntar justificante"
-        >
-          No tiene recibo
-        </button>
-      );
-    }
-
-    return null;
-  };
-
 
   // columnas tabla principal
   const baseColumns = [
@@ -2056,7 +1953,15 @@ const onSaveEdit = async (id) => {
               </button>
             </>
           )}
-          {canSeeReciboBtn && <ReciboIndicator row={r} />}
+          {canSeeReciboBtn && (
+            <ReciboIndicator
+              row={r}
+              openReciboPdf={openReciboPdf}
+              canModifyRecibos={canModifyRecibos}
+              openMissing={openMissing}
+              onViewJustify={(vrow) => { setJustifyViewRow(vrow); setJustifyViewOpen(true); }}
+            />
+          )}
 
 
           {canDeliver && (
@@ -2574,40 +2479,42 @@ if (sugerido != null) {
               type="number"
               placeholder="Folio desde"
               value={drafts[editingId]?.folioDesde ?? ''}
-              onChange={(e) => onChangeDraft(editingId, 'folioDesde', e.target.value)}
-              style={{ minWidth: 140 }}
+              onChange={editingId === lastEscrituraId ? (e) => onChangeDraft(editingId, 'folioDesde', e.target.value) : undefined}
+              readOnly={editingId !== lastEscrituraId}
+              disabled={editingId !== lastEscrituraId}
+              title={editingId === lastEscrituraId ? 'Editable en la última escritura' : 'Solo editable en la última escritura creada'}
+              style={{ minWidth: 140, ...(editingId !== lastEscrituraId ? { background: '#f3f4f6', cursor: 'not-allowed' } : {}) }}
             />
             <input
               type="number"
               placeholder="Folio hasta"
               value={drafts[editingId]?.folioHasta ?? ''}
-              onChange={(e) => onChangeDraft(editingId, 'folioHasta', e.target.value)}
-              style={{ minWidth: 140 }}
+              onChange={editingId === lastEscrituraId ? (e) => onChangeDraft(editingId, 'folioHasta', e.target.value) : undefined}
+              readOnly={editingId !== lastEscrituraId}
+              disabled={editingId !== lastEscrituraId}
+              title={editingId === lastEscrituraId ? 'Editable en la última escritura' : 'Solo editable en la última escritura creada'}
+              style={{ minWidth: 140, ...(editingId !== lastEscrituraId ? { background: '#f3f4f6', cursor: 'not-allowed' } : {}) }}
             />
-            <Button
-              variant="outlined"
-              onClick={async () => {
-                const vol = drafts[editingId]?.volumen;
-                const sugerido = await suggestNextFolioFor(API, vol);
-                if (sugerido != null) {
-  let s = Number(sugerido);
-  if (s < FIRST_USABLE_FOLIO) s = FIRST_USABLE_FOLIO;
-
-  if (s > LAST_USABLE_FOLIO) {
-    return setMsg({
-      type: 'warn',
-      text: `Este volumen ya no tiene folios utilizables (${FIRST_USABLE_FOLIO}-${LAST_USABLE_FOLIO}). Debe usarse el siguiente volumen.`
-    });
-  }
-
-  onChangeDraft(editingId, 'folioDesde', String(s));
-  if (!drafts[editingId]?.folioHasta) onChangeDraft(editingId, 'folioHasta', String(s));
-}
-
-              }}
-            >
-              Siguiente disponible
-            </Button>
+            {editingId === lastEscrituraId && (
+              <Button
+                variant="outlined"
+                onClick={async () => {
+                  const vol = drafts[editingId]?.volumen;
+                  const sugerido = await suggestNextFolioFor(API, vol);
+                  if (sugerido != null) {
+                    let s = Number(sugerido);
+                    if (s < FIRST_USABLE_FOLIO) s = FIRST_USABLE_FOLIO;
+                    if (s > LAST_USABLE_FOLIO) {
+                      return setMsg({ type: 'warn', text: `Este volumen ya no tiene folios utilizables (${FIRST_USABLE_FOLIO}-${LAST_USABLE_FOLIO}). Debe usarse el siguiente volumen.` });
+                    }
+                    onChangeDraft(editingId, 'folioDesde', String(s));
+                    if (!drafts[editingId]?.folioHasta) onChangeDraft(editingId, 'folioHasta', String(s));
+                  }
+                }}
+              >
+                Siguiente disponible
+              </Button>
+            )}
           </div>
 
           {/* Testamento - Horas */}
@@ -2636,8 +2543,19 @@ if (sugerido != null) {
           {/* Montos del recibo (opcionales) */}
           {/* Montos del recibo (solo para escrituras / compra venta / protocolización / donación) */}
 {isTramiteConMontos(drafts[editingId]?.tipoTramite) && (
-  <div style={{ gridColumn: '1 / -1', display: 'grid', gridTemplateColumns: 'repeat(4, minmax(180px, 1fr))', gap: 8 }}>
-    <TextField
+  <>
+    <div style={{ gridColumn: '1 / -1', display: 'flex', justifyContent: 'flex-end', marginTop: 4, marginBottom: 4 }}>
+      <Button
+        variant={drafts[editingId]?.presupuestoId ? 'contained' : 'outlined'}
+        color={drafts[editingId]?.presupuestoId ? 'success' : 'primary'}
+        size="small"
+        onClick={() => openPresupuestoPicker(editingId)}
+      >
+        {drafts[editingId]?.presupuestoId ? 'Presupuesto seleccionado' : 'Elegir presupuesto…'}
+      </Button>
+    </div>
+    <div style={{ gridColumn: '1 / -1', display: 'grid', gridTemplateColumns: 'repeat(4, minmax(180px, 1fr))', gap: 8 }}>
+      <TextField
   label="Total Impuestos (sistema)"
   type="number"
   size="small"
@@ -2665,7 +2583,8 @@ if (sugerido != null) {
   value={drafts[editingId]?.totalHonorarios ?? ''}
   InputProps={{ readOnly: true }}
 />
-  </div>
+    </div>
+  </>
 )}
 
 
@@ -2989,9 +2908,9 @@ if (sugerido != null) {
     <div style={{ padding: 8 }}>No hay ID de escritura.</div>
   )}
 </DialogContent>
-
-
-  
+<DialogActions>
+  <Button onClick={() => setEstatusOpen(false)}>Cerrar</Button>
+</DialogActions>
 </Dialog>
 
       {/* Modal: seleccionar presupuesto para llenar montos */}

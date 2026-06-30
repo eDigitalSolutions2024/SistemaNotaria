@@ -11,7 +11,7 @@ import { useAuth } from '../auth/AuthContext';
 
 import '../css/styles.css';
 
-const API = process.env.REACT_APP_API_URL || 'http://localhost:4000';
+const API = process.env.REACT_APP_API_URL || 'http://localhost:8010';
 
 // ----- utils -----
 const emptyRow = {
@@ -92,6 +92,122 @@ function applyClienteToProtocolito(cliente, prev) {
 }
 
 const pickRowFromVG = (p, row) => (p && p.row) ? p.row : (row || p || {});
+
+// ----- componente -----
+function ReciboIndicator({ row, openReciboPdf, isAbogado, canModifyRecibos, openMissing, onViewJustify }) {
+  const numero = row?.numeroTramite;
+  const estatus = row?.estatus_recibo;
+  const [estado, setEstado] = React.useState('loading');
+
+  React.useEffect(() => {
+    let alive = true;
+    if (estatus === 'JUSTIFICADO') { setEstado('justificado'); return; }
+    if (estatus === 'CON_RECIBO') { setEstado('si'); return; }
+    if (!numero) { setEstado('no'); return; }
+
+    (async () => {
+      try {
+        await axios.get(`${API}/recibos/by-control/${encodeURIComponent(numero)}/latest`);
+        if (alive) setEstado('si');
+      } catch {
+        if (alive) setEstado(estatus === 'JUSTIFICADO' ? 'justificado' : 'no');
+      }
+    })();
+    return () => { alive = false; };
+  }, [numero, estatus]);
+
+  if (estado === 'si') {
+    return (
+      <button
+        className="btn btn-primary"
+        style={{ padding: '6px 10px', fontSize: 13 }}
+        onClick={(e) => { e.stopPropagation(); openReciboPdf(row); }}
+      >
+        Recibo
+      </button>
+    );
+  }
+
+  if (estado === 'justificado') {
+    if (isAbogado) {
+      return (
+        <span
+          style={{
+            padding: '6px 10px',
+            fontSize: 13,
+            background: '#e6f4ea',
+            border: '1px solid #b7dfc5',
+            borderRadius: 6,
+            lineHeight: 1.2,
+            display: 'inline-block'
+          }}
+          title="Justificado (solo lectura)"
+        >
+          Justificado
+        </span>
+      );
+    }
+    return (
+      <button
+        type="button"
+        onClick={(e) => { e.stopPropagation(); onViewJustify(row); }}
+        style={{
+          padding: '6px 10px',
+          fontSize: 13,
+          background: '#e6f4ea',
+          border: '1px solid #b7dfc5',
+          borderRadius: 6,
+          lineHeight: 1.2,
+          cursor: 'pointer'
+        }}
+        title="Ver justificante"
+      >
+        Justificado
+      </button>
+    );
+  }
+
+  if (estado === 'no') {
+    if (!canModifyRecibos) {
+      return (
+        <span
+          style={{
+            padding: '6px 10px',
+            fontSize: 13,
+            color: '#6b7280',
+            borderRadius: 6,
+            border: '1px solid #dcdcdc',
+            background: '#f9fafb',
+            display: 'inline-block'
+          }}
+          title="Sin recibo registrado"
+        >
+          Sin recibo
+        </span>
+      );
+    }
+    return (
+      <button
+        type="button"
+        onClick={(e) => { e.stopPropagation(); openMissing(row); }}
+        style={{
+          padding: '6px 10px',
+          fontSize: 13,
+          background: '#e9ecef',
+          border: '1px solid #dcdcdc',
+          borderRadius: 6,
+          lineHeight: 1.2,
+          cursor: 'pointer'
+        }}
+        title="Opciones para generar/adjuntar justificante"
+      >
+        No tiene recibo
+      </button>
+    );
+  }
+
+  return null;
+}
 
 // ----- componente -----
 export default function Protocolito({ onOpenRecibo }) {
@@ -428,10 +544,9 @@ const closeTplMenu = () => { setTplAnchorEl(null); setTplRow(null); setTplOption
 const descargarPlantilla = (id) => {
   const row = tplRow;
   if (row?._id) {
-    // /api/Protocolito/:protocolitoId/plantilla/:plantillaId
-    window.location.href = `${API}/Protocolito/${row._id}/plantilla/${id}`;
+    window.open(`${API}/Protocolito/${row._id}/plantilla/${id}`, '_blank');
   } else {
-    window.location.href = `${API}/plantillas/${id}/download`;
+    window.open(`${API}/plantillas/${id}/download`, '_blank');
   }
   closeTplMenu();
 };
@@ -758,126 +873,6 @@ const descargarPlantilla = (id) => {
     }
   };
 
-  // Indicador Recibo
-  const ReciboIndicator = ({ row }) => {
-    const numero = row?.numeroTramite;
-    const estatus = row?.estatus_recibo;
-    const [estado, setEstado] = React.useState('loading');
-
-    React.useEffect(() => {
-      let alive = true;
-      if (estatus === 'JUSTIFICADO') { setEstado('justificado'); return; }
-      if (estatus === 'CON_RECIBO') { setEstado('si'); return; }
-      if (!numero) { setEstado('no'); return; }
-
-      (async () => {
-        try {
-          await axios.get(`${API}/recibos/by-control/${encodeURIComponent(numero)}/latest`);
-          if (alive) setEstado('si');
-        } catch {
-          if (alive) setEstado(estatus === 'JUSTIFICADO' ? 'justificado' : 'no');
-        }
-      })();
-      return () => { alive = false; };
-    }, [numero, estatus]);
-
-    if (estado === 'si') {
-      return (
-        <button
-          className="btn btn-primary"
-          style={{ padding: '6px 10px', fontSize: 13 }}
-          onClick={(e) => { e.stopPropagation(); openReciboPdf(row); }}
-        >
-          Recibo
-        </button>
-      );
-    }
-    if (estado === 'justificado') {
-  // ABOGADO: solo texto (no clic)
-  if (isAbogado) {
-    return (
-      <span
-        style={{
-          padding: '6px 10px',
-          fontSize: 13,
-          background: '#e6f4ea',
-          border: '1px solid #b7dfc5',
-          borderRadius: 6,
-          lineHeight: 1.2,
-          display: 'inline-block'
-        }}
-        title="Justificado (solo lectura)"
-      >
-        Justificado
-      </span>
-    );
-  }
-
-  // RECEPCION/ADMIN: sí abre modal lectura
-  return (
-    <button
-      type="button"
-      onClick={(e) => { e.stopPropagation(); setJustifyViewRow(row); setJustifyViewOpen(true); }}
-      style={{
-        padding: '6px 10px',
-        fontSize: 13,
-        background: '#e6f4ea',
-        border: '1px solid #b7dfc5',
-        borderRadius: 6,
-        lineHeight: 1.2,
-        cursor: 'pointer'
-      }}
-      title="Ver justificante"
-    >
-      Justificado
-    </button>
-  );
-}
-
-    // --- cuando NO hay recibo ---
-if (estado === 'no') {
-  // ABOGADO/ASISTENTE: solo texto, sin opciones
-  if (!canModifyRecibos) {
-    return (
-      <span
-        style={{
-          padding: '6px 10px',
-          fontSize: 13,
-          color: '#6b7280',
-          borderRadius: 6,
-          border: '1px solid #dcdcdc',
-          background: '#f9fafb',
-          display: 'inline-block'
-        }}
-        title="Sin recibo registrado"
-      >
-        Sin recibo
-      </span>
-    );
-  }
-
-  // RECEPCION/ADMIN: sí abre modal opciones
-  return (
-    <button
-      type="button"
-      onClick={(e) => { e.stopPropagation(); openMissing(row); }}
-      style={{
-        padding: '6px 10px',
-        fontSize: 13,
-        background: '#e9ecef',
-        border: '1px solid #dcdcdc',
-        borderRadius: 6,
-        lineHeight: 1.2,
-        cursor: 'pointer'
-      }}
-      title="Opciones para generar/adjuntar justificante"
-    >
-      No tiene recibo
-    </button>
-  );
-}
-
-  };
 
   // columnas tabla principal
   const baseColumns = [
@@ -897,12 +892,6 @@ if (estado === 'no') {
       headerName: 'Fecha',
       width: 120, minWidth: 110,
       renderCell: (params) => onlyDate(params?.row?.createdAt ?? params?.row?.fecha),
-      sortComparator: (_v1, _v2, c1, c2) => {
-        const ra = c1?.row?.createdAt ?? c1?.row?.fecha;
-        const rb = c2?.row?.createdAt ?? c2?.row?.fecha;
-        return (Date.parse(ra) || 0) - (Date.parse(rb) || 0);
-      },
-
       sortComparator: (_v1, _v2, cellParams1, cellParams2) => {
         const ra = cellParams1?.row?.fecha;
         const rb = cellParams2?.row?.fecha;
@@ -972,7 +961,16 @@ if (estado === 'no') {
               </button>
             </>
           )}
-          {canSeeReciboBtn && <ReciboIndicator row={r} />}
+          {canSeeReciboBtn && (
+            <ReciboIndicator
+              row={r}
+              openReciboPdf={openReciboPdf}
+              isAbogado={isAbogado}
+              canModifyRecibos={canModifyRecibos}
+              openMissing={openMissing}
+              onViewJustify={(vrow) => { setJustifyViewRow(vrow); setJustifyViewOpen(true); }}
+            />
+          )}
 
           {canDeliver && (
             <button

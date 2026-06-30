@@ -34,7 +34,7 @@ form input {
 }
 
 form button {
-  background-color: #007bff;
+  background-color: #2563eb;
   color: white;
   padding: 10px;
   width: 100%;
@@ -44,7 +44,7 @@ form button {
 }
 
 form button:hover {
-  background-color: #0056b3;
+  background-color: #1d4ed8;
 }
 
 #mensaje {
@@ -260,7 +260,7 @@ table.dataTable {
 #formCliente button {
   width: 100%;
   padding: 12px;
-  background-color: #007bff;
+  background-color: #2563eb;
   color: white;
   border: none;
   border-radius: 8px;
@@ -271,7 +271,7 @@ table.dataTable {
 }
 
 #formCliente button:hover {
-  background-color: #0056b3;
+  background-color: #1d4ed8;
 }
 
 .form-group {
@@ -303,14 +303,14 @@ table.dataTable {
 
 input[type="checkbox"] {
   transform: scale(1.1);
-  accent-color: #007bff;
+  accent-color: #2563eb;
 }
 
 .btn-registrar {
   width: 100%;
   padding: 10px;
   font-size: 15px;
-  background-color: #007bff;
+  background-color: #2563eb;
   color: white;
   border: none;
   border-radius: 6px;
@@ -319,6 +319,6 @@ input[type="checkbox"] {
 }
 
 .btn-registrar:hover {
-  background-color: #0056b3;
+  background-color: #1d4ed8;
 }
 
