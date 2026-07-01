@@ -58,9 +58,14 @@ function generarHTMLDatosGenerales(pdfData) {
     .map((persona) => {
       return `
       <article class="persona-block">
-        <h4 class="persona-titulo">Persona ${persona.indice}</h4>
+        <h4 class="persona-titulo">Persona ${persona.indice}${persona.rol ? ` — ${escapeHtml(persona.rol)}` : ''}</h4>
         <table class="info-table persona-table">
           <tbody>
+            ${persona.rol ? `
+            <tr>
+              <th>Rol en el trámite</th>
+              <td>${escapeHtml(persona.rol)}</td>
+            </tr>` : ''}
             <tr>
               <th>Nombre completo</th>
               <td>${escapeHtml(persona.nombre_completo)}</td>

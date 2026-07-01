@@ -39,37 +39,80 @@ const {
 const PLANTILLAS_DIR  = path.join(__dirname, '..', 'Plantillas');
 const TEMPLATES_DIR   = path.join(__dirname, '..', 'PlantillasTemplate');
 
+const MAX_PERSONAS = 6;
+
+function composeLugarNacimiento(ciudad = '', estado = '') {
+  const c = String(ciudad || '').trim();
+  const e = String(estado || '').trim();
+  if (c && e) return `${c}, ${e}`;
+  return c || e;
+}
+
+function buildPersonaVars(p, prefix) {
+  p = p || {};
+  return {
+    [`${prefix}_ROL`]:             p.rol || '',
+    [`${prefix}_NOMBRE`]:          p.nombre_completo || '',
+    [`${prefix}_CURP`]:            p.curp || '',
+    [`${prefix}_RFC`]:             p.rfc || '',
+    [`${prefix}_DOMICILIO`]:       p.domicilio || '',
+    [`${prefix}_COLONIA`]:         p.colonia || '',
+    [`${prefix}_OCUPACION`]:       p.ocupacion || '',
+    [`${prefix}_ESTADO_CIVIL`]:    p.estado_civil || '',
+    [`${prefix}_EC_CONYUGUE`]:     p.estado_civil_con_quien || '',
+    [`${prefix}_EC_LUGAR_FECHA`]:  p.estado_civil_lugar_fecha || '',
+    [`${prefix}_EC_REGIMEN`]:      p.estado_civil_regimen || '',
+    [`${prefix}_LUGAR_NACIMIENTO`]: composeLugarNacimiento(p.lugar_nacimiento_ciudad, p.lugar_nacimiento_estado) || p.lugar_nacimiento || '',
+    [`${prefix}_FECHA_NACIMIENTO`]: p.fecha_nacimiento ? formatFechaNotarial(p.fecha_nacimiento) : '',
+    [`${prefix}_TELEFONO`]:        p.telefono_principal || '',
+    [`${prefix}_CORREO`]:          p.correo_electronico || '',
+  };
+}
+
 /**
  * Construye el objeto de variables a inyectar en la plantilla Word.
  * Todos los campos devuelven string vacío si el dato no está disponible,
  * para que docxtemplater no rompa en plantillas sin esos placeholders.
+ *
+ * @param {object} escritura  - Documento Escritura de MongoDB
+ * @param {Array}  personas   - Array de documentos ClienteGeneral (opcional)
  */
-function buildVariables(escritura = {}) {
+function buildVariables(escritura = {}, personas = []) {
   const numControl  = Number(escritura.numeroControl) || 0;
   const volumen     = escritura.volumen ?? '';
   const abogado     = escritura.abogado ?? '';
   const volNum      = extractVolumenNumero(volumen);
-  const fecha       = formatFechaNotarial(escritura.fecha); // "17 de Junio del 2026"
-  const fechaComp   = descomponerFecha(escritura.fecha);    // { dia, diaLetras, mes, anio, anioLetras }
+  const fecha       = formatFechaNotarial(escritura.fecha);
+  const fechaComp   = descomponerFecha(escritura.fecha);
+
+  // ── Variables por índice: PERSONA1_*, PERSONA2_*, ... PERSONA6_* ──
+  const personaIndexVars = {};
+  for (let i = 0; i < MAX_PERSONAS; i++) {
+    Object.assign(personaIndexVars, buildPersonaVars(personas[i], `PERSONA${i + 1}`));
+  }
+
+  // ── Variables por rol semántico (para plantillas de Poder) ──
+  const poderdante = personas.find(p => p.rol === 'Poderdante') || null;
+  const apoderado  = personas.find(p => p.rol === 'Apoderado')  || null;
 
   return {
     // ── Pie de página ──────────────────────────────────────────
-    NUM_TRAMITE:          formatConComas(numControl),          // "14,004"
-    VOLUMEN_ROMANO:       volNum !== null ? numToRoman(volNum) : String(volumen), // "XIII"
-    INICIALES:            getIniciales(abogado),               // "AU"
+    NUM_TRAMITE:          formatConComas(numControl),
+    VOLUMEN_ROMANO:       volNum !== null ? numToRoman(volNum) : String(volumen),
+    INICIALES:            getIniciales(abogado),
 
     // ── Sección VI. Registro ───────────────────────────────────
-    NUM_TRAMITE_LETRAS:   numToLetras(numControl),             // "catorce mil cuatro"
-    LIBRO_LETRAS:         volumenToOrdinalLetras(volumen),     // "Décimo Tercero"
+    NUM_TRAMITE_LETRAS:   numToLetras(numControl),
+    LIBRO_LETRAS:         volumenToOrdinalLetras(volumen),
 
-    // ── Fecha compuesta (Ratificación Notarial) ────────────────
-    FECHA_DIA:            fechaComp?.dia        ?? '',  // "17"
-    FECHA_DIA_LETRAS:     fechaComp?.diaLetras  ?? '',  // "diecisiete"
-    FECHA_MES:            fechaComp?.mes        ?? '',  // "junio"
-    FECHA_ANIO:           fechaComp?.anio       ?? '',  // "2026"
-    FECHA_ANIO_LETRAS:    fechaComp?.anioLetras ?? '',  // "dos mil veintiséis"
+    // ── Fecha compuesta ────────────────────────────────────────
+    FECHA_DIA:            fechaComp?.dia        ?? '',
+    FECHA_DIA_LETRAS:     fechaComp?.diaLetras  ?? '',
+    FECHA_MES:            fechaComp?.mes        ?? '',
+    FECHA_ANIO:           fechaComp?.anio       ?? '',
+    FECHA_ANIO_LETRAS:    fechaComp?.anioLetras ?? '',
 
-    // ── Datos generales (útiles en fases futuras) ──────────────
+    // ── Datos de la escritura ──────────────────────────────────
     ABOGADO:              abogado,
     TIPO_TRAMITE:         escritura.tipoTramite ?? '',
     FECHA:                fecha,
@@ -79,6 +122,14 @@ function buildVariables(escritura = {}) {
     FOLIO_HASTA:          String(escritura.folioHasta ?? ''),
     VOLUMEN:              String(volumen),
     VOLUMEN_NUM:          volNum !== null ? String(volNum) : String(volumen),
+    VOLUMEN_LETRAS:       volNum !== null ? numToLetras(volNum) : String(volumen),
+
+    // ── Personas por índice (EP: Compraventa, Constitución…) ───
+    ...personaIndexVars,
+
+    // ── Personas por rol semántico (Poderes) ───────────────────
+    ...buildPersonaVars(poderdante, 'PODERDANTE'),
+    ...buildPersonaVars(apoderado,  'APODERADO'),
   };
 }
 

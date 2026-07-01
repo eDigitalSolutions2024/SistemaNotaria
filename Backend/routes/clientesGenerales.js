@@ -171,9 +171,10 @@ router.get('/pdf-data/:clienteId', async (req, res) => {
 
           return {
             indice: i + 1,
+            rol: p.rol || '',
             nombre_completo: p.nombre_completo,
 
-            lugar_nacimiento: p.lugar_nacimiento, // legacy
+            lugar_nacimiento: p.lugar_nacimiento,
             lugar_nacimiento_estado: p.lugar_nacimiento_estado || '',
             lugar_nacimiento_ciudad: p.lugar_nacimiento_ciudad || '',
             lugar_nacimiento_display: display,
@@ -195,7 +196,6 @@ router.get('/pdf-data/:clienteId', async (req, res) => {
             rfc: p.rfc,
           };
         }),
-
       },
       generadoEl: new Date(),
     };
@@ -269,9 +269,9 @@ router.get('/pdf/:clienteId', async (req, res) => {
 
           return {
             indice: i + 1,
+            rol: p.rol || '',
             nombre_completo: p.nombre_completo,
 
-            // ✅ lugar nacimiento (nuevo + legacy)
             lugar_nacimiento: p.lugar_nacimiento,
             lugar_nacimiento_estado: p.lugar_nacimiento_estado || '',
             lugar_nacimiento_ciudad: p.lugar_nacimiento_ciudad || '',
@@ -280,7 +280,6 @@ router.get('/pdf/:clienteId', async (req, res) => {
             fecha_nacimiento: p.fecha_nacimiento,
             ocupacion: p.ocupacion,
 
-            // ✅ estado civil + campos condicionales
             estado_civil: p.estado_civil,
             estado_civil_con_quien: p.estado_civil_con_quien || '',
             estado_civil_lugar_fecha: p.estado_civil_lugar_fecha || '',

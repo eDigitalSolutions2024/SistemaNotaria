@@ -289,6 +289,67 @@ const INJECTION_RULES = [
       },
     ],
   },
+  // ══════════════════════════════════════════════════════════════════════════
+  // REGLAS PARA PLANTILLAS EP (Escrituras Públicas: Compraventa, Constitución)
+  // ══════════════════════════════════════════════════════════════════════════
+
+  {
+    // ── EP: LÍNEA DE VOLUMEN ───────────────────────────────────────────────
+    // Texto actual: "--- VOLUMEN DOSCIENTOS SETENTA Y TRES ---"
+    //           o:  "--- VOLÚMEN DOSCIENTOS SESENTA Y CINCO ---"
+    // Resultado:    "--- VOLUMEN {{VOLUMEN_LETRAS}} ---"
+    // VOL[UÚ]MEN cubre "VOLUMEN" (sin acento) y "VOLÚMEN" (con acento).
+    detect: /VOL[UÚ]MEN\s+[A-ZÁÉÍÓÚÜÑ]/,
+    strategy: 'mergeAll',
+    replacements: [
+      {
+        from: /(VOL[UÚ]MEN)\s+[A-ZÁÉÍÓÚÜÑ][A-ZÁÉÍÓÚÜÑa-záéíóúüñ ]*/gi,
+        to:   '$1 {{VOLUMEN_LETRAS}}',
+      },
+    ],
+  },
+  {
+    // ── EP: LÍNEA DE NÚMERO DE ESCRITURA ──────────────────────────────────
+    // Texto actual: "ESCRITURA PÚBLICA NÚMERO DIEZ MIL ... (10,282)."
+    // Resultado:    "ESCRITURA PÚBLICA NÚMERO {{NUM_TRAMITE_LETRAS}} ({{NUM_TRAMITE}})."
+    detect: /ESCRITURA PÚBLICA NÚMERO\s+[A-ZÁÉÍÓÚÜÑ]/,
+    strategy: 'mergeAll',
+    replacements: [
+      {
+        from: /ESCRITURA PÚBLICA NÚMERO\s+[A-ZÁÉÍÓÚÜÑ][A-ZÁÉÍÓÚÜÑa-záéíóúüñ\s]+\(\s*[\d,]+\s*\)/gi,
+        to:   'ESCRITURA PÚBLICA NÚMERO {{NUM_TRAMITE_LETRAS}} ({{NUM_TRAMITE}})',
+      },
+    ],
+  },
+  {
+    // ── EP: FECHA EN APERTURA ──────────────────────────────────────────────
+    // Texto actual: "...a los 24 (veinticuatro) días del mes de noviembre
+    //               del año 2025 (dos mil veinticinco)..."
+    // Resultado:    "...a los {{FECHA_DIA}} ({{FECHA_DIA_LETRAS}}) días del
+    //               mes de {{FECHA_MES}} del año {{FECHA_ANIO}} ({{FECHA_ANIO_LETRAS}})..."
+    detect: /a los \d{1,2}\s*\([^)]+\)\s+d[ií]as?\s+del mes de/i,
+    strategy: 'mergeAll',
+    replacements: [
+      {
+        from: /a los\s+\d{1,2}\s*\([^)]+\)\s+d[ií]as?\s+del mes de\s+[a-záéíóúüñ]+\s+del año\s+\d{4}\s*\([^)]+\)/gi,
+        to:   'a los {{FECHA_DIA}} ({{FECHA_DIA_LETRAS}}) días del mes de {{FECHA_MES}} del año {{FECHA_ANIO}} ({{FECHA_ANIO_LETRAS}})',
+      },
+    ],
+  },
+  {
+    // ── EP COMPRAVENTA: NOMBRES DE PERSONA ────────────────────────────────
+    // Texto actual: "NOMBRE Y APELLIDO VENDEDOR" / "NOMBRE Y APELLIDO COMPRADOR" /
+    //               "NOMBRE Y APELLIDO COMPRADORA"
+    // Resultado:    "{{PERSONA1_NOMBRE}}" / "{{PERSONA2_NOMBRE}}" / "{{PERSONA3_NOMBRE}}"
+    // COMPRADORA debe ir antes que COMPRADOR (más largo primero).
+    detect: /NOMBRE Y APELLIDO/,
+    strategy: 'mergeAll',
+    replacements: [
+      { from: /NOMBRE Y APELLIDO COMPRADORA/gi, to: '{{PERSONA3_NOMBRE}}' },
+      { from: /NOMBRE Y APELLIDO COMPRADOR/gi,  to: '{{PERSONA2_NOMBRE}}' },
+      { from: /NOMBRE Y APELLIDO VENDEDOR/gi,   to: '{{PERSONA1_NOMBRE}}' },
+    ],
+  },
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────

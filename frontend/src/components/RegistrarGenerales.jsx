@@ -224,6 +224,14 @@ export default function RegistrarGenerales() {
         }
       }
 
+      // ✅ Validación condicional para trámites de Poder: rol obligatorio
+      if (esPoder && !p.rol) {
+        setMensaje(
+          `Debes asignar un rol (Poderdante o Apoderado) a la persona ${i + 1}.`
+        );
+        return false;
+      }
+
       // ✅ Validación condicional para Casado/a
       if (String(p.estado_civil || "").trim() === "Casado/a") {
         const extra = [

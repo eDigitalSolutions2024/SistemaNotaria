@@ -5,7 +5,8 @@ const fs      = require('fs');
 const express = require('express');
 const router  = express.Router();
 
-const Escritura = require('../models/Escritura');
+const Escritura      = require('../models/Escritura');
+const ClienteGeneral = require('../models/ClienteGeneral');
 const { buildVariables, generarDocx, PLANTILLAS_DIR, TEMPLATES_DIR, resolveFilePath } = require('../services/plantillaService');
 const { injectPlaceholders } = require('../services/docxTransformer');
 
@@ -62,12 +63,28 @@ router.get('/:id/generar', async (req, res) => {
 
   // 1) Buscar escritura en BD (si se proporcionó escrituraId)
   let escrituraData = {};
+  let personas      = [];
+
   if (escrituraId) {
     try {
       const esc = await Escritura.findById(escrituraId).lean();
       if (esc) {
         escrituraData = esc;
-        console.log(`[plantillas/generar] Escritura encontrada: control=${esc.numeroControl} volumen=${esc.volumen} abogado=${esc.abogado}`);
+        console.log(`[plantillas/generar] Escritura encontrada: control=${esc.numeroControl} volumen=${esc.volumen} abogado=${esc.abogado} cliente=${esc.cliente}`);
+
+        // Cargar personas (ClienteGeneral) vinculadas al número de cliente
+        const clienteNum = Number(esc.cliente);
+        if (Number.isFinite(clienteNum) && clienteNum > 0) {
+          try {
+            personas = await ClienteGeneral
+              .find({ clienteId: clienteNum })
+              .sort({ createdAt: 1 })
+              .lean();
+            console.log(`[plantillas/generar] Personas cargadas: ${personas.length}`);
+          } catch (pe) {
+            console.warn('[plantillas/generar] No se pudieron cargar personas:', pe.message);
+          }
+        }
       } else {
         console.warn(`[plantillas/generar] escrituraId=${escrituraId} no encontrado en BD`);
       }
@@ -85,8 +102,8 @@ router.get('/:id/generar', async (req, res) => {
   }
 
   try {
-    const variables = buildVariables(escrituraData);
-    console.log(`[plantillas/generar] Variables: NUM_TRAMITE=${variables.NUM_TRAMITE} VOLUMEN_ROMANO=${variables.VOLUMEN_ROMANO} INICIALES=${variables.INICIALES}`);
+    const variables = buildVariables(escrituraData, personas);
+    console.log(`[plantillas/generar] Variables: NUM_TRAMITE=${variables.NUM_TRAMITE} VOLUMEN_ROMANO=${variables.VOLUMEN_ROMANO} INICIALES=${variables.INICIALES} personas=${personas.length}`);
 
     const buffer   = generarDocx(abs, variables);
     const numCtrl  = escrituraData.numeroControl ?? 'sincontrol';

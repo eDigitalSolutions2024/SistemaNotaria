@@ -837,9 +837,14 @@ function getNewFormErrors({ newRow, newVolumen, newFolioDesde, newFolioHasta, ne
     setTplRow(row);
 
     const tipo = tipoFromRow(row);
-    const opciones = incluye(tipo, 'poder')
-      ? plantillas.filter(p => incluye(p.label, 'PPCAAAD'))
-      : [];
+    let opciones = [];
+    if (incluye(tipo, 'poder')) {
+      opciones = plantillas.filter(p => p.type === 'poder');
+    } else if (incluye(tipo, 'compraventa')) {
+      opciones = plantillas.filter(p => p.type === 'compraventa');
+    } else if (incluye(tipo, 'constituci') || incluye(tipo, 'sociedad')) {
+      opciones = plantillas.filter(p => p.type === 'constitucion');
+    }
 
     setTplOptions(opciones);
   };
