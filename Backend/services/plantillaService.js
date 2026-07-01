@@ -48,24 +48,32 @@ function composeLugarNacimiento(ciudad = '', estado = '') {
   return c || e;
 }
 
+// Produce "23 (veintitrés) de enero del 1980 (mil novecientos ochenta)" para secciones de Datos Generales
+function formatFechaNotarialCompleta(fecha) {
+  const comp = descomponerFecha(fecha);
+  if (!comp) return '';
+  return `${comp.dia} (${comp.diaLetras}) de ${comp.mes} del ${comp.anio} (${comp.anioLetras})`;
+}
+
 function buildPersonaVars(p, prefix) {
   p = p || {};
   return {
-    [`${prefix}_ROL`]:             p.rol || '',
-    [`${prefix}_NOMBRE`]:          p.nombre_completo || '',
-    [`${prefix}_CURP`]:            p.curp || '',
-    [`${prefix}_RFC`]:             p.rfc || '',
-    [`${prefix}_DOMICILIO`]:       p.domicilio || '',
-    [`${prefix}_COLONIA`]:         p.colonia || '',
-    [`${prefix}_OCUPACION`]:       p.ocupacion || '',
-    [`${prefix}_ESTADO_CIVIL`]:    p.estado_civil || '',
-    [`${prefix}_EC_CONYUGUE`]:     p.estado_civil_con_quien || '',
-    [`${prefix}_EC_LUGAR_FECHA`]:  p.estado_civil_lugar_fecha || '',
-    [`${prefix}_EC_REGIMEN`]:      p.estado_civil_regimen || '',
+    [`${prefix}_ROL`]:              p.rol || '',
+    [`${prefix}_NOMBRE`]:           p.nombre_completo || '',
+    [`${prefix}_CURP`]:             p.curp || '',
+    [`${prefix}_RFC`]:              p.rfc || '',
+    [`${prefix}_DOMICILIO`]:        p.domicilio || '',
+    [`${prefix}_COLONIA`]:          p.colonia || '',
+    [`${prefix}_OCUPACION`]:        p.ocupacion || '',
+    [`${prefix}_ESTADO_CIVIL`]:     p.estado_civil || '',
+    [`${prefix}_EC_CONYUGUE`]:      p.estado_civil_con_quien || '',
+    [`${prefix}_EC_LUGAR_FECHA`]:   p.estado_civil_lugar_fecha || '',
+    [`${prefix}_EC_REGIMEN`]:       p.estado_civil_regimen || '',
     [`${prefix}_LUGAR_NACIMIENTO`]: composeLugarNacimiento(p.lugar_nacimiento_ciudad, p.lugar_nacimiento_estado) || p.lugar_nacimiento || '',
     [`${prefix}_FECHA_NACIMIENTO`]: p.fecha_nacimiento ? formatFechaNotarial(p.fecha_nacimiento) : '',
-    [`${prefix}_TELEFONO`]:        p.telefono_principal || '',
-    [`${prefix}_CORREO`]:          p.correo_electronico || '',
+    [`${prefix}_FECHA_NAC_FULL`]:   p.fecha_nacimiento ? formatFechaNotarialCompleta(p.fecha_nacimiento) : '',
+    [`${prefix}_TELEFONO`]:         p.telefono_principal || '',
+    [`${prefix}_CORREO`]:           p.correo_electronico || '',
   };
 }
 

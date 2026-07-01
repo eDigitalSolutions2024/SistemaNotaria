@@ -350,6 +350,18 @@ const INJECTION_RULES = [
       { from: /NOMBRE Y APELLIDO VENDEDOR/gi,   to: '{{PERSONA1_NOMBRE}}' },
     ],
   },
+  {
+    // ── EP CONSTITUCIÓN: SOCIOS (XXXXX = Socio 1 · YYYYY = Socio 2) ──────
+    // Detección por "XXXXX y YYYYY" — patrón exclusivo de las plantillas de
+    // Constitución; no aparece en Compraventa ni en Poderes.
+    // YYYYY primero para evitar que /XXXXX/ consuma parte de /XXXXXXX/.
+    detect: /XXXXX y YYYYY/,
+    strategy: 'mergeAll',
+    replacements: [
+      { from: /YYYYY/g, to: '{{PERSONA2_NOMBRE}}' },
+      { from: /XXXXX/g, to: '{{PERSONA1_NOMBRE}}' },
+    ],
+  },
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
