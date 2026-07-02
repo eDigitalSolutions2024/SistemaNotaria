@@ -3,15 +3,16 @@
 const { ACTIVIDADES_PLD, calcularUmbralPesos } = require('./umbrales');
 
 // Día 17 del mes siguiente a la operación (Art. 23 LFPIORPI)
+// Usa Date.UTC para que el día 17 sea consistente independientemente de la zona horaria del servidor
 function calcularFechaVencimiento(fechaOperacion) {
   const d = new Date(fechaOperacion);
-  let mes = d.getMonth() + 2; // getMonth() es 0-indexed, +1 para base-1, +1 para siguiente mes
-  let anio = d.getFullYear();
+  let mes = d.getUTCMonth() + 2; // 0-indexed + 1 base-1 + 1 mes siguiente
+  let anio = d.getUTCFullYear();
   if (mes > 12) {
     mes = 1;
     anio += 1;
   }
-  return new Date(anio, mes - 1, 17, 23, 59, 59, 0);
+  return new Date(Date.UTC(anio, mes - 1, 17, 23, 59, 59, 0));
 }
 
 /**
