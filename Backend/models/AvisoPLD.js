@@ -17,11 +17,14 @@ const HistorialEntradaSchema = new Schema(
 );
 
 // ── Snapshot inmutable de compareciente al momento del aviso ─────────────────
-// actividad_economica: requerido por fep.xsd persona_fisica_type (código SAT 7 dígitos)
+// nombre/apellidos se completan en UI; nombreCompleto se preserva del origen
+// actividad_economica: código SAT 7 dígitos requerido por fep.xsd en Fase 2 (XML)
 const ComparecienteSchema = new Schema(
   {
     tipoPersona:        { type: String, enum: ['FISICA', 'MORAL'], required: true },
-    // Persona física
+    // Nombre tal como viene de ClienteGeneral — separación confirmada por el usuario en UI
+    nombreCompleto:     { type: String },
+    // Campos individuales completados por el usuario para generación de XML (Fase 2)
     nombre:             { type: String },
     apellidoPaterno:    { type: String },
     apellidoMaterno:    { type: String },
@@ -29,7 +32,7 @@ const ComparecienteSchema = new Schema(
     rfc:                { type: String },
     curp:               { type: String },
     nacionalidad:       { type: String, default: 'MEXICANA' },
-    actividadEconomica: { type: String }, // código 7 dígitos SAT (requerido en XML)
+    actividadEconomica: { type: String }, // código SAT 7 dígitos — pendiente Fase siguiente
     domicilio:          { type: String },
     // Persona moral
     denominacionRazon:  { type: String },
@@ -108,6 +111,7 @@ const AvisoPLDSchema = new Schema(
       enum: [
         'NO_APLICA',
         'PENDIENTE',
+        'PENDIENTE_DECLARANOT', // aviso con portal DeclaraNOT — flujo separado
         'LISTO',
         'XML_GENERADO',
         'RECHAZADO_SPPLD',

@@ -6,7 +6,8 @@ const router = express.Router();
 const Escritura      = require('../models/Escritura');
 const ClienteGeneral = require('../models/ClienteGeneral');
 const AvisoPLD       = require('../models/AvisoPLD');
-const { detectarObligacion } = require('../pld/detectorObligacion');
+const { detectarObligacion }                         = require('../pld/detectorObligacion');
+const { requirePermisoPLD, buildFiltroScope }        = require('../pld/roles');
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -14,36 +15,23 @@ function formatFechaPLD(date) {
   if (!date) return undefined;
   const d = new Date(date);
   if (isNaN(d)) return undefined;
-  const dd = String(d.getDate()).padStart(2, '0');
-  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd   = String(d.getDate()).padStart(2, '0');
+  const mm   = String(d.getMonth() + 1).padStart(2, '0');
   const yyyy = d.getFullYear();
   return `${dd}/${mm}/${yyyy}`;
 }
 
-function splitNombreCompleto(nombreCompleto) {
-  const partes = String(nombreCompleto || '').trim().split(/\s+/);
-  if (partes.length === 1) return { nombre: partes[0], apellidoPaterno: '', apellidoMaterno: '' };
-  if (partes.length === 2) return { nombre: partes[0], apellidoPaterno: partes[1], apellidoMaterno: '' };
-  // Asume: Nombre(s) ApellidoPaterno ApellidoMaterno
-  const apellidoMaterno = partes.pop();
-  const apellidoPaterno = partes.pop();
-  return { nombre: partes.join(' '), apellidoPaterno, apellidoMaterno };
-}
-
+// nombre_completo se preserva sin inferencia de partes — separación confirmada por usuario en UI
 function buildCompareciente(persona) {
-  const { nombre, apellidoPaterno, apellidoMaterno } = splitNombreCompleto(persona.nombre_completo);
   return {
     tipoPersona:     'FISICA',
-    nombre,
-    apellidoPaterno,
-    apellidoMaterno,
+    nombreCompleto:  persona.nombre_completo || undefined,
     fechaNacimiento: formatFechaPLD(persona.fecha_nacimiento),
-    rfc:             persona.rfc   || undefined,
-    curp:            persona.curp  || undefined,
+    rfc:             persona.rfc  || undefined,
+    curp:            persona.curp || undefined,
     nacionalidad:    'MEXICANA',
-    actividadEconomica: undefined, // debe completarse manualmente (código SAT)
     domicilio:       [persona.domicilio, persona.colonia].filter(Boolean).join(', ') || undefined,
-    rol:             persona.rol   || undefined,
+    rol:             persona.rol  || undefined,
     clienteGeneralId: String(persona._id),
   };
 }
@@ -52,9 +40,15 @@ function generarReferenciaOperador(anio, numeroControl) {
   return `NOT-${anio}-${String(numeroControl).padStart(5, '0')}`;
 }
 
+function resolverEstadoInicial(deteccion) {
+  if (!deteccion.aplica) return 'NO_APLICA';
+  if (deteccion.portal === 'DECLARANOT') return 'PENDIENTE_DECLARANOT';
+  return 'PENDIENTE';
+}
+
 // ── POST /api/pld/detectar/:numeroControl ─────────────────────────────────────
 // Detecta obligación de aviso, crea AvisoPLD si no existe, pre-llena comparecientes.
-router.post('/detectar/:numeroControl', async (req, res) => {
+router.post('/detectar/:numeroControl', requirePermisoPLD('puedeDetectar'), async (req, res) => {
   try {
     const numeroControl = Number(req.params.numeroControl);
     if (!Number.isFinite(numeroControl) || numeroControl <= 0) {
@@ -66,16 +60,14 @@ router.post('/detectar/:numeroControl', async (req, res) => {
       return res.status(404).json({ mensaje: `Escritura #${numeroControl} no encontrada.` });
     }
 
-    // Si ya existe un aviso ordinario para esta escritura, devolverlo
+    // Si ya existe un aviso ordinario para esta escritura, devolverlo (idempotente)
     const existente = await AvisoPLD.findOne({ numeroControl, tipoAviso: 'ORDINARIO' }).lean();
     if (existente) {
       return res.json({ creado: false, aviso: existente });
     }
 
     const deteccion = detectarObligacion(escritura);
-
-    // Estado inicial según aplica
-    const estadoInicial = deteccion.aplica ? 'PENDIENTE' : 'NO_APLICA';
+    const estadoInicial = resolverEstadoInicial(deteccion);
 
     const anio = escritura.fecha
       ? new Date(escritura.fecha).getFullYear()
@@ -83,7 +75,7 @@ router.post('/detectar/:numeroControl', async (req, res) => {
 
     const referenciaOperador = generarReferenciaOperador(anio, numeroControl);
 
-    // Calcular fecha de expiración de conservación: fechaOperacion + 10 años (Art. 18 Fracc. IV)
+    // fechaOperacion + 10 años (Art. 18 Fracc. IV LFPIORPI)
     let fechaExpiracionConservacion;
     if (escritura.fecha) {
       const fe = new Date(escritura.fecha);
@@ -101,6 +93,8 @@ router.post('/detectar/:numeroControl', async (req, res) => {
         .lean();
       comparecientes = personas.map(buildCompareciente);
     }
+
+    const usuarioActual = req.user?.nombre || req.user?.id || 'sistema';
 
     const aviso = new AvisoPLD({
       escrituraId:   escritura._id,
@@ -128,7 +122,7 @@ router.post('/detectar/:numeroControl', async (req, res) => {
         estadoHasta: estadoInicial,
         evento:      'DETECCION_AUTOMATICA',
         fecha:       new Date(),
-        usuario:     req.user?.email || req.user?.id || 'sistema',
+        usuario:     usuarioActual,
         nota:        deteccion.razon,
       }],
 
@@ -139,8 +133,8 @@ router.post('/detectar/:numeroControl', async (req, res) => {
       justificacion: deteccion.razon,
 
       abogado:   escritura.abogado,
-      createdBy: req.user?.email || req.user?.id || 'sistema',
-      updatedBy: req.user?.email || req.user?.id || 'sistema',
+      createdBy: usuarioActual,
+      updatedBy: usuarioActual,
     });
 
     await aviso.save();
@@ -152,23 +146,30 @@ router.post('/detectar/:numeroControl', async (req, res) => {
 });
 
 // ── GET /api/pld/avisos ───────────────────────────────────────────────────────
-// Lista avisos con filtros opcionales y paginación.
-router.get('/avisos', async (req, res) => {
+// Lista avisos. Scope limitado por rol (ADMINISTRADOR / OFICIAL_PLD ven todo;
+// resto solo sus propios avisos por abogado).
+router.get('/avisos', requirePermisoPLD('puedeEditar'), async (req, res) => {
   try {
     const {
       estado,
-      abogado,
       portal,
       confianza,
-      page = 1,
+      abogado: abogadoQuery,
+      page  = 1,
       limit = 20,
     } = req.query;
 
-    const filtro = {};
-    if (estado)    filtro.estado    = estado;
-    if (abogado)   filtro.abogado   = { $regex: abogado, $options: 'i' };
-    if (portal)    filtro.portal    = portal;
-    if (confianza) filtro.confianzaDeteccion = confianza;
+    // Scope base por rol — nunca puede ser sobreescrito por query params para ampliar acceso
+    const filtroScope = buildFiltroScope(req);
+
+    const filtro = { ...filtroScope };
+    if (estado)        filtro.estado             = estado;
+    if (portal)        filtro.portal             = portal;
+    if (confianza)     filtro.confianzaDeteccion = confianza;
+    // El filtro por abogado vía query solo puede reducir el scope, nunca ampliarlo
+    if (abogadoQuery && req.permisos.puedeVerTodo) {
+      filtro.abogado = { $regex: abogadoQuery, $options: 'i' };
+    }
 
     const skip  = (Number(page) - 1) * Number(limit);
     const total = await AvisoPLD.countDocuments(filtro);
@@ -181,8 +182,8 @@ router.get('/avisos', async (req, res) => {
 
     return res.json({
       total,
-      page:   Number(page),
-      pages:  Math.ceil(total / Number(limit)),
+      page:  Number(page),
+      pages: Math.ceil(total / Number(limit)),
       avisos,
     });
   } catch (err) {
@@ -192,10 +193,11 @@ router.get('/avisos', async (req, res) => {
 });
 
 // ── GET /api/pld/avisos/:id ───────────────────────────────────────────────────
-// Detalle de un AvisoPLD por su _id de Mongoose.
-router.get('/avisos/:id', async (req, res) => {
+// Detalle de un AvisoPLD. Respeta el scope del usuario.
+router.get('/avisos/:id', requirePermisoPLD('puedeEditar'), async (req, res) => {
   try {
-    const aviso = await AvisoPLD.findById(req.params.id).lean();
+    const filtroScope = buildFiltroScope(req);
+    const aviso = await AvisoPLD.findOne({ _id: req.params.id, ...filtroScope }).lean();
     if (!aviso) {
       return res.status(404).json({ mensaje: 'Aviso PLD no encontrado.' });
     }
