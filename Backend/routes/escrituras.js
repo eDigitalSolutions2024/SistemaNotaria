@@ -19,6 +19,8 @@ const ReciboLink = require('../models/ReciboLink');
 let Cliente = null;
 try { Cliente = require('../models/Cliente'); } catch { /* opcional */ }
 
+const pldService = require('../pld/pldService');
+
 
 
 
@@ -1494,6 +1496,7 @@ if (base.presupuestoId) {
   });
 }
 
+await pldService.processEscritura(created._id, getUserNameFromReq(req));
 res.status(201).json(created);
 
   } catch (e) {
@@ -1999,6 +2002,7 @@ console.log('PUT merged.fecha:', merged.fecha);
     );
 
     const updated = await Escritura.findById(req.params.id).lean();
+    await pldService.processEscritura(updated._id, getUserNameFromReq(req));
     return res.json(updated);
   } catch (e) {
     return res.status(500).json({ mensaje: 'Error actualizando escritura', detalle: e.message });
@@ -2011,6 +2015,7 @@ router.delete('/:id', async (req, res) => {
     const it = await Escritura.findById(req.params.id);
     if (!it) return res.status(404).json({ mensaje: 'No encontrado' });
     await Escritura.deleteOne({ _id: req.params.id });
+    await pldService.cancelByEscritura(it._id, getUserNameFromReq(req));
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ mensaje: 'Error eliminando escritura', detalle: e.message });
