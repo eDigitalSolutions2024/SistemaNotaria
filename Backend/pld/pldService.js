@@ -132,7 +132,19 @@ async function _crearAviso(escritura, deteccion, usuarioId) {
 }
 
 async function _actualizarAviso(aviso, escritura, deteccion, usuarioId) {
-  const estadoObjetivo = resolverEstadoInicial(deteccion);
+  const estadoObjetivo       = resolverEstadoInicial(deteccion);
+  const montoPrellenadoNuevo = escritura.valorAvaluo ?? null;
+
+  // Idempotency early-exit: si ningún campo relevante cambió y el estado objetivo
+  // es el mismo, no hay nada que persistir; se omite el save.
+  const sinCambios =
+    aviso.incisoLegal     === deteccion.incisoLegal     &&
+    aviso.tipoFEP         === deteccion.tipoFEP         &&
+    aviso.portal          === deteccion.portal           &&
+    aviso.montoPrellenado === montoPrellenadoNuevo       &&
+    aviso.abogado         === escritura.abogado          &&
+    aviso.estado          === estadoObjetivo;
+  if (sinCambios) return;
 
   aviso.incisoLegal          = deteccion.incisoLegal;
   aviso.tipoFEP              = deteccion.tipoFEP;
@@ -140,7 +152,7 @@ async function _actualizarAviso(aviso, escritura, deteccion, usuarioId) {
   aviso.confianzaDeteccion   = deteccion.confianza;
   aviso.portal               = deteccion.portal;
   aviso.fechaVencimiento     = deteccion.fechaVencimiento;
-  aviso.montoPrellenado      = escritura.valorAvaluo ?? null;
+  aviso.montoPrellenado      = montoPrellenadoNuevo;
   aviso.abogado              = escritura.abogado;
   aviso.updatedBy            = usuarioId;
 
@@ -171,6 +183,22 @@ async function _actualizarAviso(aviso, escritura, deteccion, usuarioId) {
  * Evalúa y sincroniza el AvisoPLD para una Escritura creada o actualizada.
  * Reutilizable desde escrituras, importaciones, jobs y scripts.
  *
+ * Garantía de idempotencia — puede invocarse N veces con el mismo escrituraId
+ * sin efectos adicionales. Árbol de decisión:
+ *
+ *   1. Escritura no existe o tipoTramite es placeholder → no-op
+ *   2. No existe aviso ORDINARIO para esta escritura:
+ *      a. Obligación aplica o confianza=REQUIERE_REVISION → crea UN AvisoPLD
+ *      b. No aplica con certeza → no-op (ausencia de aviso es el estado correcto)
+ *   3. Ya existe un aviso ORDINARIO:
+ *      a. Estado inmutable (PRESENTADO/CANCELADO/RECHAZADO_SPPLD) → no-op
+ *      b. Ningún campo relevante cambió y estado objetivo igual → no-op (sin DB write)
+ *      c. Cambios en campos, estado objetivo igual → actualiza + DATOS_ACTUALIZADOS
+ *      d. Estado objetivo distinto → transición + ESCRITURA_ACTUALIZADA
+ *
+ * El índice único parcial { escrituraId } con partialFilter tipoAviso='ORDINARIO'
+ * actúa como red de seguridad ante condiciones de carrera concurrentes (E11000).
+ *
  * @param {string|import('mongoose').Types.ObjectId} escrituraId
  * @param {string} [usuarioId='sistema']
  */
@@ -199,6 +227,11 @@ async function processEscritura(escrituraId, usuarioId = 'sistema') {
 
     await _actualizarAviso(aviso, escritura, deteccion, usuarioId);
   } catch (err) {
+    if (err.code === 11000) {
+      // Race condition: dos invocaciones concurrentes intentaron crear el aviso al mismo
+      // tiempo. El índice único lo previno; la segunda llamada se descarta con seguridad.
+      return;
+    }
     console.error('[pldService/process] escrituraId=%s usuario=%s error=%s',
       escrituraId, usuarioId, err.message);
   }

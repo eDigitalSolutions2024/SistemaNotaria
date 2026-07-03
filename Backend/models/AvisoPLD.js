@@ -167,6 +167,12 @@ const AvisoPLDSchema = new Schema(
 // Índices compuestos
 AvisoPLDSchema.index({ numeroControl: 1, tipoAviso: 1 });
 AvisoPLDSchema.index({ fechaVencimiento: 1, estado: 1 });
+// Garantía DB: máximo un aviso ORDINARIO activo por Escritura
+// Complementa la guardia de aplicación en pldService.processEscritura()
+AvisoPLDSchema.index(
+  { escrituraId: 1 },
+  { unique: true, partialFilterExpression: { tipoAviso: { $eq: 'ORDINARIO' } } }
+);
 
 // Registrar transición de estado (append-only)
 AvisoPLDSchema.methods.registrarTransicion = function (estadoHasta, evento, usuario, nota) {
