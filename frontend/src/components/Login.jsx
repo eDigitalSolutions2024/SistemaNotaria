@@ -2,19 +2,17 @@
 import React, { useState } from 'react';
 import axios from 'axios';
 import { useAuth } from '../auth/AuthContext';
- 
-// ⬇️ Si en cambio el logo está en public/logo.png, comenta la línea de arriba y usa esta:
-const logo = '/logo.png';
 
-const API = process.env.REACT_APP_API_URL || 'http://localhost:8010';
+const logo = '/logo.png';
+const API  = process.env.REACT_APP_API_URL || 'http://localhost:8010';
 
 export default function Login() {
   const { login } = useAuth();
-  const [user, setUser] = useState('');
+  const [user,     setUser]     = useState('');
   const [password, setPassword] = useState('');
-  const [showPwd, setShowPwd] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [msg, setMsg] = useState(null);
+  const [showPwd,  setShowPwd]  = useState(false);
+  const [loading,  setLoading]  = useState(false);
+  const [msg,      setMsg]      = useState(null);
 
   const onSubmit = async (e) => {
     e.preventDefault();
@@ -36,8 +34,8 @@ export default function Login() {
     } catch (err) {
       const t =
         err.response?.data?.mensaje ||
-        err.response?.data?.error ||
-        err.message ||
+        err.response?.data?.error  ||
+        err.message                 ||
         'No se pudo iniciar sesión';
       setMsg({ type: 'error', text: t });
     } finally {
@@ -48,17 +46,26 @@ export default function Login() {
   return (
     <div style={styles.wrap}>
       <form onSubmit={onSubmit} style={styles.card}>
+
         {/* Logo */}
         <div style={styles.logoWrap}>
-          <img src={logo} alt="Logo" style={styles.logo} />
+          <img src={logo} alt="Notaría 17" style={styles.logo} />
         </div>
 
-        <h2 style={{ margin: 0, marginBottom: 16, textAlign: 'center' }}>Iniciar sesión</h2>
+        {/* Branding */}
+        <div style={styles.brandBlock}>
+          <div style={styles.brandTitle}>Notaría Pública No. 17</div>
+          <div style={styles.brandSub}>Ciudad Juárez, Chihuahua</div>
+        </div>
+
+        <hr style={styles.divider} />
+
+        <p style={styles.formLabel}>Iniciar sesión</p>
 
         <input
           autoFocus
           type="text"
-          placeholder="Usuario (código/nombre/_id...)"
+          placeholder="Usuario (código / nombre / ID)"
           value={user}
           onChange={(e) => setUser(e.target.value)}
           style={styles.input}
@@ -91,10 +98,10 @@ export default function Login() {
         {msg && (
           <div
             style={{
-              marginTop: 12,
-              padding: '8px 10px',
+              marginTop: 4,
+              padding: '9px 12px',
               borderRadius: 8,
-              fontSize: 14,
+              fontSize: 13,
               background:
                 msg.type === 'error' ? '#ffe8e8' :
                 msg.type === 'warn'  ? '#fff7e0' : '#e8fff1',
@@ -120,17 +127,17 @@ const styles = {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    background: '#f6f7fb',
+    background: 'linear-gradient(145deg, #0f172a 0%, #1e3a5f 55%, #1e40af 100%)',
     padding: 16,
   },
   card: {
     width: 420,
     maxWidth: '92vw',
     background: '#fff',
-    border: '1px solid #eee',
-    borderRadius: 14,
-    padding: 20,
-    boxShadow: '0 12px 24px rgba(0,0,0,.06)',
+    border: 'none',
+    borderRadius: 18,
+    padding: '32px 28px 28px',
+    boxShadow: '0 24px 56px rgba(0, 0, 0, 0.35)',
     display: 'flex',
     flexDirection: 'column',
     gap: 10,
@@ -138,20 +145,49 @@ const styles = {
   logoWrap: {
     display: 'flex',
     justifyContent: 'center',
-    marginBottom: 10,
+    marginBottom: 4,
   },
   logo: {
-    height: 64,            // ajusta a tu gusto
+    height: 90,
+    width: 90,
     objectFit: 'contain',
+  },
+  brandBlock: {
+    textAlign: 'center',
+  },
+  brandTitle: {
+    fontSize: 17,
+    fontWeight: 700,
+    color: '#1e293b',
+    letterSpacing: 0.3,
+  },
+  brandSub: {
+    fontSize: 12,
+    color: '#64748b',
+    marginTop: 2,
+  },
+  divider: {
+    border: 'none',
+    borderTop: '1px solid #e2e8f0',
+    margin: '2px 0',
+  },
+  formLabel: {
+    margin: '0 0 2px',
+    fontSize: 13,
+    fontWeight: 600,
+    color: '#475569',
   },
   input: {
     width: '100%',
     height: 42,
     padding: '0 12px',
-    border: '1px solid #d9d9d9',
+    border: '1px solid #cbd5e1',
     borderRadius: 8,
     outline: 'none',
-    fontSize: 15,
+    fontSize: 14,
+    color: '#1e293b',
+    boxSizing: 'border-box',
+    fontFamily: "'Segoe UI', sans-serif",
   },
   eyeBtn: {
     position: 'absolute',
@@ -162,17 +198,20 @@ const styles = {
     border: 'none',
     background: 'transparent',
     cursor: 'pointer',
-    fontSize: 18,
+    fontSize: 17,
   },
   submit: {
-    marginTop: 6,
+    marginTop: 4,
     height: 44,
     border: 'none',
     borderRadius: 10,
-    background: '#0b66ff',
+    background: '#2563eb',
     color: '#fff',
-    fontWeight: 600,
-    fontSize: 16,
+    fontWeight: 700,
+    fontSize: 15,
     cursor: 'pointer',
+    letterSpacing: 0.3,
+    transition: 'background 0.2s',
+    fontFamily: "'Segoe UI', sans-serif",
   },
 };

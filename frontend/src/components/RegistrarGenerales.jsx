@@ -134,6 +134,28 @@ export default function RegistrarGenerales() {
     clienteData?.motivo && clienteData.motivo.toUpperCase().includes("PODER")
   );
 
+  const esRatificacion = Boolean(
+    clienteData?.motivo && clienteData.motivo.toUpperCase().includes("RATIF")
+  );
+
+  const esTestamento = Boolean(
+    clienteData?.motivo && clienteData.motivo.toUpperCase().includes("TESTAMENTO")
+  );
+
+  const esTipoConRol = esPoder || esRatificacion || esTestamento;
+
+  const rolesDisponibles = esPoder
+    ? [
+        { value: "Apoderado",   label: "Apoderado",   sub: "(quien recibe)" },
+        { value: "Poderdante",  label: "Poderdante",  sub: "(quien otorga)" },
+      ]
+    : (esRatificacion || esTestamento)
+    ? [
+        { value: "Compareciente", label: "Compareciente", sub: "(quien ratifica)" },
+        { value: "Testigo",       label: "Testigo",       sub: "(testigo)" },
+      ]
+    : [];
+
   // 🔹 Manejar cambio en el select de cliente
   const handleChangeCliente = (e) => {
     setClienteSeleccionado(e.target.value);
@@ -264,6 +286,59 @@ export default function RegistrarGenerales() {
       }
     }
 
+    // Validación de roles para Poder
+    if (esPoder) {
+      const sinRol = personas.findIndex((p) => !p.rol);
+      if (sinRol !== -1) {
+        setMensaje(`La persona ${sinRol + 1} debe tener un rol (Apoderado o Poderdante).`);
+        return false;
+      }
+      if (!personas.some((p) => p.rol === "Apoderado")) {
+        setMensaje("Se requiere al menos un Apoderado.");
+        return false;
+      }
+      if (!personas.some((p) => p.rol === "Poderdante")) {
+        setMensaje("Se requiere al menos un Poderdante.");
+        return false;
+      }
+    }
+
+    // Validación de roles para Ratificación
+    if (esRatificacion) {
+      const sinRol = personas.findIndex((p) => !p.rol);
+      if (sinRol !== -1) {
+        setMensaje(`La persona ${sinRol + 1} debe tener un rol (Compareciente o Testigo).`);
+        return false;
+      }
+      if (!personas.some((p) => p.rol === "Compareciente")) {
+        setMensaje("Se requiere al menos un Compareciente.");
+        return false;
+      }
+      if (!personas.some((p) => p.rol === "Testigo")) {
+        setMensaje("Se requiere al menos un Testigo.");
+        return false;
+      }
+    }
+
+    // Validación de roles para Testamento (exactamente 1 compareciente y 3 testigos)
+    if (esTestamento) {
+      const sinRol = personas.findIndex((p) => !p.rol);
+      if (sinRol !== -1) {
+        setMensaje(`La persona ${sinRol + 1} debe tener un rol (Compareciente o Testigo).`);
+        return false;
+      }
+      const numComparecientes = personas.filter((p) => p.rol === "Compareciente").length;
+      const numTestigos = personas.filter((p) => p.rol === "Testigo").length;
+      if (numComparecientes !== 1) {
+        setMensaje(`El testamento requiere exactamente 1 Compareciente (tienes ${numComparecientes}).`);
+        return false;
+      }
+      if (numTestigos !== 3) {
+        setMensaje(`El testamento requiere exactamente 3 Testigos (tienes ${numTestigos}).`);
+        return false;
+      }
+    }
+
     setMensaje("");
     return true;
   };
@@ -365,10 +440,8 @@ export default function RegistrarGenerales() {
               setClienteSeleccionado(id);
               const data = id ? clientes.find((c) => (c._id ?? c.id) === id) || null : null;
               setClienteData(data);
-              const motivo = data?.motivo || "";
-              if (!motivo.toUpperCase().includes("PODER")) {
-                setPersonas((prev) => prev.map((p) => ({ ...p, rol: "" })));
-              }
+              // resetear roles al cambiar de cliente (los roles dependen del tipo de trámite)
+              setPersonas((prev) => prev.map((p) => ({ ...p, rol: "" })));
             }}
           />
           <small className="help-text">
@@ -396,30 +469,26 @@ export default function RegistrarGenerales() {
                 />
               </div>
 
-              {esPoder && (
+              {esTipoConRol && (
                 <div className="form-group">
-                  <label>Rol en el trámite</label>
+                  <label>Rol en el trámite *</label>
                   <div className="rol-selector">
-                    <label className={`rol-pill${p.rol === "Apoderado" ? " activo" : ""}`}>
-                      <input
-                        type="checkbox"
-                        checked={p.rol === "Apoderado"}
-                        onChange={() =>
-                          handleChangePersona(index, "rol", p.rol === "Apoderado" ? "" : "Apoderado")
-                        }
-                      />
-                      Apoderado <span style={{ fontSize: 12, opacity: 0.7 }}>(quien recibe)</span>
-                    </label>
-                    <label className={`rol-pill${p.rol === "Poderdante" ? " activo-poderdante" : ""}`}>
-                      <input
-                        type="checkbox"
-                        checked={p.rol === "Poderdante"}
-                        onChange={() =>
-                          handleChangePersona(index, "rol", p.rol === "Poderdante" ? "" : "Poderdante")
-                        }
-                      />
-                      Poderdante <span style={{ fontSize: 12, opacity: 0.7 }}>(quien otorga)</span>
-                    </label>
+                    {rolesDisponibles.map((rol) => (
+                      <label
+                        key={rol.value}
+                        className={`rol-pill${p.rol === rol.value ? " activo" : ""}`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={p.rol === rol.value}
+                          onChange={() =>
+                            handleChangePersona(index, "rol", p.rol === rol.value ? "" : rol.value)
+                          }
+                        />
+                        {rol.label}{" "}
+                        <span style={{ fontSize: 12, opacity: 0.7 }}>{rol.sub}</span>
+                      </label>
+                    ))}
                   </div>
                 </div>
               )}

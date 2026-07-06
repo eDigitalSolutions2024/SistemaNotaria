@@ -1,20 +1,54 @@
 // frontend/src/pages/MainPage.jsx
-import React, { useMemo, useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import './MainPage.css';
-import FormAbogado from '../components/FormAbogado';
-import RegistrarCliente from '../pages/Home';
-import Protocolito from '../components/Protocolito';
-import Recibo from '../components/ReciboNotaria17';
-import ConsultarRecibos from '../components/ConsultarRecibos';
-import Escrituras from '../components/Escrituras';
+
+// MUI Icons
+import GavelIcon          from '@mui/icons-material/Gavel';
+import PeopleAltIcon      from '@mui/icons-material/PeopleAlt';
+import PersonAddIcon      from '@mui/icons-material/PersonAdd';
+import LibraryBooksIcon   from '@mui/icons-material/LibraryBooks';
+import ManageSearchIcon   from '@mui/icons-material/ManageSearch';
+import BadgeIcon          from '@mui/icons-material/Badge';
+import ReceiptLongIcon    from '@mui/icons-material/ReceiptLong';
+import AddCardIcon        from '@mui/icons-material/AddCard';
+import FolderOpenIcon     from '@mui/icons-material/FolderOpen';
+import DescriptionIcon    from '@mui/icons-material/Description';
+import MenuBookIcon       from '@mui/icons-material/MenuBook';
+import RequestQuoteIcon   from '@mui/icons-material/RequestQuote';
+import CalendarMonthIcon  from '@mui/icons-material/CalendarMonth';
+import LogoutIcon         from '@mui/icons-material/Logout';
+import ChevronLeftIcon    from '@mui/icons-material/ChevronLeft';
+import ChevronRightIcon   from '@mui/icons-material/ChevronRight';
+import ExpandMoreIcon     from '@mui/icons-material/ExpandMore';
+import ExpandLessIcon     from '@mui/icons-material/ExpandLess';
+
+import FormAbogado        from '../components/FormAbogado';
+import RegistrarCliente   from '../pages/Home';
+import Protocolito        from '../components/Protocolito';
+import Recibo             from '../components/ReciboNotaria17';
+import ConsultarRecibos   from '../components/ConsultarRecibos';
+import Escrituras         from '../components/Escrituras';
 import RegistrarGenerales from '../components/RegistrarGenerales';
 import ConsultarGenerales from '../components/ConsultarGenerales';
-import Presupuesto from '../components/Presupuesto';
-import EscrituraEstatus from '../components/EscriturasEstatus';
-import Calendario from '../components/Calendario';
+import Presupuesto        from '../components/Presupuesto';
+import Calendario         from '../components/Calendario';
 
 import { useAuth } from '../auth/AuthContext';
 import Login from '../components/Login';
+
+const SECTION_LABELS = {
+  'registrar-cliente':   'Registrar Cliente',
+  'registrar-abogado':   'Gestión de Abogados',
+  'registrar-generales': 'Registrar Generales',
+  'consultar-generales': 'Consultar Generales',
+  'protocolito':         'Protocolito',
+  'Escrituras':          'Escrituras',
+  'escritura-estatus':   'Estatus de Escritura',
+  'recibo':              'Recibos',
+  'recibos-consultar':   'Consultar Recibos',
+  'presupuesto':         'Presupuesto',
+  'calendario':          'Calendario',
+};
 
 export default function MainPage() {
   const { isAuthenticated } = useAuth();
@@ -25,60 +59,40 @@ function AuthedApp() {
   const { user, logout } = useAuth();
   const role = user?.role || '';
 
-  // 🔴 LIMITE DE INACTIVIDAD
   const INACTIVITY_LIMIT = 60 * 60 * 1000;
 
   useEffect(() => {
-    const touchActivity = () => {
-      localStorage.setItem('lastActivity', String(Date.now()));
-    };
-
-    const handler = () => touchActivity();
-
-    window.addEventListener('click', handler);
-    window.addEventListener('keydown', handler);
-    window.addEventListener('mousemove', handler);
-
+    const touchActivity = () => localStorage.setItem('lastActivity', String(Date.now()));
+    window.addEventListener('click',     touchActivity);
+    window.addEventListener('keydown',   touchActivity);
+    window.addEventListener('mousemove', touchActivity);
     touchActivity();
 
     const intervalId = setInterval(() => {
-      const raw = localStorage.getItem('lastActivity');
-      const last = raw ? Number(raw) : 0;
+      const last = Number(localStorage.getItem('lastActivity') || 0);
       if (!last) return;
-
-      const diff = Date.now() - last;
-
-      if (diff > INACTIVITY_LIMIT) {
+      if (Date.now() - last > INACTIVITY_LIMIT) {
         clearInterval(intervalId);
-
         localStorage.removeItem('token');
         localStorage.removeItem('user');
         localStorage.removeItem('lastActivity');
-
         logout();
       }
     }, 1000);
 
     return () => {
-      window.removeEventListener('click', handler);
-      window.removeEventListener('keydown', handler);
-      window.removeEventListener('mousemove', handler);
+      window.removeEventListener('click',     touchActivity);
+      window.removeEventListener('keydown',   touchActivity);
+      window.removeEventListener('mousemove', touchActivity);
       clearInterval(intervalId);
     };
   }, [logout, INACTIVITY_LIMIT]);
 
-
-  const [seccion, setSeccion] = useState(
-    role === 'PROTOCOLITO' ? 'registrar-generales' : 'registrar-cliente'
-  );
-  const [mostrarSubmenu, setMostrarSubmenu] = useState(false);
+  const [seccion,               setSeccion]               = useState(role === 'PROTOCOLITO' ? 'registrar-generales' : 'registrar-cliente');
+  const [mostrarSubmenu,        setMostrarSubmenu]        = useState(false);
   const [mostrarSubmenuRecibos, setMostrarSubmenuRecibos] = useState(false);
-  const [sidebarOpen, setSidebarOpen] = useState(true);
-
-  const [reciboRow, setReciboRow] = useState(null);
-
-  // ✅ NUEVO: escritura seleccionada para pantalla de estatus
-  const [escrituraEstatusRow, setEscrituraEstatusRow] = useState(null);
+  const [sidebarOpen,           setSidebarOpen]           = useState(true);
+  const [reciboRow,             setReciboRow]             = useState(null);
 
   const isMobile = () => window.innerWidth < 992;
 
@@ -89,347 +103,259 @@ function AuthedApp() {
     if (isMobile()) setSidebarOpen(false);
   };
 
-   useEffect(() => {
-    const target = localStorage.getItem("postLoginGoTo");
+  useEffect(() => {
+    const target = localStorage.getItem('postLoginGoTo');
     if (target) {
-      localStorage.removeItem("postLoginGoTo");
-      go(target); // go('calendario')
+      localStorage.removeItem('postLoginGoTo');
+      go(target);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const conectarOutlook = () => {
-    window.location.href = "http://localhost:8020/auth/microsoft/login";
-  };
-
-
   const renderContenido = () => {
-    // 🔒 Si el usuario es PROTOCOLITO, SIEMPRE ve RegistrarGenerales
-    if (role === 'PROTOCOLITO') {
-      return <RegistrarGenerales />;
-    }
+    if (role === 'PROTOCOLITO') return <RegistrarGenerales />;
 
     switch (seccion) {
-      case 'registrar-cliente':
-        return <RegistrarCliente />;
-
-      case 'registrar-abogado':
-        return <FormAbogado />;
-
-      case 'registrar-generales':
-        return <RegistrarGenerales />;
-
-      case 'consultar-generales':
-        return <ConsultarGenerales />;
-
+      case 'registrar-cliente':   return <RegistrarCliente />;
+      case 'registrar-abogado':   return <FormAbogado />;
+      case 'registrar-generales': return <RegistrarGenerales />;
+      case 'consultar-generales': return <ConsultarGenerales />;
       case 'protocolito':
         return (
           <Protocolito
-            onOpenRecibo={(row) => {
-              setReciboRow(row);
-              setSeccion('recibo');
-            }}
+            onOpenRecibo={(row) => { setReciboRow(row); setSeccion('recibo'); }}
           />
         );
-
       case 'Escrituras':
         return (
           <Escrituras
-            onOpenRecibo={(row) => {
-              setReciboRow(row);
-              setSeccion('recibo');
-            }}
-            // ✅ NUEVO: SOLO se abre al doble click (lo disparas desde Escrituras.jsx)
-            onOpenEstatus={(row) => {
-              setEscrituraEstatusRow(row);
-              setSeccion('escritura-estatus');
-            }}
+            onOpenRecibo={(row) => { setReciboRow(row); setSeccion('recibo'); }}
           />
         );
-
-      // ✅ NUEVO: pantalla del estatus de escritura (se entra por doble click)
-      case 'escritura-estatus':
-        return (
-          <EscrituraEstatus
-            row={escrituraEstatusRow}
-            onBack={() => setSeccion('Escrituras')}
-          />
-        );
-
       case 'recibo':
         return <Recibo row={reciboRow} onBack={() => setSeccion('protocolito')} />;
-
       case 'recibos-consultar':
         return (
           <ConsultarRecibos
-            onOpenRecibo={(row) => {
-              setReciboRow(row);
-              setSeccion('recibo');
-            }}
+            onOpenRecibo={(row) => { setReciboRow(row); setSeccion('recibo'); }}
           />
         );
-
-      case 'presupuesto':
-        return <Presupuesto />;
-
-      case 'calendario':
-        return <Calendario />;
-
-      default:
-        return <RegistrarCliente />;
+      case 'presupuesto': return <Presupuesto />;
+      case 'calendario':  return <Calendario />;
+      default:            return <RegistrarCliente />;
     }
   };
 
-  const sidebarStyle = useMemo(
-    () => ({
-      background: '#1f2937',
-      color: '#fff',
-      width: sidebarOpen ? 250 : 60,
-      transition: 'width .25s ease',
-      overflow: 'hidden',
-      padding: sidebarOpen ? '16px 16px' : '16px 8px',
-      boxSizing: 'border-box',
-      display: 'flex',
-      flexDirection: 'column',
-      gap: 8,
-      position: 'relative',
-      minHeight: '100vh',
-    }),
-    [sidebarOpen]
-  );
+  const registrarActive = ['registrar-cliente', 'registrar-generales', 'consultar-generales', 'registrar-abogado'].includes(seccion);
+  const recibosActive   = ['recibo', 'recibos-consultar'].includes(seccion);
+  const escriturasActive = seccion === 'Escrituras';
 
-  const mainStyle = useMemo(
-    () => ({
-      flex: 1,
-      padding: 10,
-      background: '#f6f7fb',
-    }),
-    []
-  );
+  const today = new Date().toLocaleDateString('es-MX', {
+    weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
+  });
 
-  const itemStyle = {
-    listStyle: 'none',
-    display: 'flex',
-    alignItems: 'center',
-    gap: 12,
-    padding: '10px 8px',
-    borderRadius: 8,
-    cursor: 'pointer',
-  };
-  const iconStyle = { width: 28, textAlign: 'center', fontSize: 18 };
+  const isz = { fontSize: 20 };
 
   return (
     <div className="main-layout">
-      <aside
-        className={`sidebar ${sidebarOpen ? 'expanded' : 'collapsed'}`}
-        style={sidebarStyle}
-      >
+
+      {/* ── SIDEBAR ── */}
+      <aside className={`sidebar ${sidebarOpen ? 'expanded' : 'collapsed'}`}>
+
         <button
           className="sidebar-handle"
           onClick={() => setSidebarOpen((o) => !o)}
           aria-label={sidebarOpen ? 'Ocultar menú' : 'Mostrar menú'}
-          aria-expanded={sidebarOpen}
-          title={sidebarOpen ? 'Ocultar' : 'Mostrar'}
         >
-          {sidebarOpen ? '❮' : '❯'}
+          {sidebarOpen
+            ? <ChevronLeftIcon sx={{ fontSize: 18 }} />
+            : <ChevronRightIcon sx={{ fontSize: 18 }} />}
         </button>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 4px' }}>
-          <span style={iconStyle}>⚖️</span>
-          {sidebarOpen && (
-            <div className="sidebar-title" style={{ fontWeight: 700 }}>
-              Notaría 17
-            </div>
-          )}
-        </div>
-        <hr style={{ borderColor: '#374151', margin: '6px 0' }} />
-
-        <div style={{ overflowY: 'auto' }}>
-          <ul style={{ padding: 0, margin: 0 }}>
-            {role === 'PROTOCOLITO' ? (
-              <li
-                style={itemStyle}
-                title="Registrar Generales"
-                onClick={() => go('registrar-generales')}
-              >
-                <span style={iconStyle}>📚</span>
-                {sidebarOpen && <span>Registrar Generales</span>}
-              </li>
-            ) : (
-              <>
-                {/* Registrar (submenu) */}
-                <li
-                  style={itemStyle}
-                  className="submenu"
-                  title="Registrar"
-                  onClick={() => {
-                    if (!sidebarOpen) {
-                      setSidebarOpen(true);
-                      return;
-                    }
-                    setMostrarSubmenu((v) => !v);
-                  }}
-                >
-                  <span className="icon" style={iconStyle}>
-                    📋
-                  </span>
-                  {sidebarOpen && <span>Registrar ▾</span>}
-                </li>
-                {sidebarOpen && mostrarSubmenu && (
-                  <ul style={{ listStyle: 'none', paddingLeft: 40, marginTop: 4, marginBottom: 8 }}>
-                    <li
-                      style={{ ...itemStyle, padding: '8px 6px' }}
-                      onClick={() => go('registrar-cliente')}
-                    >
-                      <span style={iconStyle}>👤</span>
-                      <span>Registrar Cliente</span>
-                    </li>
-                    <li
-                      style={{ ...itemStyle, padding: '8px 6px' }}
-                      onClick={() => go('registrar-generales')}
-                    >
-                      <span style={iconStyle}>📚</span>
-                      <span>Registrar Generales</span>
-                    </li>
-                    <li
-                      style={{ ...itemStyle, padding: '8px 6px' }}
-                      onClick={() => go('consultar-generales')}
-                    >
-                      <span style={iconStyle}>🔎</span>
-                      <span>Consultar Generales</span>
-                    </li>
-
-                    {role === 'admin' && (
-                      <li
-                        style={{ ...itemStyle, padding: '8px 6px' }}
-                        onClick={() => go('registrar-abogado')}
-                      >
-                        <span style={iconStyle}>👨‍⚖️</span>
-                        <span>Registrar Abogado</span>
-                      </li>
-                    )}
-                  </ul>
-                )}
-
-                {/* Recibos (submenu) */}
-                <li
-                  style={itemStyle}
-                  className="submenu"
-                  title="Recibos"
-                  onClick={() => {
-                    if (!sidebarOpen) {
-                      setSidebarOpen(true);
-                      return;
-                    }
-                    setMostrarSubmenuRecibos((v) => !v);
-                  }}
-                >
-                  <span style={iconStyle}>📄</span>
-                  {sidebarOpen && <span>Recibos ▾</span>}
-                </li>
-                {sidebarOpen && mostrarSubmenuRecibos && (
-                  <ul style={{ listStyle: 'none', paddingLeft: 40, marginTop: 4, marginBottom: 8 }}>
-                    <li
-                      style={{ ...itemStyle, padding: '8px 6px' }}
-                      onClick={() => go('recibo')}
-                    >
-                      <span style={iconStyle}>➕</span>
-                      <span>Generar recibo</span>
-                    </li>
-                    <li
-                      style={{ ...itemStyle, padding: '8px 6px' }}
-                      onClick={() => go('recibos-consultar')}
-                    >
-                      <span style={iconStyle}>🗂️</span>
-                      <span>Consultar recibos</span>
-                    </li>
-                  </ul>
-                )}
-
-                {/* Protocolito */}
-                <li title="Protocolito" style={itemStyle} onClick={() => go('protocolito')}>
-                  <span style={iconStyle}>📑</span>
-                  {sidebarOpen && <span>Protocolito</span>}
-                </li>
-
-                {/* Escrituras */}
-                <li title="Escrituras" style={itemStyle} onClick={() => go('Escrituras')}>
-                  <span style={iconStyle}>🔍</span>
-                  {sidebarOpen && <span>Escrituras</span>}
-                </li>
-
-                {/* Presupuesto */}
-                <li title="Presupuesto" style={itemStyle} onClick={() => go('presupuesto')}>
-                  <span style={iconStyle}>📑</span>
-                  {sidebarOpen && <span>Presupuesto</span>}
-                </li>
-
-                {/* Calendario */}
-                <li title="Calendario" style={itemStyle} onClick={() => go('calendario')}>
-                  <span style={iconStyle}>🗓️</span>
-                  {sidebarOpen && <span>Calendario</span>}
-                </li>
-              </>
-            )}
-          </ul>
-        </div>
-
-        {/* FOOTER */}
-        <div
-          style={{
-            marginTop: 'auto',
-            borderTop: '1px solid #374151',
-            paddingTop: 10,
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 6,
-          }}
-        >
+        {/* Brand */}
+        <div className="sidebar-brand">
           {sidebarOpen ? (
             <>
-              <div style={{ fontSize: 12, opacity: 0.85 }}>
-                <div>
-                  <b>ID</b> {user?._id || user?.id || '-'}
-                </div>
-                <div>
-                  <b>Rol</b> {user?.role || '-'}
-                </div>
-              </div>
-              <button
-                onClick={logout}
-                style={{
-                  background: '#ef4444',
-                  color: '#fff',
-                  border: 'none',
-                  padding: '8px 10px',
-                  borderRadius: 8,
-                  cursor: 'pointer',
+              <img src="/logo.png" alt="Notaría 17" className="sidebar-logo" />
+              <span className="sidebar-brand-text">Notaría 17</span>
+            </>
+          ) : (
+            <GavelIcon sx={{ fontSize: 26, color: '#60a5fa' }} />
+          )}
+        </div>
+
+        <hr className="sidebar-divider" />
+
+        {/* Nav items */}
+        <ul className="sidebar-nav">
+          {role === 'PROTOCOLITO' ? (
+            <li
+              className={`nav-item ${seccion === 'registrar-generales' ? 'active' : ''}`}
+              onClick={() => go('registrar-generales')}
+              title="Registrar Generales"
+            >
+              <LibraryBooksIcon sx={isz} />
+              {sidebarOpen && <span>Registrar Generales</span>}
+            </li>
+          ) : (
+            <>
+              {/* ── Registrar (submenu) ── */}
+              <li
+                className={`nav-item ${registrarActive ? 'active' : ''}`}
+                title="Registrar"
+                onClick={() => {
+                  if (!sidebarOpen) { setSidebarOpen(true); return; }
+                  setMostrarSubmenu((v) => !v);
+                  setMostrarSubmenuRecibos(false);
                 }}
               >
-                Cerrar sesión
+                <PeopleAltIcon sx={isz} />
+                {sidebarOpen && (
+                  <>
+                    <span style={{ flex: 1 }}>Registrar</span>
+                    {mostrarSubmenu
+                      ? <ExpandLessIcon sx={{ fontSize: 16 }} />
+                      : <ExpandMoreIcon sx={{ fontSize: 16 }} />}
+                  </>
+                )}
+              </li>
+              {sidebarOpen && mostrarSubmenu && (
+                <ul className="nav-submenu">
+                  <li className={`nav-sub-item ${seccion === 'registrar-cliente' ? 'active' : ''}`}
+                      onClick={() => go('registrar-cliente')}>
+                    <PersonAddIcon sx={{ fontSize: 17 }} />
+                    <span>Registrar Cliente</span>
+                  </li>
+                  <li className={`nav-sub-item ${seccion === 'registrar-generales' ? 'active' : ''}`}
+                      onClick={() => go('registrar-generales')}>
+                    <LibraryBooksIcon sx={{ fontSize: 17 }} />
+                    <span>Registrar Generales</span>
+                  </li>
+                  <li className={`nav-sub-item ${seccion === 'consultar-generales' ? 'active' : ''}`}
+                      onClick={() => go('consultar-generales')}>
+                    <ManageSearchIcon sx={{ fontSize: 17 }} />
+                    <span>Consultar Generales</span>
+                  </li>
+                  {(role === 'ADMIN' || role === 'admin') && (
+                    <li className={`nav-sub-item ${seccion === 'registrar-abogado' ? 'active' : ''}`}
+                        onClick={() => go('registrar-abogado')}>
+                      <BadgeIcon sx={{ fontSize: 17 }} />
+                      <span>Registrar Abogado</span>
+                    </li>
+                  )}
+                </ul>
+              )}
+
+              {/* ── Recibos (submenu) ── */}
+              <li
+                className={`nav-item ${recibosActive ? 'active' : ''}`}
+                title="Recibos"
+                onClick={() => {
+                  if (!sidebarOpen) { setSidebarOpen(true); return; }
+                  setMostrarSubmenuRecibos((v) => !v);
+                  setMostrarSubmenu(false);
+                }}
+              >
+                <ReceiptLongIcon sx={isz} />
+                {sidebarOpen && (
+                  <>
+                    <span style={{ flex: 1 }}>Recibos</span>
+                    {mostrarSubmenuRecibos
+                      ? <ExpandLessIcon sx={{ fontSize: 16 }} />
+                      : <ExpandMoreIcon sx={{ fontSize: 16 }} />}
+                  </>
+                )}
+              </li>
+              {sidebarOpen && mostrarSubmenuRecibos && (
+                <ul className="nav-submenu">
+                  <li className={`nav-sub-item ${seccion === 'recibo' ? 'active' : ''}`}
+                      onClick={() => go('recibo')}>
+                    <AddCardIcon sx={{ fontSize: 17 }} />
+                    <span>Generar recibo</span>
+                  </li>
+                  <li className={`nav-sub-item ${seccion === 'recibos-consultar' ? 'active' : ''}`}
+                      onClick={() => go('recibos-consultar')}>
+                    <FolderOpenIcon sx={{ fontSize: 17 }} />
+                    <span>Consultar recibos</span>
+                  </li>
+                </ul>
+              )}
+
+              {/* ── Protocolito ── */}
+              <li className={`nav-item ${seccion === 'protocolito' ? 'active' : ''}`}
+                  title="Protocolito" onClick={() => go('protocolito')}>
+                <DescriptionIcon sx={isz} />
+                {sidebarOpen && <span>Protocolito</span>}
+              </li>
+
+              {/* ── Escrituras ── */}
+              <li className={`nav-item ${escriturasActive ? 'active' : ''}`}
+                  title="Escrituras" onClick={() => go('Escrituras')}>
+                <MenuBookIcon sx={isz} />
+                {sidebarOpen && <span>Escrituras</span>}
+              </li>
+
+              {/* ── Presupuesto ── */}
+              <li className={`nav-item ${seccion === 'presupuesto' ? 'active' : ''}`}
+                  title="Presupuesto" onClick={() => go('presupuesto')}>
+                <RequestQuoteIcon sx={isz} />
+                {sidebarOpen && <span>Presupuesto</span>}
+              </li>
+
+              {/* ── Calendario ── */}
+              <li className={`nav-item ${seccion === 'calendario' ? 'active' : ''}`}
+                  title="Calendario" onClick={() => go('calendario')}>
+                <CalendarMonthIcon sx={isz} />
+                {sidebarOpen && <span>Calendario</span>}
+              </li>
+            </>
+          )}
+        </ul>
+
+        {/* Footer */}
+        <div className="sidebar-footer">
+          {sidebarOpen ? (
+            <>
+              <div className="sidebar-user-info">
+                <span className="user-name">{user?.nombre || '-'}</span>
+                <span className="user-meta">ID {user?._id || user?.id || '-'} · {user?.role || '-'}</span>
+              </div>
+              <button className="btn-logout btn-logout-full" onClick={logout}>
+                <LogoutIcon sx={{ fontSize: 17 }} />
+                <span>Cerrar sesión</span>
               </button>
             </>
           ) : (
-            <button
-              onClick={logout}
-              title="Cerrar sesión"
-              style={{
-                background: '#ef4444',
-                color: '#fff',
-                border: 'none',
-                padding: 8,
-                borderRadius: 8,
-                cursor: 'pointer',
-              }}
-            >
-              ⎋
+            <button className="btn-logout btn-logout-icon" onClick={logout} title="Cerrar sesión">
+              <LogoutIcon sx={{ fontSize: 18 }} />
             </button>
           )}
         </div>
       </aside>
 
-      <main className="contenido" style={mainStyle}>
-        {renderContenido()}
-      </main>
+      {/* ── MAIN CONTENT ── */}
+      <div
+        className="main-content-wrapper"
+        style={{ marginLeft: sidebarOpen ? 240 : 64 }}
+      >
+        {/* Top bar */}
+        <header className="topbar">
+          <h1 className="topbar-title">
+            {SECTION_LABELS[seccion] || 'Notaría 17'}
+          </h1>
+          <div className="topbar-right">
+            <span className="topbar-date">{today}</span>
+            <div className="topbar-user">
+              <span className="topbar-user-id">{user?.nombre || user?._id || user?.id}</span>
+              <span className="topbar-user-role">{user?.role}</span>
+            </div>
+          </div>
+        </header>
+
+        <main className="contenido">
+          {renderContenido()}
+        </main>
+      </div>
     </div>
   );
 }
