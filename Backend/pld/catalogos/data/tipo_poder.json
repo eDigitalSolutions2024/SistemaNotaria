@@ -1,0 +1,5 @@
+{
+  "catalogoId": "tipo_poder",
+  "notas": "Catálogo SAT/UIF del dígito 'tipo_poder' en otorgamiento_poder_type (fep.xsd). Pendiente de cargar con el catálogo oficial publicado por la UIF/SPPLD (Anexo Fe Pública, pld.hacienda.gob.mx). No se inventa ningún valor: mientras 'versiones' esté vacío, catalogoService.resolver() rechaza cualquier clave para este catálogo, y el adaptador de otorgamiento de poder (tipoFEP '1') no podrá generar XML hasta que se agregue una versión real aquí.",
+  "versiones": []
+}

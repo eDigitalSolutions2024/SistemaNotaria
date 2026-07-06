@@ -1,0 +1,5 @@
+{
+  "catalogoId": "tipo_cesion",
+  "notas": "Catálogo SAT/UIF del dígito 'tipo_cesion' en cesion_derechos_type (fep.xsd). Pendiente de cargar con el catálogo oficial publicado por la UIF/SPPLD. Mientras 'versiones' esté vacío, el adaptador de cesión de derechos de fideicomiso (tipoFEP '8') no podrá generar XML.",
+  "versiones": []
+}

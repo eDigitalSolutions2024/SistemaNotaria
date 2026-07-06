@@ -92,6 +92,16 @@ const AvisoPLDSchema = new Schema(
     confianzaDeteccion:   { type: String, enum: ['AUTOMATICA', 'REQUIERE_REVISION'] },
     portal:               { type: String, enum: ['SPPLD', 'DECLARANOT'] },
 
+    // Datos específicos del tipo de actividad (tipoFEP), no cubiertos por
+    // comparecientes/monto genéricos — p. ej. para tipoFEP '1' (poder):
+    // { tipoPoder }; '8' (cesión fideicomiso): { identificadorFideicomiso,
+    // rfcFideicomiso, denominacionFideicomiso, tipoCesion, montoCesion };
+    // '9' (mutuo/crédito): { tipoOtorgamiento, monedaCodigo }.
+    // Los códigos de catálogo SAT/UIF (tipoPoder, tipoCesion, tipoAlerta, etc.)
+    // los captura el abogado a partir del catálogo oficial — generadorXML.js
+    // nunca asume un valor por default. Ver Backend/pld/generadorXML.js.
+    datosActividad: { type: Schema.Types.Mixed, default: {} },
+
     // Operación económica
     monto:           { type: Number, default: null },
     moneda:          { type: String, default: 'MXN' },

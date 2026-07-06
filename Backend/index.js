@@ -129,7 +129,18 @@ mongoose
     useNewUrlParser: true,
     useUnifiedTopology: true,
   })
-  .then(() => console.log('✅ MongoDB conectado correctamente'))
+  .then(async () => {
+    console.log('✅ MongoDB conectado correctamente');
+
+    const { cargarCatalogos } = require('./pld/catalogos/cargarCatalogos');
+    const resultado = await cargarCatalogos();
+    if (resultado.ok) {
+      console.log('✅ Catálogos PLD cargados:', JSON.stringify(resultado.resumen));
+    } else {
+      console.error('❌ Catálogos PLD NO cargados — generación de XML PLD deshabilitada:');
+      resultado.errores.forEach((e) => console.error('   -', e));
+    }
+  })
   .catch((err) => console.error('❌ Error al conectar MongoDB:', err));
 
 // 5) Middlewares

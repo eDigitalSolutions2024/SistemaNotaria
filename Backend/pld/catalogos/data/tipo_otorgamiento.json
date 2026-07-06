@@ -1,0 +1,5 @@
+{
+  "catalogoId": "tipo_otorgamiento",
+  "notas": "Catálogo SAT/UIF del dígito 'tipo_otorgamiento' en contrato_mutuo_cred_type (fep.xsd). Pendiente de cargar con el catálogo oficial publicado por la UIF/SPPLD. Mientras 'versiones' esté vacío, el adaptador de mutuo/crédito (tipoFEP '9') no podrá generar XML.",
+  "versiones": []
+}

@@ -1,0 +1,5 @@
+{
+  "catalogoId": "tipo_alerta",
+  "notas": "Catálogo UIF de señales/alertas de operación inusual (elemento <alerta><tipo_alerta>, 3-4 dígitos, requerido en TODO aviso SPPLD sin importar el tipo de actividad). Es el catálogo más sensible del módulo: un valor incorrecto puede mal-clasificar una operación regular como sospechosa o viceversa. Pendiente de cargar con el catálogo oficial de la UIF. Mientras 'versiones' esté vacío, NINGÚN tipo de actividad puede generar XML (bloqueo intencional a nivel de todo el generador, no solo de un adaptador).",
+  "versiones": []
+}

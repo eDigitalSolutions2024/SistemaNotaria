@@ -1,0 +1,5 @@
+{
+  "catalogoId": "moneda",
+  "notas": "Catálogo SAT/UIF del dígito 'moneda' (digito_1-3_type, fep.xsd) usado en datos_liquidacion de mutuo/crédito y compraventa de acciones. Es un catálogo numérico propio del SPPLD, distinto del catálogo alfabético c_Moneda (ISO 4217) usado en CFDI — no deben confundirse ni reutilizarse entre sí. Pendiente de cargar con el catálogo oficial. Mientras 'versiones' esté vacío, ningún adaptador que reporte datos_liquidacion podrá generar XML.",
+  "versiones": []
+}

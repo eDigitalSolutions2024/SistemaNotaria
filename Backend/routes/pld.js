@@ -8,6 +8,11 @@ const ClienteGeneral = require('../models/ClienteGeneral');
 const AvisoPLD       = require('../models/AvisoPLD');
 const { detectarObligacion }                         = require('../pld/detectorObligacion');
 const { requirePermisoPLD, buildFiltroScope }        = require('../pld/roles');
+const { generarXML, PLDXMLError }                    = require('../pld/generadorXML');
+const catalogoService                                 = require('../pld/catalogos/catalogoService');
+
+// Estados desde los que se puede (re)generar el XML SPPLD
+const ESTADOS_PERMITEN_GENERAR_XML = ['PENDIENTE', 'LISTO', 'XML_GENERADO'];
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -204,6 +209,114 @@ router.get('/avisos/:id', requirePermisoPLD('puedeEditar'), async (req, res) => 
     return res.json(aviso);
   } catch (err) {
     console.error('[pld/avisos/:id]', err);
+    return res.status(500).json({ mensaje: 'Error interno del servidor.', error: err.message });
+  }
+});
+
+// ── GET /api/pld/catalogos/:catalogoId ─────────────────────────────────────────
+// Listado vigente (clave+descripción) de un catálogo oficial SAT/UIF, para
+// poblar selects del frontend. ?fecha=YYYY-MM-DD (default: hoy).
+router.get('/catalogos/:catalogoId', requirePermisoPLD('puedeEditar'), (req, res) => {
+  if (!catalogoService.estaListo()) {
+    return res.status(503).json({ mensaje: 'Catálogos PLD no disponibles todavía.' });
+  }
+  try {
+    const fecha = req.query.fecha ? new Date(req.query.fecha) : new Date();
+    if (isNaN(fecha)) {
+      return res.status(400).json({ mensaje: 'Parámetro "fecha" inválido.' });
+    }
+    const resultado = catalogoService.listarVigente(req.params.catalogoId, fecha);
+    return res.json(resultado);
+  } catch (err) {
+    console.error('[pld/catalogos/:catalogoId]', err);
+    return res.status(500).json({ mensaje: 'Error interno del servidor.', error: err.message });
+  }
+});
+
+// ── POST /api/pld/avisos/:id/generar-xml ──────────────────────────────────────
+// Genera (o regenera) el XML fep.xsd para un AvisoPLD del portal SPPLD.
+// No transmite nada al SAT — solo produce el archivo para descarga manual.
+router.post('/avisos/:id/generar-xml', requirePermisoPLD('puedePresentar'), async (req, res) => {
+  try {
+    const filtroScope = buildFiltroScope(req);
+    const aviso = await AvisoPLD.findOne({ _id: req.params.id, ...filtroScope });
+    if (!aviso) {
+      return res.status(404).json({ mensaje: 'Aviso PLD no encontrado.' });
+    }
+    if (aviso.portal !== 'SPPLD') {
+      return res.status(409).json({ mensaje: `El aviso tiene portal="${aviso.portal}"; el generador de XML solo aplica a avisos SPPLD.` });
+    }
+    if (!ESTADOS_PERMITEN_GENERAR_XML.includes(aviso.estado)) {
+      return res.status(409).json({ mensaje: `No se puede generar XML desde el estado actual (${aviso.estado}).` });
+    }
+
+    let xml, xmlHash;
+    try {
+      ({ xml, xmlHash } = generarXML(aviso));
+    } catch (err) {
+      if (err instanceof PLDXMLError) {
+        return res.status(422).json({ mensaje: 'Faltan datos para generar el XML.', errores: err.errores });
+      }
+      throw err;
+    }
+
+    const usuarioActual = req.user?.nombre || req.user?.id || 'sistema';
+    const siguienteVersion = (aviso.versionesXML?.length || 0) + 1;
+
+    for (const v of aviso.versionesXML) v.activo = false;
+    aviso.versionesXML.push({
+      version: siguienteVersion,
+      xmlContenido: xml,
+      xmlHash,
+      fechaGenerado: new Date(),
+      generadoPor: usuarioActual,
+      activo: true,
+    });
+
+    aviso.xmlContenido = xml;
+    aviso.xmlHash = xmlHash;
+    aviso.xmlFechaGenerado = new Date();
+    aviso.xmlVersion = siguienteVersion;
+
+    if (aviso.estado === 'XML_GENERADO') {
+      aviso.historialEstados.push({
+        estadoDesde: aviso.estado,
+        estadoHasta: aviso.estado,
+        evento: 'XML_REGENERADO',
+        fecha: new Date(),
+        usuario: usuarioActual,
+        nota: `Versión ${siguienteVersion} del XML regenerada.`,
+      });
+    } else {
+      aviso.registrarTransicion('XML_GENERADO', 'XML_GENERADO', usuarioActual, `Versión ${siguienteVersion} del XML generada.`);
+    }
+
+    await aviso.save();
+    return res.json({ generado: true, version: siguienteVersion, xmlHash, estado: aviso.estado });
+  } catch (err) {
+    console.error('[pld/avisos/:id/generar-xml]', err);
+    return res.status(500).json({ mensaje: 'Error interno del servidor.', error: err.message });
+  }
+});
+
+// ── GET /api/pld/avisos/:id/descargar-xml ─────────────────────────────────────
+// Descarga la versión activa del XML ya generado (no lo regenera).
+router.get('/avisos/:id/descargar-xml', requirePermisoPLD('puedeEditar'), async (req, res) => {
+  try {
+    const filtroScope = buildFiltroScope(req);
+    const aviso = await AvisoPLD.findOne({ _id: req.params.id, ...filtroScope }).lean();
+    if (!aviso) {
+      return res.status(404).json({ mensaje: 'Aviso PLD no encontrado.' });
+    }
+    if (!aviso.xmlContenido) {
+      return res.status(404).json({ mensaje: 'Este aviso todavía no tiene un XML generado.' });
+    }
+
+    res.setHeader('Content-Type', 'application/xml; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${aviso.referenciaOperador || aviso._id}.xml"`);
+    return res.send(aviso.xmlContenido);
+  } catch (err) {
+    console.error('[pld/avisos/:id/descargar-xml]', err);
     return res.status(500).json({ mensaje: 'Error interno del servidor.', error: err.message });
   }
 });
