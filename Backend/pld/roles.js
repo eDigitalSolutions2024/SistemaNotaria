@@ -63,7 +63,12 @@ const PERMISOS_PLD = Object.freeze({
  * Retorna null si el rol no tiene acceso PLD.
  */
 function resolverRolPLD(rolesSistema) {
-  return MAPA_ROL_SISTEMA[rolesSistema] || null;
+  // Normaliza mayúsculas/minúsculas: la colección de abogados tiene roles
+  // guardados de forma inconsistente (ej. "admin" en vez de "ADMIN" para el
+  // usuario Administrador semilla), y este mapa siempre usa claves en
+  // mayúsculas.
+  const clave = String(rolesSistema || '').toUpperCase();
+  return MAPA_ROL_SISTEMA[clave] || null;
 }
 
 /**

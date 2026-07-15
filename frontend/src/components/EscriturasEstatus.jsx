@@ -20,6 +20,10 @@ import {
 import CloseIcon from '@mui/icons-material/Close';
 
 import { useAuth } from '../auth/AuthContext';
+// Punto de entrada al Expediente PLD desde el ciclo de vida de la Escritura
+// (nueva arquitectura: el PLD deja de ser un módulo aparte). Componente
+// reutilizado tal cual, sin cambios — solo cambia desde dónde se invoca.
+import ExpedientePLD from './pld/ExpedientePLD';
 
 const API = process.env.REACT_APP_API_URL || 'http://localhost:8010';
 
@@ -131,6 +135,9 @@ export default function EscrituraEstatus({ escrituraId, onClose }) {
   const [row, setRow] = useState(null);
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(false);
+  // Toggle Información notarial <-> Expediente PLD, dentro del mismo Dialog
+  // (mismo escrituraId/row real, sin escrituras de prueba ni ruta nueva).
+  const [pldOpen, setPldOpen] = useState(false);
 
   // cliente
   const [clienteNombre, setClienteNombre] = useState('');
@@ -545,6 +552,17 @@ export default function EscrituraEstatus({ escrituraId, onClose }) {
   if (loading) return <div style={{ padding: 16 }}>Cargando…</div>;
   if (!row) return <div style={{ padding: 16 }}>No se pudo cargar la escritura.</div>;
 
+  // Expediente PLD de ESTA escritura real (row.numeroControl ya cargado
+  // arriba) — mismo componente ExpedientePLD sin ningún cambio, "Volver"
+  // regresa aquí (setPldOpen(false)) en vez de cerrar el Dialog completo.
+  if (pldOpen) {
+    return (
+      <div style={{ padding: 16, maxWidth: 1300, margin: '0 auto' }}>
+        <ExpedientePLD row={row} onClose={() => setPldOpen(false)} />
+      </div>
+    );
+  }
+
   return (
     <div style={{ padding: 16, maxWidth: 1100, margin: '0 auto' }}>
       {/* Header */}
@@ -552,6 +570,9 @@ export default function EscrituraEstatus({ escrituraId, onClose }) {
         <h2 style={{ margin: 0 }}>Estatus — Escritura #{row.numeroControl ?? '—'}</h2>
 
         <div style={{ display: 'flex', gap: 8 }}>
+          <Button variant="outlined" color="secondary" onClick={() => setPldOpen(true)}>
+            Cumplimiento PLD
+          </Button>
           <Button variant="outlined" onClick={onClose}>Cerrar</Button>
           <Button variant="contained" onClick={save} disabled={saving}>
             {saving ? 'Guardando…' : 'Guardar'}

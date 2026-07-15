@@ -1,10 +1,10 @@
 'use strict';
 
-const UMA_VIGENTE = {
-  anio: 2026,
-  valorDiario: 117.31,
-  vigenciaDesde: '2026-02-01',
-};
+// UMA_VIGENTE/calcularUmbralPesos viven en motor/parametrosEconomicos.js —
+// única fuente de verdad económica del sistema, para no tener el mismo
+// valor de UMA duplicado en dos archivos (este módulo es el detector
+// legado; el Motor de Reglas nuevo usa el servicio directamente).
+const { UMA_VIGENTE, calcularUmbralPesos } = require('./motor/parametrosEconomicos');
 
 // LFPIORPI Art. 17 Fracc. XII incisos a-e
 // tipoFEP: código numérico del catálogo fep.xsd tipo_actividad_type (null = portal DeclaraNOT)
@@ -144,10 +144,5 @@ const ACTIVIDADES_PLD = [
     ],
   },
 ];
-
-function calcularUmbralPesos(umbralUMAs) {
-  if (umbralUMAs === null) return null;
-  return +(umbralUMAs * UMA_VIGENTE.valorDiario).toFixed(2);
-}
 
 module.exports = { UMA_VIGENTE, ACTIVIDADES_PLD, calcularUmbralPesos };

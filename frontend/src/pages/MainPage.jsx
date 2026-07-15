@@ -16,6 +16,7 @@ import DescriptionIcon    from '@mui/icons-material/Description';
 import MenuBookIcon       from '@mui/icons-material/MenuBook';
 import RequestQuoteIcon   from '@mui/icons-material/RequestQuote';
 import CalendarMonthIcon  from '@mui/icons-material/CalendarMonth';
+import PolicyOutlinedIcon from '@mui/icons-material/PolicyOutlined';
 import LogoutIcon         from '@mui/icons-material/Logout';
 import ChevronLeftIcon    from '@mui/icons-material/ChevronLeft';
 import ChevronRightIcon   from '@mui/icons-material/ChevronRight';
@@ -32,6 +33,7 @@ import RegistrarGenerales from '../components/RegistrarGenerales';
 import ConsultarGenerales from '../components/ConsultarGenerales';
 import Presupuesto        from '../components/Presupuesto';
 import Calendario         from '../components/Calendario';
+import PLDSeccion         from '../components/pld/PLDSeccion';
 
 import { useAuth } from '../auth/AuthContext';
 import Login from '../components/Login';
@@ -48,6 +50,7 @@ const SECTION_LABELS = {
   'recibos-consultar':   'Consultar Recibos',
   'presupuesto':         'Presupuesto',
   'calendario':          'Calendario',
+  'ExpedientesPLD':      'Expedientes PLD',
 };
 
 export default function MainPage() {
@@ -58,6 +61,11 @@ export default function MainPage() {
 function AuthedApp() {
   const { user, logout } = useAuth();
   const role = user?.role || '';
+  // Permiso del submenú "Expedientes PLD" — inicialmente solo Administrador,
+  // mismo criterio ya usado para "Registrar Abogado" más abajo. El módulo
+  // PLD en sí (ExpedientePLD, sus tabs) sigue teniendo su propio control de
+  // permisos interno (puedeEditarPLD/puedePresentarPLD, sin cambios aquí).
+  const puedeVerExpedientesPLD = role === 'ADMIN' || role === 'admin';
 
   const INACTIVITY_LIMIT = 60 * 60 * 1000;
 
@@ -89,8 +97,9 @@ function AuthedApp() {
   }, [logout, INACTIVITY_LIMIT]);
 
   const [seccion,               setSeccion]               = useState(role === 'PROTOCOLITO' ? 'registrar-generales' : 'registrar-cliente');
-  const [mostrarSubmenu,        setMostrarSubmenu]        = useState(false);
-  const [mostrarSubmenuRecibos, setMostrarSubmenuRecibos] = useState(false);
+  const [mostrarSubmenu,           setMostrarSubmenu]           = useState(false);
+  const [mostrarSubmenuRecibos,    setMostrarSubmenuRecibos]    = useState(false);
+  const [mostrarSubmenuEscrituras, setMostrarSubmenuEscrituras] = useState(false);
   const [sidebarOpen,           setSidebarOpen]           = useState(true);
   const [reciboRow,             setReciboRow]             = useState(null);
 
@@ -100,6 +109,7 @@ function AuthedApp() {
     setSeccion(sec);
     setMostrarSubmenu(false);
     setMostrarSubmenuRecibos(false);
+    setMostrarSubmenuEscrituras(false);
     if (isMobile()) setSidebarOpen(false);
   };
 
@@ -142,13 +152,15 @@ function AuthedApp() {
         );
       case 'presupuesto': return <Presupuesto />;
       case 'calendario':  return <Calendario />;
+      case 'ExpedientesPLD':
+        return puedeVerExpedientesPLD ? <PLDSeccion /> : <RegistrarCliente />;
       default:            return <RegistrarCliente />;
     }
   };
 
   const registrarActive = ['registrar-cliente', 'registrar-generales', 'consultar-generales', 'registrar-abogado'].includes(seccion);
   const recibosActive   = ['recibo', 'recibos-consultar'].includes(seccion);
-  const escriturasActive = seccion === 'Escrituras';
+  const escriturasActive = ['Escrituras', 'ExpedientesPLD'].includes(seccion);
 
   const today = new Date().toLocaleDateString('es-MX', {
     weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
@@ -288,12 +300,43 @@ function AuthedApp() {
                 {sidebarOpen && <span>Protocolito</span>}
               </li>
 
-              {/* ── Escrituras ── */}
-              <li className={`nav-item ${escriturasActive ? 'active' : ''}`}
-                  title="Escrituras" onClick={() => go('Escrituras')}>
+              {/* ── Escrituras (submenu) ── */}
+              <li
+                className={`nav-item ${escriturasActive ? 'active' : ''}`}
+                title="Escrituras"
+                onClick={() => {
+                  if (!sidebarOpen) { setSidebarOpen(true); return; }
+                  setMostrarSubmenuEscrituras((v) => !v);
+                  setMostrarSubmenu(false);
+                  setMostrarSubmenuRecibos(false);
+                }}
+              >
                 <MenuBookIcon sx={isz} />
-                {sidebarOpen && <span>Escrituras</span>}
+                {sidebarOpen && (
+                  <>
+                    <span style={{ flex: 1 }}>Escrituras</span>
+                    {mostrarSubmenuEscrituras
+                      ? <ExpandLessIcon sx={{ fontSize: 16 }} />
+                      : <ExpandMoreIcon sx={{ fontSize: 16 }} />}
+                  </>
+                )}
               </li>
+              {sidebarOpen && mostrarSubmenuEscrituras && (
+                <ul className="nav-submenu">
+                  <li className={`nav-sub-item ${seccion === 'Escrituras' ? 'active' : ''}`}
+                      onClick={() => go('Escrituras')}>
+                    <MenuBookIcon sx={{ fontSize: 17 }} />
+                    <span>Escrituras</span>
+                  </li>
+                  {puedeVerExpedientesPLD && (
+                    <li className={`nav-sub-item ${seccion === 'ExpedientesPLD' ? 'active' : ''}`}
+                        onClick={() => go('ExpedientesPLD')}>
+                      <PolicyOutlinedIcon sx={{ fontSize: 17 }} />
+                      <span>Expedientes PLD</span>
+                    </li>
+                  )}
+                </ul>
+              )}
 
               {/* ── Presupuesto ── */}
               <li className={`nav-item ${seccion === 'presupuesto' ? 'active' : ''}`}

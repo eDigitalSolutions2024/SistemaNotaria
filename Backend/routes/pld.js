@@ -10,9 +10,18 @@ const { detectarObligacion }                         = require('../pld/detectorO
 const { requirePermisoPLD, buildFiltroScope }        = require('../pld/roles');
 const { generarXML, PLDXMLError }                    = require('../pld/generadorXML');
 const catalogoService                                 = require('../pld/catalogos/catalogoService');
+const { evaluarEscritura }                            = require('../pld/motor');
+
+// Mismo criterio que pldService.processEscritura(): una Escritura con
+// tipoTramite todavía sin capturar no se evalúa — evita ruido en el listado.
+const RE_PLACEHOLDER_TRAMITE = /^(por definir|—|-{1,3}|pendiente|sin definir|s\/d)$/i;
 
 // Estados desde los que se puede (re)generar el XML SPPLD
 const ESTADOS_PERMITEN_GENERAR_XML = ['PENDIENTE', 'LISTO', 'XML_GENERADO'];
+
+// Estados desde los que ya no se puede editar el aviso — mismo criterio que
+// pldService.ESTADOS_INMUTABLES (Backend/pld/pldService.js).
+const ESTADOS_INMUTABLES = ['PRESENTADO', 'CANCELADO', 'RECHAZADO_SPPLD'];
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -123,7 +132,7 @@ router.post('/detectar/:numeroControl', requirePermisoPLD('puedeDetectar'), asyn
 
       estado: estadoInicial,
       historialEstados: [{
-        estadoDesde: '',
+        estadoDesde: 'NINGUNO',
         estadoHasta: estadoInicial,
         evento:      'DETECCION_AUTOMATICA',
         fecha:       new Date(),
@@ -146,6 +155,142 @@ router.post('/detectar/:numeroControl', requirePermisoPLD('puedeDetectar'), asyn
     return res.status(201).json({ creado: true, aviso });
   } catch (err) {
     console.error('[pld/detectar]', err);
+    return res.status(500).json({ mensaje: 'Error interno del servidor.', error: err.message });
+  }
+});
+
+// ── GET /api/pld/escrituras-pld ────────────────────────────────────────────────
+// Fase 1 del Motor de Reglas: la Escritura es la fuente de verdad, no
+// AvisoPLD. Este endpoint NUNCA crea ni modifica un AvisoPLD — solo lee
+// Escrituras reales + avisos ya existentes y los cruza en memoria con el
+// motor puro (Backend/pld/motor). Si una Escritura ya tiene AvisoPLD, ese
+// aviso manda (es la fuente de verdad regulatoria una vez que existe). Si
+// no tiene aviso, se evalúa con el motor: aplicaPLD=false → no aparece en
+// la lista; true o null (requiere revisión) → aparece con un estado
+// sintético, sin escribir nada en Mongo.
+router.get('/escrituras-pld', requirePermisoPLD('puedeEditar'), async (req, res) => {
+  try {
+    const { page = 1, limit = 20 } = req.query;
+    const filtroScope = buildFiltroScope(req); // {} o { abogado: nombre } — mismo criterio que /avisos
+
+    const [escrituras, avisos] = await Promise.all([
+      Escritura.find(filtroScope)
+        .select('numeroControl tipoTramite monto valorAvaluo fecha abogado')
+        .lean(),
+      AvisoPLD.find({ tipoAviso: 'ORDINARIO', ...filtroScope }).lean(),
+    ]);
+
+    const avisoPorControl = new Map(avisos.map((a) => [a.numeroControl, a]));
+
+    let evaluadas = 0, aplicaron = 0, fueraDeLista = 0, conAviso = 0, pendientesDeIniciar = 0, requierenRevision = 0;
+
+    const filas = [];
+    for (const esc of escrituras) {
+      const avisoExistente = avisoPorControl.get(esc.numeroControl);
+
+      // El AvisoPLD, una vez que existe, es la fuente de verdad — no se
+      // vuelve a evaluar con el motor aunque la regla vigente haya cambiado.
+      if (avisoExistente) {
+        conAviso++;
+        filas.push({
+          escrituraId:     esc._id,
+          numeroControl:   esc.numeroControl,
+          numeroEscritura: esc.numeroControl, // no existe un folio de escritura separado hoy — mismo valor que numeroControl, igual que ya hace AvisoPLD.numeroEscritura
+          tipoTramite:     esc.tipoTramite,
+          actividadPLD:    avisoExistente.descripcionActividad ? { id: avisoExistente.incisoLegal, nombre: avisoExistente.descripcionActividad, tipoFEP: avisoExistente.tipoFEP, portal: avisoExistente.portal } : null,
+          requiereExpediente: true, // ya existe, no se re-evalúa con el motor: el aviso ya existente es la fuente de verdad
+          requiereAviso:   !['NO_APLICA', 'CANCELADO'].includes(avisoExistente.estado),
+          fundamentoLegal: null, // este aviso no tiene trazabilidad de regla (se creó antes del Motor de Reglas)
+          motivo:          avisoExistente.justificacion ?? null,
+          umbral:          null,
+          valorAnalizado:  null,
+          documentosRequeridos: [],
+          datosFaltantes:  [],
+          acciones:        [],
+          advertencias:    [],
+          reglaAplicada:   null,
+          versionRegla:    null,
+          responsable:     avisoExistente.abogado,
+          fechaOperacion:  avisoExistente.fechaOperacion ?? esc.fecha,
+          fechaLimite:     avisoExistente.fechaVencimiento,
+          avisoPLDId:      avisoExistente._id,
+          estado:          avisoExistente.estado,
+          tieneExpediente: true,
+        });
+        continue;
+      }
+
+      if (RE_PLACEHOLDER_TRAMITE.test(String(esc.tipoTramite || '').trim())) continue;
+
+      evaluadas++;
+      const resultado = evaluarEscritura(esc);
+
+      if (resultado.aplicaPLD === false) {
+        fueraDeLista++;
+        continue; // certeza de que no aplica -> no aparece
+      }
+
+      aplicaron++;
+      // aplicaPLD===true -> claramente sujeta, solo falta iniciar el expediente.
+      // aplicaPLD===null -> el motor no pudo decidir (dato faltante o trámite
+      // no reconocido) -> requiere revisión manual antes de decidir.
+      const estadoVirtual = resultado.aplicaPLD === null ? 'REQUIERE_REVISION' : 'SIN_EXPEDIENTE';
+      if (estadoVirtual === 'SIN_EXPEDIENTE') pendientesDeIniciar++; else requierenRevision++;
+
+      filas.push({
+        escrituraId:     esc._id,
+        numeroControl:   esc.numeroControl,
+        numeroEscritura: esc.numeroControl,
+        tipoTramite:     esc.tipoTramite,
+        actividadPLD:    resultado.actividadPLD,
+        requiereExpediente: resultado.requiereExpediente,
+        requiereAviso:   resultado.requiereAviso,
+        fundamentoLegal: resultado.fundamentoLegal,
+        motivo:          resultado.motivo,
+        umbral:          resultado.umbral,
+        valorAnalizado:  resultado.valorAnalizado,
+        documentosRequeridos: resultado.documentosRequeridos,
+        datosFaltantes:  resultado.datosFaltantes,
+        acciones:        resultado.acciones,
+        advertencias:    resultado.advertencias,
+        reglaAplicada:   resultado.reglaAplicada,
+        versionRegla:    resultado.versionRegla,
+        responsable:     esc.abogado,
+        fechaOperacion:  esc.fecha,
+        fechaLimite:     resultado.fechaVencimiento,
+        avisoPLDId:      null,
+        estado:          estadoVirtual,
+        tieneExpediente: false,
+      });
+    }
+
+    filas.sort((a, b) => {
+      const fa = a.fechaLimite ? new Date(a.fechaLimite).getTime() : Infinity;
+      const fb = b.fechaLimite ? new Date(b.fechaLimite).getTime() : Infinity;
+      return fa - fb;
+    });
+
+    const total = filas.length;
+    const skip  = (Number(page) - 1) * Number(limit);
+    const pagina = filas.slice(skip, skip + Number(limit));
+
+    return res.json({
+      total,
+      page:  Number(page),
+      pages: Math.ceil(total / Number(limit)),
+      escrituras: pagina,
+      resumen: {
+        totalEscrituras: escrituras.length,
+        evaluadasPorElMotor: evaluadas,
+        aplicaronPLD: aplicaron,
+        fueraDeLista,
+        conAvisoExistente: conAviso,
+        pendientesDeIniciar,
+        requierenRevision,
+      },
+    });
+  } catch (err) {
+    console.error('[pld/escrituras-pld]', err);
     return res.status(500).json({ mensaje: 'Error interno del servidor.', error: err.message });
   }
 });
@@ -209,6 +354,86 @@ router.get('/avisos/:id', requirePermisoPLD('puedeEditar'), async (req, res) => 
     return res.json(aviso);
   } catch (err) {
     console.error('[pld/avisos/:id]', err);
+    return res.status(500).json({ mensaje: 'Error interno del servidor.', error: err.message });
+  }
+});
+
+// ── PUT /api/pld/avisos/:id/comparecientes ─────────────────────────────────────
+// Guardado parcial de la pantalla "Datos generales": reemplaza el arreglo de
+// comparecientes del aviso. Endpoint mínimo y de alcance acotado — no expone
+// un PATCH genérico del aviso completo, solo lo que esa pantalla edita.
+router.put('/avisos/:id/comparecientes', requirePermisoPLD('puedeEditar'), async (req, res) => {
+  try {
+    const { comparecientes } = req.body || {};
+    if (!Array.isArray(comparecientes)) {
+      return res.status(400).json({ mensaje: '"comparecientes" debe ser un arreglo.' });
+    }
+
+    const filtroScope = buildFiltroScope(req);
+    const aviso = await AvisoPLD.findOne({ _id: req.params.id, ...filtroScope });
+    if (!aviso) {
+      return res.status(404).json({ mensaje: 'Aviso PLD no encontrado.' });
+    }
+    if (ESTADOS_INMUTABLES.includes(aviso.estado)) {
+      return res.status(409).json({ mensaje: `No se puede editar un aviso en estado ${aviso.estado}.` });
+    }
+
+    const usuarioActual = req.user?.nombre || req.user?.id || 'sistema';
+    aviso.comparecientes = comparecientes;
+    aviso.updatedBy = usuarioActual;
+    aviso.historialEstados.push({
+      estadoDesde: aviso.estado,
+      estadoHasta: aviso.estado,
+      evento: 'COMPARECIENTES_ACTUALIZADOS',
+      fecha: new Date(),
+      usuario: usuarioActual,
+      nota: `${comparecientes.length} compareciente(s) guardado(s) desde Datos generales.`,
+    });
+
+    await aviso.save();
+    return res.json({ guardado: true, aviso });
+  } catch (err) {
+    console.error('[pld/avisos/:id/comparecientes]', err);
+    return res.status(500).json({ mensaje: 'Error interno del servidor.', error: err.message });
+  }
+});
+
+// ── PUT /api/pld/avisos/:id/actividad ──────────────────────────────────────────
+// Guardado parcial de la pantalla "Actividad": reemplaza datosActividad.
+// Mismo alcance acotado que /comparecientes — no expone un PATCH genérico.
+router.put('/avisos/:id/actividad', requirePermisoPLD('puedeEditar'), async (req, res) => {
+  try {
+    const { datosActividad } = req.body || {};
+    if (typeof datosActividad !== 'object' || datosActividad === null || Array.isArray(datosActividad)) {
+      return res.status(400).json({ mensaje: '"datosActividad" debe ser un objeto.' });
+    }
+
+    const filtroScope = buildFiltroScope(req);
+    const aviso = await AvisoPLD.findOne({ _id: req.params.id, ...filtroScope });
+    if (!aviso) {
+      return res.status(404).json({ mensaje: 'Aviso PLD no encontrado.' });
+    }
+    if (ESTADOS_INMUTABLES.includes(aviso.estado)) {
+      return res.status(409).json({ mensaje: `No se puede editar un aviso en estado ${aviso.estado}.` });
+    }
+
+    const usuarioActual = req.user?.nombre || req.user?.id || 'sistema';
+    aviso.datosActividad = datosActividad;
+    aviso.markModified('datosActividad'); // Mixed: Mongoose no detecta la reasignación sin esto
+    aviso.updatedBy = usuarioActual;
+    aviso.historialEstados.push({
+      estadoDesde: aviso.estado,
+      estadoHasta: aviso.estado,
+      evento: 'ACTIVIDAD_ACTUALIZADA',
+      fecha: new Date(),
+      usuario: usuarioActual,
+      nota: 'Datos de la actividad guardados desde Actividad.',
+    });
+
+    await aviso.save();
+    return res.json({ guardado: true, aviso });
+  } catch (err) {
+    console.error('[pld/avisos/:id/actividad]', err);
     return res.status(500).json({ mensaje: 'Error interno del servidor.', error: err.message });
   }
 });

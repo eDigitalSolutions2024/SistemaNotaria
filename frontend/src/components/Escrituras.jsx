@@ -4,12 +4,15 @@ import axios from 'axios';
 import { DataGrid } from '@mui/x-data-grid';
 import {
   Dialog, DialogTitle, DialogContent, DialogActions,
-  Button, TextField, Menu, MenuItem
+  Button, TextField, Menu, MenuItem, Chip
 } from '@mui/material';
 
 import { useAuth } from '../auth/AuthContext';
 import '../css/styles.css';
 import EscrituraEstatus from './EscriturasEstatus';
+import ExpedientePLD from './pld/ExpedientePLD';
+import { listarAvisos } from './pld/pldApi';
+import { estadoMeta, puedeAccederPLD } from './pld/pldHelpers';
 
 const API = process.env.REACT_APP_API_URL || 'http://localhost:8010';
 
@@ -531,6 +534,9 @@ const canJustifyRecibos =
     const canTakeEscritura =
   !roles.some((r) => ['RECEPCION'].includes(r));
 
+  // 🔹 Acceso al módulo PLD (MVP) — mismo mapeo de roles que Backend/pld/roles.js
+  const canAccessPLD = puedeAccederPLD(roles);
+
   const [rows, setRows] = useState([]);
 
   // ID de la escritura con mayor numeroControl — la única donde se pueden editar folios
@@ -596,6 +602,11 @@ const canJustifyRecibos =
 // --- Modal Estatus (detalle) ---
 const [estatusOpen, setEstatusOpen] = useState(false);
 const [estatusRow, setEstatusRow] = useState(null);
+
+// 🔹 PLD (MVP) — Dialog del expediente + mapa numeroControl -> aviso para la columna
+const [pldOpen, setPldOpen] = useState(false);
+const [pldRow, setPldRow] = useState(null);
+const [pldMap, setPldMap] = useState({});
 
 
   // Abogados (export)
@@ -939,6 +950,24 @@ function getNewFormErrors({ newRow, newVolumen, newFolioDesde, newFolioHasta, ne
       }
     })();
   }, []);
+
+  // 🔹 PLD (MVP): una sola carga de solo lectura para pintar la columna PLD
+  // en toda la grid, sin hacer una llamada por fila. NUNCA se llama
+  // /pld/detectar aquí — ese endpoint puede crear un aviso, y solo debe
+  // dispararse cuando el usuario abre el expediente a propósito.
+  useEffect(() => {
+    if (!canAccessPLD) return;
+    (async () => {
+      try {
+        const { avisos } = await listarAvisos({ limit: 5000 });
+        const mapa = {};
+        (avisos || []).forEach((a) => { mapa[a.numeroControl] = a; });
+        setPldMap(mapa);
+      } catch {
+        setPldMap({});
+      }
+    })();
+  }, [canAccessPLD]);
 
   const openTplMenu = (evt, row) => {
     setTplAnchorEl(evt.currentTarget);
@@ -2052,12 +2081,64 @@ const onSaveEdit = async (id) => {
     }
   };
 
+  // 🔹 Columna PLD (MVP) — Chip por estado real (pldMap) o botón "Evaluar"
+  // si todavía no existe aviso para esa escritura. Nunca dispara /detectar
+  // solo por renderizarse; eso solo ocurre al hacer clic (ver abrirPLD).
+  const pldColumn = {
+    field: 'pld',
+    headerName: 'PLD',
+    width: 150,
+    sortable: false,
+    filterable: false,
+    renderCell: (params) => {
+      const aviso = pldMap[params.row?.numeroControl];
+      if (!aviso) {
+        return (
+          <button
+            className="btn"
+            style={{ padding: '4px 8px', fontSize: 12 }}
+            onClick={() => abrirPLD(params.row)}
+            title="Todavía no se ha evaluado esta escritura para PLD"
+          >
+            Evaluar PLD
+          </button>
+        );
+      }
+      if (aviso.estado === 'NO_APLICA') {
+        return (
+          <span
+            style={{ color: '#999', cursor: 'pointer' }}
+            onClick={() => abrirPLD(params.row)}
+            title="No genera obligación PLD — clic para ver detalle"
+          >
+            —
+          </span>
+        );
+      }
+      const meta = estadoMeta(aviso.estado);
+      return (
+        <Chip
+          size="small"
+          label={meta.label}
+          color={meta.color}
+          onClick={() => abrirPLD(params.row)}
+        />
+      );
+    },
+  };
+
+  const abrirPLD = (row) => {
+    setPldRow(row);
+    setPldOpen(true);
+  };
+
   const showActionsColumn = isAdmin || canDeliver|| canSeeReciboBtn;
   const columns = [
     ...baseColumns,
     ...moneyCols,
     plantillasColumn,
     ...(showActionsColumn ? [actionsColumn] : []),
+    ...(canAccessPLD ? [pldColumn] : []),
     ...(isAdmin ? [observacionesColumn] : []),
   ];
 
@@ -2917,6 +2998,30 @@ if (sugerido != null) {
   <Button onClick={() => setEstatusOpen(false)}>Cerrar</Button>
 </DialogActions>
 </Dialog>
+
+      {/* Expediente PLD (MVP) */}
+      <Dialog
+        open={pldOpen}
+        onClose={() => setPldOpen(false)}
+        fullWidth
+        maxWidth="xl"
+      >
+        <DialogTitle>Expediente PLD</DialogTitle>
+        <DialogContent dividers>
+          {pldRow?._id ? (
+            <ExpedientePLD
+              escrituraId={pldRow._id}
+              row={pldRow}
+              onClose={() => setPldOpen(false)}
+            />
+          ) : (
+            <div style={{ padding: 8 }}>No hay ID de escritura.</div>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setPldOpen(false)}>Cerrar</Button>
+        </DialogActions>
+      </Dialog>
 
       {/* Modal: seleccionar presupuesto para llenar montos */}
       <Dialog open={presupOpen} onClose={closePresupuestoPicker} fullWidth maxWidth="md">

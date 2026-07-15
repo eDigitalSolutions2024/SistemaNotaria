@@ -109,7 +109,7 @@ async function _crearAviso(escritura, deteccion, usuarioId) {
 
     estado: estadoInicial,
     historialEstados: [{
-      estadoDesde: '',
+      estadoDesde: 'NINGUNO',
       estadoHasta: estadoInicial,
       evento:      'DETECCION_AUTOMATICA',
       fecha:       new Date(),
