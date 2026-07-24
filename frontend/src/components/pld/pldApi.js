@@ -163,4 +163,16 @@ export async function descargarAcuse(avisoId) {
   return res.data;
 }
 
+/**
+ * Manual de usuario de toda la sección PLD, en PDF (contenido estático,
+ * generado por Backend/pdf-templates/manualPLD.js). Devuelve el Blob — el
+ * llamador lo abre con window.open(URL.createObjectURL(blob)) en vez de
+ * descargarlo, para que se vea como vista previa con el visor del
+ * navegador (que ya trae su propio botón de imprimir).
+ */
+export async function obtenerManualPDF() {
+  const res = await axios.get(`${API}/pld/manual`, { responseType: 'blob' });
+  return res.data;
+}
+
 export { API };

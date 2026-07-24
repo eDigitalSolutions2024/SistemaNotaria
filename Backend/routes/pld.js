@@ -5,6 +5,7 @@ const router = express.Router();
 const path   = require('path');
 const fs     = require('fs');
 const multer = require('multer');
+const puppeteer = require('puppeteer');
 
 const Escritura      = require('../models/Escritura');
 const ClienteGeneral = require('../models/ClienteGeneral');
@@ -14,6 +15,7 @@ const { requirePermisoPLD, buildFiltroScope }        = require('../pld/roles');
 const { generarXML, PLDXMLError }                    = require('../pld/generadorXML');
 const catalogoService                                 = require('../pld/catalogos/catalogoService');
 const { evaluarEscritura, calcularNivelRiesgo }       = require('../pld/motor');
+const { generarHTMLManualPLD }                        = require('../pdf-templates/manualPLD');
 
 // Mismo criterio que pldService.processEscritura(): una Escritura con
 // tipoTramite todavía sin capturar no se evalúa — evita ruido en el listado.
@@ -821,6 +823,50 @@ router.get('/avisos/:id/descargar-acuse', requirePermisoPLD('puedeEditar'), asyn
   } catch (err) {
     console.error('[pld/avisos/:id/descargar-acuse]', err);
     return res.status(500).json({ mensaje: 'Error interno del servidor.', error: err.message });
+  }
+});
+
+// ── GET /api/pld/manual ─────────────────────────────────────────────────────
+// Manual de usuario de toda la sección PLD, en PDF. Contenido estático (ver
+// Backend/pdf-templates/manualPLD.js) — no depende de ningún aviso ni
+// escritura, así que no hay parámetros. Mismo patrón HTML→Puppeteer que ya
+// usa routes/clientesGenerales.js. Content-Disposition "inline" (no
+// "attachment") a propósito: el objetivo es que un solo clic lo abra en
+// vista previa del navegador, con su botón de imprimir ya integrado — no
+// forzar una descarga.
+router.get('/manual', requirePermisoPLD('puedeEditar'), async (req, res) => {
+  let browser;
+  try {
+    const html = generarHTMLManualPLD();
+
+    browser = await puppeteer.launch({
+      headless: 'new',
+      args: ['--no-sandbox', '--disable-setuid-sandbox'],
+    });
+    const page = await browser.newPage();
+    await page.setContent(html, { waitUntil: 'networkidle0' });
+    // Márgenes explícitos en 0: la plantilla (manualPLD.js) controla su
+    // propio espaciado con padding interno por sección. Sin esto, Puppeteer
+    // aplica un margen de página por default que descuadra la portada
+    // (que asume la altura completa de una hoja A4) y deja todo el
+    // contenido desplazado hacia arriba, con espacio vacío abajo.
+    const pdfBuffer = await page.pdf({
+      format: 'A4',
+      printBackground: true,
+      margin: { top: '0mm', right: '0mm', bottom: '0mm', left: '0mm' },
+    });
+
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': 'inline; filename="manual-modulo-pld.pdf"',
+      'Content-Length': pdfBuffer.length,
+    });
+    return res.send(pdfBuffer);
+  } catch (err) {
+    console.error('[pld/manual]', err);
+    return res.status(500).json({ mensaje: 'Error interno del servidor.', error: err.message });
+  } finally {
+    if (browser) await browser.close().catch(() => {});
   }
 });
 

@@ -17,9 +17,10 @@
 //   momento (detectarAviso, ya existente) — nunca antes, por solo mirar la
 //   lista.
 import React, { useEffect, useState } from 'react';
-import { Box, Typography, Chip, Alert, CircularProgress, Tabs, Tab } from '@mui/material';
+import { Box, Typography, Chip, Alert, CircularProgress, Tabs, Tab, Stack, Button } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
-import { listarEscriturasPLD } from './pldApi';
+import PictureAsPdfOutlinedIcon from '@mui/icons-material/PictureAsPdfOutlined';
+import { listarEscriturasPLD, obtenerManualPDF } from './pldApi';
 import { estadoMeta } from './pldHelpers';
 import ExpedientePLD from './ExpedientePLD';
 import PLDDashboard from './PLDDashboard';
@@ -112,10 +113,45 @@ function DeteccionAutomatica() {
 
 export default function PLDSeccion() {
   const [tab, setTab] = useState('dashboard');
+  const [cargandoManual, setCargandoManual] = useState(false);
+  const [errorManual, setErrorManual] = useState(null);
+
+  // Un clic: trae el PDF (mismo patrón de blob+Authorization que ya usan
+  // descargarXML/descargarAcuse) y lo abre en una pestaña nueva — el visor
+  // de PDF nativo del navegador la muestra como vista previa con su propio
+  // botón de imprimir, sin forzar una descarga.
+  async function handleAbrirManual() {
+    setCargandoManual(true);
+    setErrorManual(null);
+    try {
+      const blob = await obtenerManualPDF();
+      const url = window.URL.createObjectURL(blob);
+      window.open(url, '_blank');
+      // No se revoca la URL de inmediato: la pestaña nueva sigue leyendo el
+      // blob después de que esta función termina.
+    } catch (err) {
+      setErrorManual(err?.response?.data?.mensaje || 'No se pudo generar el manual en PDF.');
+    } finally {
+      setCargandoManual(false);
+    }
+  }
 
   return (
     <Box>
-      <Typography variant="h5" sx={{ mb: 1.5 }}>Expedientes PLD</Typography>
+      <Stack direction="row" justifyContent="space-between" alignItems="center" flexWrap="wrap" spacing={1} sx={{ mb: 1.5 }}>
+        <Typography variant="h5">Expedientes PLD</Typography>
+        <Button
+          variant="outlined"
+          startIcon={cargandoManual ? <CircularProgress size={16} /> : <PictureAsPdfOutlinedIcon />}
+          onClick={handleAbrirManual}
+          disabled={cargandoManual}
+        >
+          {cargandoManual ? 'Generando manual…' : 'Manual (PDF)'}
+        </Button>
+      </Stack>
+      {errorManual && (
+        <Alert severity="error" sx={{ mb: 2 }} onClose={() => setErrorManual(null)}>{errorManual}</Alert>
+      )}
       <Tabs value={tab} onChange={(_e, v) => setTab(v)} sx={{ mb: 2 }}>
         <Tab value="dashboard" label="Panel de control" />
         <Tab value="deteccion" label="Detección automática" />
