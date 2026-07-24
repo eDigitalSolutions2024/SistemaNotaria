@@ -6,18 +6,23 @@
 // dentro del <main class="contenido"> del shell existente — no se crea
 // ningún layout de página nuevo.
 //
-// La lista nace de las Escrituras (Motor de Reglas, GET /pld/escrituras-pld),
-// no de AvisoPLD — una Escritura sujeta a PLD aparece aunque todavía no
-// tenga expediente ("Pendiente de iniciar"). Al elegir una fila se abre el
-// mismo ExpedientePLD de siempre: si no existe AvisoPLD, se crea en ese
-// momento (detectarAviso, ya existente) — nunca antes, por solo mirar la
-// lista.
+// Dos pestañas:
+// - "Panel de control" (PLDDashboard.jsx, nuevo): opera sobre AvisoPLD ya
+//   existentes — métricas, filtros, búsqueda, orden, paginación, detalle.
+// - "Detección automática" (este archivo, sin cambios de lógica): nace de
+//   las Escrituras (Motor de Reglas, GET /pld/escrituras-pld), no de
+//   AvisoPLD — una Escritura sujeta a PLD aparece aunque todavía no tenga
+//   expediente ("Pendiente de iniciar"). Al elegir una fila se abre el
+//   mismo ExpedientePLD de siempre: si no existe AvisoPLD, se crea en ese
+//   momento (detectarAviso, ya existente) — nunca antes, por solo mirar la
+//   lista.
 import React, { useEffect, useState } from 'react';
-import { Box, Typography, Chip, Alert, CircularProgress } from '@mui/material';
+import { Box, Typography, Chip, Alert, CircularProgress, Tabs, Tab } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
 import { listarEscriturasPLD } from './pldApi';
 import { estadoMeta } from './pldHelpers';
 import ExpedientePLD from './ExpedientePLD';
+import PLDDashboard from './PLDDashboard';
 
 const columns = [
   { field: 'numeroControl', headerName: 'Núm. control', width: 120 },
@@ -37,7 +42,7 @@ const columns = [
   },
 ];
 
-export default function PLDSeccion() {
+function DeteccionAutomatica() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [filas, setFilas] = useState([]);
@@ -101,6 +106,21 @@ export default function PLDSeccion() {
           />
         </div>
       )}
+    </Box>
+  );
+}
+
+export default function PLDSeccion() {
+  const [tab, setTab] = useState('dashboard');
+
+  return (
+    <Box>
+      <Typography variant="h5" sx={{ mb: 1.5 }}>Expedientes PLD</Typography>
+      <Tabs value={tab} onChange={(_e, v) => setTab(v)} sx={{ mb: 2 }}>
+        <Tab value="dashboard" label="Panel de control" />
+        <Tab value="deteccion" label="Detección automática" />
+      </Tabs>
+      {tab === 'dashboard' ? <PLDDashboard /> : <DeteccionAutomatica />}
     </Box>
   );
 }

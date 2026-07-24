@@ -7,6 +7,7 @@
 // listado, el guardado/modificación de Escritura, procesos automáticos o
 // scripts de revalidación — todos llaman exactamente a la misma función.
 const { ACTIVAS, HISTORICO } = require('./reglas');
+const { calcularNivelRiesgo } = require('./nivelRiesgo');
 
 // Día 17 del mes siguiente a la operación (Art. 23 LFPIORPI). Es una regla
 // transversal a TODAS las actividades, no específica de ninguna — por eso
@@ -134,4 +135,4 @@ function evaluarConVersion(escritura, reglaId, version) {
   return resultadoFinal({ ...resultado, regla: { id: regla.id, version: regla.version } }, escritura);
 }
 
-module.exports = { evaluarEscritura, evaluarConVersion, calcularFechaVencimiento };
+module.exports = { evaluarEscritura, evaluarConVersion, calcularFechaVencimiento, calcularNivelRiesgo };

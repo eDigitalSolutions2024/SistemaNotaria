@@ -1,6 +1,6 @@
 // src/components/pld/ExpedientePLD.jsx
 //
-// Contenedor definitivo del Expediente PLD — layout de dos columnas que
+// Contenedor definitivo del Expediente PLD — layout de tres columnas que
 // usan TODAS las pantallas. Se abre en un Dialog desde Escrituras.jsx,
 // igual que EscrituraEstatus.
 //
@@ -8,34 +8,33 @@
 // tab activo — estado, progreso, checklist, acciones rápidas, alertas,
 // responsable, última actualización.
 //
-// Columna derecha: Header + Stepper (indicador de avance, reemplaza la
+// Columna central: Header + Stepper (indicador de avance, reemplaza la
 // barra de Tabs plana) + contenido del paso activo. El flujo es
 // Dashboard → Datos generales → Actividad → Validaciones → XML → Acuse →
-// Historial. Dashboard es la vista ejecutiva (nunca editable). Datos
-// generales y Actividad ya tienen guardado parcial real (PUT
-// /avisos/:id/comparecientes y /avisos/:id/actividad). El resto sigue en
-// placeholder, a construir pantalla por pantalla en iteraciones aprobadas.
+// Historial.
+//
+// Columna derecha (DiagnosticoJuridicoPanel): fija igual que el Sidebar —
+// Motor Jurídico Inteligente, se recalcula cada vez que `aviso` cambia
+// (cada guardado), nunca tecla por tecla del borrador.
 import React, { useEffect, useMemo, useState } from 'react';
 import { Box, Alert, CircularProgress, Typography } from '@mui/material';
 import { ThemeProvider } from '@mui/material/styles';
 
 import { useAuth } from '../../auth/AuthContext';
-import { detectarAviso, listarCatalogo } from './pldApi';
+import { detectarAviso, listarCatalogo, obtenerDiagnostico } from './pldApi';
 import { TIPOS_FEP_SOPORTADOS, catalogosNecesarios, ROLES_POR_TIPO_FEP, puedeEditarPLD, puedePresentarPLD, evaluarCompletitud } from './pldHelpers';
 import pldTheme from './pldTheme';
 import ExpedientePLDSidebar from './ExpedientePLDSidebar';
 import ExpedientePLDHeader from './ExpedientePLDHeader';
 import ExpedientePLDStepper from './ExpedientePLDStepper';
+import DiagnosticoJuridicoPanel from './DiagnosticoJuridicoPanel';
 import DashboardTab from './tabs/DashboardTab';
 import DatosGeneralesTab from './tabs/DatosGeneralesTab';
 import ActividadTab from './tabs/ActividadTab';
 import ValidacionesTab from './tabs/ValidacionesTab';
 import GenerarXMLTab from './tabs/GenerarXMLTab';
 import AcuseSATTab from './tabs/AcuseSATTab';
-
-const PLACEHOLDERS = {
-  historial: 'Aquí irá el historial de estados del aviso. El dato ya existe en el backend (aviso.historialEstados).',
-};
+import HistorialTab from './tabs/HistorialTab';
 
 function getUserRoles(u) {
   const roles = [];
@@ -45,7 +44,7 @@ function getUserRoles(u) {
   return roles.map((r) => String(r).toLocaleUpperCase('es-MX'));
 }
 
-export default function ExpedientePLD({ escrituraId, row, onClose }) {
+export default function ExpedientePLD({ escrituraId, row, onClose, tabInicial = 'dashboard' }) {
   const { user } = useAuth();
   const puedeEditar = puedeEditarPLD(getUserRoles(user));
   const puedeGenerar = puedePresentarPLD(getUserRoles(user));
@@ -56,7 +55,10 @@ export default function ExpedientePLD({ escrituraId, row, onClose }) {
   const [comparecientes, setComparecientes] = useState([]);
   const [datosActividad, setDatosActividad] = useState({});
   const [catalogos, setCatalogos] = useState({});
-  const [tabActivo, setTabActivo] = useState('dashboard');
+  const [tabActivo, setTabActivo] = useState(tabInicial);
+  const [diagnostico, setDiagnostico] = useState(null);
+  const [diagnosticoError, setDiagnosticoError] = useState(null);
+  const [cargandoDiagnostico, setCargandoDiagnostico] = useState(false);
 
   useEffect(() => {
     let cancelado = false;
@@ -111,6 +113,31 @@ export default function ExpedientePLD({ escrituraId, row, onClose }) {
       catalogos,
     });
   }, [aviso, catalogos]);
+
+  // Motor Jurídico Inteligente — se recalcula cada vez que `aviso` cambia
+  // (cada guardado), mismo disparador que ya usa `completitud` arriba. No
+  // se recalcula tecla por tecla del borrador — mismo criterio ya aprobado
+  // para el resto del expediente (ver comentario de `completitud`).
+  useEffect(() => {
+    let cancelado = false;
+    if (!aviso?._id) return;
+    (async () => {
+      setCargandoDiagnostico(true);
+      setDiagnosticoError(null);
+      try {
+        const data = await obtenerDiagnostico(aviso._id);
+        if (!cancelado) setDiagnostico(data);
+      } catch (err) {
+        if (!cancelado) {
+          setDiagnostico(null);
+          setDiagnosticoError(err?.response?.data?.mensaje || 'No se pudo calcular el diagnóstico jurídico.');
+        }
+      } finally {
+        if (!cancelado) setCargandoDiagnostico(false);
+      }
+    })();
+    return () => { cancelado = true; };
+  }, [aviso]);
 
   if (loading) {
     return (
@@ -190,17 +217,21 @@ export default function ExpedientePLD({ escrituraId, row, onClose }) {
           )}
 
           {tabActivo === 'acuse' && (
-            <AcuseSATTab aviso={aviso} />
+            <AcuseSATTab aviso={aviso} puedeGenerar={puedeGenerar} onGuardado={setAviso} />
           )}
 
-          {!['dashboard', 'datosGenerales', 'actividad', 'validaciones', 'xml', 'acuse'].includes(tabActivo) && (
-            <Box sx={{ minHeight: 400, bgcolor: '#f8fafc', borderRadius: 1, p: 3 }}>
-              <Typography variant="body2" color="text.secondary" sx={{ fontStyle: 'italic' }}>
-                {PLACEHOLDERS[tabActivo]}
-              </Typography>
-            </Box>
+          {tabActivo === 'historial' && (
+            <HistorialTab historialEstados={aviso.historialEstados} />
           )}
         </Box>
+
+        <DiagnosticoJuridicoPanel
+          diagnostico={diagnostico}
+          diagnosticoError={diagnosticoError}
+          cargandoDiagnostico={cargandoDiagnostico}
+          completitud={completitud}
+          onIrA={setTabActivo}
+        />
       </Box>
     </ThemeProvider>
   );

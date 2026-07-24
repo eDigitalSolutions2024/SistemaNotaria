@@ -2,6 +2,9 @@
 
 const express = require('express');
 const router = express.Router();
+const path   = require('path');
+const fs     = require('fs');
+const multer = require('multer');
 
 const Escritura      = require('../models/Escritura');
 const ClienteGeneral = require('../models/ClienteGeneral');
@@ -10,7 +13,7 @@ const { detectarObligacion }                         = require('../pld/detectorO
 const { requirePermisoPLD, buildFiltroScope }        = require('../pld/roles');
 const { generarXML, PLDXMLError }                    = require('../pld/generadorXML');
 const catalogoService                                 = require('../pld/catalogos/catalogoService');
-const { evaluarEscritura }                            = require('../pld/motor');
+const { evaluarEscritura, calcularNivelRiesgo }       = require('../pld/motor');
 
 // Mismo criterio que pldService.processEscritura(): una Escritura con
 // tipoTramite todavía sin capturar no se evalúa — evita ruido en el listado.
@@ -23,6 +26,41 @@ const ESTADOS_PERMITEN_GENERAR_XML = ['PENDIENTE', 'LISTO', 'XML_GENERADO'];
 // pldService.ESTADOS_INMUTABLES (Backend/pld/pldService.js).
 const ESTADOS_INMUTABLES = ['PRESENTADO', 'CANCELADO', 'RECHAZADO_SPPLD'];
 
+// Estado desde el que se puede registrar el resultado del envío al SPPLD
+// (acuse o rechazo). Solo XML_GENERADO — una vez resuelto, el aviso cae en
+// ESTADOS_INMUTABLES y queda congelado (RECHAZADO_SPPLD incluido: la
+// corrección es vía un aviso modificatorio, no implementado todavía).
+const ESTADOS_PERMITEN_REGISTRAR_ENVIO = ['XML_GENERADO'];
+
+// ── Subida del PDF de acuse ─────────────────────────────────────────────────
+// Backend/uploads/ ya está cubierto por .gitignore (raíz del repo).
+const ACUSES_DIR = path.join(__dirname, '../uploads/pld/acuses');
+
+const uploadAcusePDF = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => {
+      fs.mkdirSync(ACUSES_DIR, { recursive: true });
+      cb(null, ACUSES_DIR);
+    },
+    filename: (req, file, cb) => cb(null, `${req.params.id}.pdf`),
+  }),
+  limits: { fileSize: 10 * 1024 * 1024 }, // mismo límite que routes/escrituras.js
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype !== 'application/pdf') {
+      return cb(new Error('El acuse debe ser un archivo PDF.'));
+    }
+    cb(null, true);
+  },
+});
+
+// Envuelve multer para responder 400 en JSON en vez de tumbar la request.
+function acuseUpload(req, res, next) {
+  uploadAcusePDF.single('acuse')(req, res, (err) => {
+    if (err) return res.status(400).json({ mensaje: err.message });
+    next();
+  });
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function formatFechaPLD(date) {
@@ -33,6 +71,80 @@ function formatFechaPLD(date) {
   const mm   = String(d.getMonth() + 1).padStart(2, '0');
   const yyyy = d.getFullYear();
   return `${dd}/${mm}/${yyyy}`;
+}
+
+function escapeRegex(s) {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// ── Filtro compartido del Dashboard de Control PLD ──────────────────────────
+// Usado por GET /avisos (tabla) y GET /avisos/metricas (tarjetas) para que
+// ambos respondan exactamente al mismo criterio de búsqueda. `incluirEstado`
+// en false omite el filtro "estado" — las tarjetas de métricas necesitan ver
+// el desglose completo por estado sin que el estado ya filtrado en la tabla
+// las reduzca a un solo número.
+function buildFiltroAvisos(req, { incluirEstado = true } = {}) {
+  const {
+    estado, desde, hasta, tipoActo, numeroControl, compareciente, q,
+    abogado: abogadoQuery, portal, confianza,
+  } = req.query;
+
+  const filtro = { ...buildFiltroScope(req) };
+
+  if (incluirEstado && estado) filtro.estado = estado;
+  if (portal)    filtro.portal             = portal;
+  if (confianza) filtro.confianzaDeteccion = confianza;
+
+  if (abogadoQuery && req.permisos.puedeVerTodo) {
+    filtro.abogado = { $regex: escapeRegex(abogadoQuery), $options: 'i' };
+  }
+
+  if (desde || hasta) {
+    filtro.fechaOperacion = {};
+    if (desde) {
+      const d = new Date(desde);
+      if (!isNaN(d)) filtro.fechaOperacion.$gte = d;
+    }
+    if (hasta) {
+      const h = new Date(hasta);
+      if (!isNaN(h)) { h.setHours(23, 59, 59, 999); filtro.fechaOperacion.$lte = h; }
+    }
+    if (Object.keys(filtro.fechaOperacion).length === 0) delete filtro.fechaOperacion;
+  }
+
+  if (tipoActo) {
+    filtro.descripcionActividad = { $regex: escapeRegex(tipoActo), $options: 'i' };
+  }
+
+  if (numeroControl && /^\d+$/.test(String(numeroControl).trim())) {
+    filtro.numeroControl = Number(numeroControl);
+  }
+
+  if (compareciente) {
+    const re = new RegExp(escapeRegex(compareciente), 'i');
+    filtro.comparecientes = {
+      $elemMatch: {
+        $or: [
+          { nombre: re }, { apellidoPaterno: re }, { apellidoMaterno: re },
+          { nombreCompleto: re }, { denominacionRazon: re },
+        ],
+      },
+    };
+  }
+
+  if (q) {
+    const re = new RegExp(escapeRegex(q), 'i');
+    const or = [
+      { descripcionActividad: re },
+      { abogado: re },
+      { referenciaOperador: re },
+      { folioAvisoSAT: re },
+    ];
+    if (/^\d+$/.test(String(q).trim())) or.push({ numeroControl: Number(q) });
+    filtro.$or = or;
+  }
+
+  return filtro;
 }
 
 // nombre_completo se preserva sin inferencia de partes — separación confirmada por usuario en UI
@@ -295,37 +407,30 @@ router.get('/escrituras-pld', requirePermisoPLD('puedeEditar'), async (req, res)
   }
 });
 
+// Columnas válidas para ordenar la tabla del Dashboard de Control PLD —
+// whitelist explícita para no pasar un campo arbitrario a Mongoose .sort().
+const SORT_FIELDS_AVISOS = ['numeroControl', 'fechaOperacion', 'fechaVencimiento', 'estado', 'abogado', 'createdAt'];
+
 // ── GET /api/pld/avisos ───────────────────────────────────────────────────────
-// Lista avisos. Scope limitado por rol (ADMINISTRADOR / OFICIAL_PLD ven todo;
-// resto solo sus propios avisos por abogado).
+// Lista avisos con filtros del Dashboard de Control PLD (ver buildFiltroAvisos)
+// y orden por columna. Scope limitado por rol (ADMINISTRADOR / OFICIAL_PLD ven
+// todo; resto solo sus propios avisos por abogado).
 router.get('/avisos', requirePermisoPLD('puedeEditar'), async (req, res) => {
   try {
-    const {
-      estado,
-      portal,
-      confianza,
-      abogado: abogadoQuery,
-      page  = 1,
-      limit = 20,
-    } = req.query;
+    const { page = 1, limit = 20, sortBy, sortDir } = req.query;
 
-    // Scope base por rol — nunca puede ser sobreescrito por query params para ampliar acceso
-    const filtroScope = buildFiltroScope(req);
+    const filtro = buildFiltroAvisos(req);
 
-    const filtro = { ...filtroScope };
-    if (estado)        filtro.estado             = estado;
-    if (portal)        filtro.portal             = portal;
-    if (confianza)     filtro.confianzaDeteccion = confianza;
-    // El filtro por abogado vía query solo puede reducir el scope, nunca ampliarlo
-    if (abogadoQuery && req.permisos.puedeVerTodo) {
-      filtro.abogado = { $regex: abogadoQuery, $options: 'i' };
-    }
+    const campoOrden = SORT_FIELDS_AVISOS.includes(sortBy) ? sortBy : 'fechaVencimiento';
+    const direccion  = sortDir === 'desc' ? -1 : 1;
+    const sort = { [campoOrden]: direccion };
+    if (campoOrden !== 'createdAt') sort.createdAt = -1; // desempate estable, igual que antes
 
     const skip  = (Number(page) - 1) * Number(limit);
     const total = await AvisoPLD.countDocuments(filtro);
     const avisos = await AvisoPLD
       .find(filtro)
-      .sort({ fechaVencimiento: 1, createdAt: -1 })
+      .sort(sort)
       .skip(skip)
       .limit(Number(limit))
       .lean();
@@ -342,6 +447,35 @@ router.get('/avisos', requirePermisoPLD('puedeEditar'), async (req, res) => {
   }
 });
 
+// ── GET /api/pld/avisos/metricas ────────────────────────────────────────────
+// Tarjetas del Dashboard de Control PLD. Registrada ANTES de /avisos/:id
+// para que Express no intente resolver "metricas" como un ObjectId.
+// Usa los mismos filtros que GET /avisos (fechas, tipo de acto, abogado,
+// escritura, compareciente, búsqueda) pero IGNORA el filtro "estado": las
+// tarjetas deben mostrar el desglose completo por estado, no reducirse al
+// estado que la tabla tenga filtrado en ese momento.
+router.get('/avisos/metricas', requirePermisoPLD('puedeEditar'), async (req, res) => {
+  try {
+    const base = buildFiltroAvisos(req, { incluirEstado: false });
+    const ahora = new Date();
+
+    const [total, pendientes, xmlGenerados, presentados, rechazados, acusesRegistrados, vencidos] = await Promise.all([
+      AvisoPLD.countDocuments(base),
+      AvisoPLD.countDocuments({ ...base, estado: { $in: ['PENDIENTE', 'LISTO', 'PENDIENTE_DECLARANOT'] } }),
+      AvisoPLD.countDocuments({ ...base, estado: 'XML_GENERADO' }),
+      AvisoPLD.countDocuments({ ...base, estado: 'PRESENTADO' }),
+      AvisoPLD.countDocuments({ ...base, estado: 'RECHAZADO_SPPLD' }),
+      AvisoPLD.countDocuments({ ...base, acusePdfPath: { $ne: null } }),
+      AvisoPLD.countDocuments({ ...base, fechaVencimiento: { $lt: ahora }, estado: { $nin: ['PRESENTADO', 'NO_APLICA', 'CANCELADO'] } }),
+    ]);
+
+    return res.json({ total, pendientes, xmlGenerados, presentados, rechazados, acusesRegistrados, vencidos });
+  } catch (err) {
+    console.error('[pld/avisos/metricas]', err);
+    return res.status(500).json({ mensaje: 'Error interno del servidor.', error: err.message });
+  }
+});
+
 // ── GET /api/pld/avisos/:id ───────────────────────────────────────────────────
 // Detalle de un AvisoPLD. Respeta el scope del usuario.
 router.get('/avisos/:id', requirePermisoPLD('puedeEditar'), async (req, res) => {
@@ -354,6 +488,52 @@ router.get('/avisos/:id', requirePermisoPLD('puedeEditar'), async (req, res) => 
     return res.json(aviso);
   } catch (err) {
     console.error('[pld/avisos/:id]', err);
+    return res.status(500).json({ mensaje: 'Error interno del servidor.', error: err.message });
+  }
+});
+
+// ── GET /api/pld/avisos/:id/diagnostico ────────────────────────────────────────
+// Diagnóstico Jurídico del expediente — Motor Jurídico Inteligente. SOLO
+// LECTURA: corre evaluarEscritura() (Backend/pld/motor) contra la Escritura
+// ligada al aviso y calcula el nivel de riesgo, pero NUNCA escribe en
+// AvisoPLD. No es una re-evaluación legal que reemplace lo ya persistido —
+// aviso.incisoLegal/justificacion siguen siendo la fuente de verdad legal
+// congelada (mismo principio que ya documenta GET /escrituras-pld: una vez
+// que existe el aviso, es él quien manda). Esto es una lectura en vivo para
+// que el panel muestre fundamento/documentos/advertencias/riesgo
+// actualizados, útil incluso para expedientes detectados antes de que
+// existiera este endpoint.
+router.get('/avisos/:id/diagnostico', requirePermisoPLD('puedeEditar'), async (req, res) => {
+  try {
+    const filtroScope = buildFiltroScope(req);
+    const aviso = await AvisoPLD.findOne({ _id: req.params.id, ...filtroScope }).lean();
+    if (!aviso) {
+      return res.status(404).json({ mensaje: 'Aviso PLD no encontrado.' });
+    }
+
+    const escritura = await Escritura.findById(aviso.escrituraId).lean();
+    if (!escritura) {
+      return res.status(404).json({ mensaje: 'La Escritura de este aviso ya no existe — no se puede recalcular el diagnóstico jurídico.' });
+    }
+
+    const diagnostico = evaluarEscritura(escritura);
+    const nivelRiesgo = calcularNivelRiesgo({ diagnostico, aviso });
+
+    return res.json({
+      aplicaPLD: diagnostico.aplicaPLD,
+      fundamentoLegal: diagnostico.fundamentoLegal,
+      motivo: diagnostico.motivo,
+      umbral: diagnostico.umbral,
+      valorAnalizado: diagnostico.valorAnalizado,
+      documentosRequeridos: diagnostico.documentosRequeridos,
+      datosFaltantes: diagnostico.datosFaltantes,
+      advertencias: diagnostico.advertencias,
+      acciones: diagnostico.acciones,
+      actividadPLD: diagnostico.actividadPLD,
+      nivelRiesgo,
+    });
+  } catch (err) {
+    console.error('[pld/avisos/:id/diagnostico]', err);
     return res.status(500).json({ mensaje: 'Error interno del servidor.', error: err.message });
   }
 });
@@ -542,6 +722,104 @@ router.get('/avisos/:id/descargar-xml', requirePermisoPLD('puedeEditar'), async 
     return res.send(aviso.xmlContenido);
   } catch (err) {
     console.error('[pld/avisos/:id/descargar-xml]', err);
+    return res.status(500).json({ mensaje: 'Error interno del servidor.', error: err.message });
+  }
+});
+
+// ── POST /api/pld/avisos/:id/registrar-acuse ──────────────────────────────────
+// Registra el resultado positivo del envío manual al SPPLD: folio del aviso,
+// folio de portal (opcional) y el PDF del acuse. Pasa el aviso a PRESENTADO.
+// No transmite nada al SAT — solo documenta lo que el notario ya hizo fuera
+// del sistema (Principio P8: ninguna transmisión es automática).
+router.post('/avisos/:id/registrar-acuse', requirePermisoPLD('puedePresentar'), acuseUpload, async (req, res) => {
+  try {
+    const filtroScope = buildFiltroScope(req);
+    const aviso = await AvisoPLD.findOne({ _id: req.params.id, ...filtroScope });
+    if (!aviso) {
+      return res.status(404).json({ mensaje: 'Aviso PLD no encontrado.' });
+    }
+    if (!ESTADOS_PERMITEN_REGISTRAR_ENVIO.includes(aviso.estado)) {
+      return res.status(409).json({ mensaje: `No se puede registrar el acuse desde el estado actual (${aviso.estado}). Debe estar en XML_GENERADO.` });
+    }
+
+    const folioAvisoSAT = String(req.body.folioAvisoSAT || '').trim();
+    if (!folioAvisoSAT) {
+      return res.status(400).json({ mensaje: 'El folio del aviso (SAT) es obligatorio.' });
+    }
+    if (!req.file) {
+      return res.status(400).json({ mensaje: 'Debes adjuntar el PDF del acuse.' });
+    }
+
+    const usuarioActual = req.user?.nombre || req.user?.id || 'sistema';
+
+    aviso.folioAvisoSAT = folioAvisoSAT;
+    aviso.folioPortalSAT = String(req.body.folioPortalSAT || '').trim() || undefined;
+    aviso.acusePdfPath = path.relative(path.join(__dirname, '..'), req.file.path);
+    aviso.acuseFechaRegistro = new Date();
+    aviso.fechaPresentacion = new Date();
+    aviso.registrarTransicion('PRESENTADO', 'ACUSE_REGISTRADO', usuarioActual, String(req.body.nota || '').trim() || undefined);
+
+    await aviso.save();
+    return res.json({ registrado: true, aviso });
+  } catch (err) {
+    if (err?.code === 11000) {
+      return res.status(409).json({ mensaje: 'Ya existe un aviso registrado con ese folio.' });
+    }
+    console.error('[pld/avisos/:id/registrar-acuse]', err);
+    return res.status(500).json({ mensaje: 'Error interno del servidor.', error: err.message });
+  }
+});
+
+// ── POST /api/pld/avisos/:id/rechazar-sppld ───────────────────────────────────
+// Registra el resultado negativo del envío manual al SPPLD: el SAT rechazó
+// el aviso. Pasa el aviso a RECHAZADO_SPPLD, que es un estado inmutable
+// (ESTADOS_INMUTABLES) — la corrección requiere un aviso modificatorio,
+// funcionalidad todavía no implementada.
+router.post('/avisos/:id/rechazar-sppld', requirePermisoPLD('puedePresentar'), async (req, res) => {
+  try {
+    const filtroScope = buildFiltroScope(req);
+    const aviso = await AvisoPLD.findOne({ _id: req.params.id, ...filtroScope });
+    if (!aviso) {
+      return res.status(404).json({ mensaje: 'Aviso PLD no encontrado.' });
+    }
+    if (!ESTADOS_PERMITEN_REGISTRAR_ENVIO.includes(aviso.estado)) {
+      return res.status(409).json({ mensaje: `No se puede registrar un rechazo desde el estado actual (${aviso.estado}). Debe estar en XML_GENERADO.` });
+    }
+
+    const nota = String(req.body.nota || '').trim();
+    if (!nota) {
+      return res.status(400).json({ mensaje: 'El motivo del rechazo es obligatorio.' });
+    }
+
+    const usuarioActual = req.user?.nombre || req.user?.id || 'sistema';
+    aviso.registrarTransicion('RECHAZADO_SPPLD', 'RECHAZO_SPPLD', usuarioActual, nota);
+
+    await aviso.save();
+    return res.json({ registrado: true, aviso });
+  } catch (err) {
+    console.error('[pld/avisos/:id/rechazar-sppld]', err);
+    return res.status(500).json({ mensaje: 'Error interno del servidor.', error: err.message });
+  }
+});
+
+// ── GET /api/pld/avisos/:id/descargar-acuse ───────────────────────────────────
+// Descarga el PDF del acuse registrado con registrar-acuse.
+router.get('/avisos/:id/descargar-acuse', requirePermisoPLD('puedeEditar'), async (req, res) => {
+  try {
+    const filtroScope = buildFiltroScope(req);
+    const aviso = await AvisoPLD.findOne({ _id: req.params.id, ...filtroScope }).lean();
+    if (!aviso || !aviso.acusePdfPath) {
+      return res.status(404).json({ mensaje: 'Este aviso todavía no tiene un acuse registrado.' });
+    }
+
+    const rutaAbsoluta = path.join(__dirname, '..', aviso.acusePdfPath);
+    if (!fs.existsSync(rutaAbsoluta)) {
+      return res.status(404).json({ mensaje: 'El archivo del acuse ya no está disponible en el servidor.' });
+    }
+
+    return res.download(rutaAbsoluta, `acuse-${aviso.folioAvisoSAT || aviso._id}.pdf`);
+  } catch (err) {
+    console.error('[pld/avisos/:id/descargar-acuse]', err);
     return res.status(500).json({ mensaje: 'Error interno del servidor.', error: err.message });
   }
 });

@@ -31,6 +31,20 @@ export function estadoMeta(estado) {
   return ESTADO_META[estado] || { label: estado || '—', color: 'default' };
 }
 
+// Traducción de color/label para el nivel de riesgo que calcula el backend
+// (Backend/pld/motor/nivelRiesgo.js, GET /pld/avisos/:id/diagnostico). El
+// frontend NO decide el nivel — solo lo pinta, mismo principio que
+// estadoMeta() con el estado del aviso.
+export const NIVEL_RIESGO_META = {
+  ALTO:  { label: 'Riesgo alto',  color: 'error',   severidad: 'error' },
+  MEDIO: { label: 'Riesgo medio', color: 'warning', severidad: 'warning' },
+  BAJO:  { label: 'Riesgo bajo',  color: 'success', severidad: 'success' },
+};
+
+export function nivelRiesgoMeta(nivel) {
+  return NIVEL_RIESGO_META[nivel] || { label: nivel || '—', color: 'default', severidad: 'info' };
+}
+
 // Progreso aproximado del expediente sobre el camino "feliz" del ciclo de
 // vida (PENDIENTE → LISTO → XML_GENERADO → PRESENTADO). null = no aplica
 // una barra de progreso (NO_APLICA, CANCELADO).
@@ -112,6 +126,15 @@ export function puedeEditarPLD(roles = []) {
 }
 export function puedePresentarPLD(roles = []) {
   return roles.some((r) => ['ADMIN', 'ABOGADO'].includes(r));
+}
+/** Espejo de PERMISOS_PLD[...].puedeVerTodo en Backend/pld/roles.js — hoy
+ * solo ADMIN mapea a ADMINISTRADOR/OFICIAL_PLD (ver roles.js: OFICIAL_PLD
+ * "se incorporará cuando se extienda el modelo Abogado"). Se usa para
+ * decidir si mostrar el filtro "Abogado responsable" en PLDDashboard.jsx —
+ * si el usuario no puede ver todo, el backend ignora ese filtro de todas
+ * formas (buildFiltroAvisos), así que no tiene sentido mostrarlo. */
+export function puedeVerTodoPLD(roles = []) {
+  return roles.some((r) => r === 'ADMIN');
 }
 
 function textoPresente(v) {

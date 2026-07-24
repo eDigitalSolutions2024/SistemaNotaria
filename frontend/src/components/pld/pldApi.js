@@ -21,11 +21,24 @@ export async function detectarAviso(numeroControl) {
 /**
  * Lista avisos PLD (de solo lectura, no crea nada). Se usa para poblar el
  * mapa numeroControl -> aviso que pinta la columna PLD en Escrituras sin
- * hacer una llamada por fila.
+ * hacer una llamada por fila, y para la tabla del Dashboard de Control PLD
+ * (PLDDashboard.jsx), que además envía filtros: estado, desde, hasta,
+ * tipoActo, numeroControl, compareciente, abogado, q, sortBy, sortDir.
  */
 export async function listarAvisos(params = {}) {
   const { data } = await axios.get(`${API}/pld/avisos`, { params });
   return data; // { total, page, pages, avisos }
+}
+
+/**
+ * Tarjetas de métricas del Dashboard de Control PLD. Acepta los mismos
+ * filtros de scope que listarAvisos (desde, hasta, tipoActo, numeroControl,
+ * compareciente, abogado, q) — el backend ignora "estado" a propósito para
+ * que las tarjetas siempre muestren el desglose completo por estado.
+ */
+export async function listarAvisosMetricas(params = {}) {
+  const { data } = await axios.get(`${API}/pld/avisos/metricas`, { params });
+  return data; // { total, pendientes, xmlGenerados, presentados, rechazados, acusesRegistrados, vencidos }
 }
 
 /**
@@ -43,6 +56,20 @@ export async function listarEscriturasPLD(params = {}) {
 
 export async function obtenerAviso(avisoId) {
   const { data } = await axios.get(`${API}/pld/avisos/${avisoId}`);
+  return data;
+}
+
+/**
+ * Diagnóstico Jurídico del Motor Jurídico Inteligente — solo lectura, nunca
+ * escribe en el aviso. Corre el motor de reglas (Backend/pld/motor) contra
+ * la Escritura en vivo y regresa { aplicaPLD, fundamentoLegal, motivo,
+ * umbral, valorAnalizado, documentosRequeridos, datosFaltantes,
+ * advertencias, acciones, actividadPLD, nivelRiesgo }. 404 si la Escritura
+ * ya no existe (expediente huérfano) — el llamador debe mostrarlo como
+ * aviso, no como error fatal.
+ */
+export async function obtenerDiagnostico(avisoId) {
+  const { data } = await axios.get(`${API}/pld/avisos/${avisoId}/diagnostico`);
   return data;
 }
 
@@ -96,6 +123,41 @@ export async function generarXML(avisoId) {
  */
 export async function descargarXML(avisoId) {
   const res = await axios.get(`${API}/pld/avisos/${avisoId}/descargar-xml`, {
+    responseType: 'blob',
+  });
+  return res.data;
+}
+
+/**
+ * Registra el resultado positivo del envío manual al SPPLD: folio del aviso
+ * (obligatorio), folio de portal (opcional) y el PDF del acuse (obligatorio).
+ * Pasa el aviso a PRESENTADO. Solo disponible desde XML_GENERADO.
+ */
+export async function registrarAcuse(avisoId, { folioAvisoSAT, folioPortalSAT, archivo, nota }) {
+  const formData = new FormData();
+  formData.append('folioAvisoSAT', folioAvisoSAT);
+  if (folioPortalSAT) formData.append('folioPortalSAT', folioPortalSAT);
+  if (nota) formData.append('nota', nota);
+  formData.append('acuse', archivo);
+  const { data } = await axios.post(`${API}/pld/avisos/${avisoId}/registrar-acuse`, formData);
+  return data; // { registrado: true, aviso }
+}
+
+/**
+ * Registra el resultado negativo del envío manual al SPPLD. Pasa el aviso a
+ * RECHAZADO_SPPLD — estado inmutable, no se puede editar después. Solo
+ * disponible desde XML_GENERADO.
+ */
+export async function rechazarSPPLD(avisoId, nota) {
+  const { data } = await axios.post(`${API}/pld/avisos/${avisoId}/rechazar-sppld`, { nota });
+  return data; // { registrado: true, aviso }
+}
+
+/**
+ * Descarga el PDF del acuse ya registrado con registrarAcuse().
+ */
+export async function descargarAcuse(avisoId) {
+  const res = await axios.get(`${API}/pld/avisos/${avisoId}/descargar-acuse`, {
     responseType: 'blob',
   });
   return res.data;
