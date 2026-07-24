@@ -191,6 +191,8 @@ app.use('/api/presupuestos', require('./routes/presupuestos'));
 app.use('/api/calendar', calendarRoutes);
 app.use('/auth/microsoft', microsoftRoutes);
 app.use('/api/pld', auth, require('./routes/pld'));
+app.use('/api/custodia', auth, require('./routes/custodia'));
+app.use('/api/anuncios', auth, require('./routes/anuncios'));
 
 
 app.get('/', (_req, res) =>

@@ -85,6 +85,21 @@ const EscrituraSchema = new Schema(
     // ===== Trazabilidad =====
     createdBy: { type: String },
     updatedBy: { type: String },
+
+    // ===== Custodia física del expediente (abogado ⇄ recepción) =====
+    // Estado denormalizado para lectura rápida en tablas; el historial
+    // completo e inmutable vive en la colección CustodiaEvento.
+    custodia: {
+      estado: {
+        type: String,
+        enum: ['CON_ABOGADO', 'ENVIADO_A_RECEPCION', 'EN_RECEPCION', 'ENTREGADO_PENDIENTE_CONFIRMACION'],
+        default: 'CON_ABOGADO',
+      },
+      abogadoId: { type: Number, default: null },
+      abogadoNombre: { type: String, default: '' },
+      actualizadoEn: { type: Date, default: null },
+      actualizadoPor: { type: String, default: '' },
+    },
   },
   { timestamps: true }
 );

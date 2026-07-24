@@ -361,6 +361,35 @@ async function siguienteSlot(volumen, len = 1, excludeId = null) {
   return { volumen: next, desde: MIN_FOLIO_USABLE };
 }
 
+// Para el contador de folios: volumen de la escritura más reciente y cuántos
+// folios usables (3..298) quedan libres en ese volumen antes de saltar al
+// siguiente. Reusa siguienteSlot(), la misma lógica ya validada que se usa
+// para sugerir el próximo folio al capturar una escritura nueva.
+async function computeFolioActual() {
+  const last = await Escritura
+    .findOne({}, { numeroControl: 1, volumen: 1 })
+    .sort({ numeroControl: -1 })
+    .lean();
+
+  const volumenActual = last?.volumen || null;
+  const ultimoNumeroControl = Number(last?.numeroControl) || 0;
+
+  if (!volumenActual) {
+    return {
+      volumenActual: null,
+      siguienteFolio: MIN_FOLIO_USABLE,
+      foliosRestantes: MAX_FOLIO_USABLE - MIN_FOLIO_USABLE + 1,
+      ultimoNumeroControl,
+    };
+  }
+
+  const slot = await siguienteSlot(volumenActual, 1);
+  const mismoVolumen = slot.volumen === volumenActual;
+  const foliosRestantes = mismoVolumen ? Math.max(0, MAX_FOLIO_USABLE - slot.desde + 1) : 0;
+
+  return { volumenActual, siguienteFolio: slot.desde, foliosRestantes, ultimoNumeroControl };
+}
+
 
 // Verifica traslape en un volumen con un rango dado
 async function hayTraslape(volumen, rango, excludeId = null) {
@@ -1213,6 +1242,21 @@ router.post('/import', upload.single('file'), async (req, res) => {
 });
 
 // GET /escrituras/folio/next?volumen=V&len=K
+/* ---------------------------------------------------------------------- */
+/* GET /api/escrituras/folio-actual                                        */
+/* Para el contador de la esquina superior: cuántos folios quedan libres    */
+/* en el volumen vigente antes de saltar al siguiente.                     */
+/* ---------------------------------------------------------------------- */
+router.get('/folio-actual', async (req, res) => {
+  try {
+    const data = await computeFolioActual();
+    res.json({ ok: true, data });
+  } catch (e) {
+    console.error('ESCRITURAS FOLIO-ACTUAL ERROR:', e);
+    res.status(500).json({ ok: false, mensaje: 'Error calculando el folio actual' });
+  }
+});
+
 router.get('/folio/next', async (req, res) => {
   try {
     const volumen = String(req.query.volumen || '').trim();
@@ -1497,6 +1541,11 @@ if (base.presupuestoId) {
 }
 
 await pldService.processEscritura(created._id, getUserNameFromReq(req));
+
+// Tiempo real: cualquier pantalla de Escrituras abierta actualiza su
+// contador de folios al instante (mismo patrón que Protocolito).
+req.app.get('io')?.emit('escrituras:folio', await computeFolioActual());
+
 res.status(201).json(created);
 
   } catch (e) {

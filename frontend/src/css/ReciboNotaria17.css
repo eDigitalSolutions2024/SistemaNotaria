@@ -102,6 +102,109 @@
 }
 
 
+/* === Historial de pagos (al generar recibo de Escritura) === */
+.rn17 .historial-panel{
+  background:#fbfcff;
+  border:1px solid var(--line);
+  border-radius:14px;
+  padding:16px 18px;
+  margin-top:-4px;
+}
+.rn17 .historial-header{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  flex-wrap:wrap;
+  gap:8px;
+  margin-bottom:12px;
+}
+.rn17 .historial-title{
+  font-weight:800;
+  font-size:1rem;
+  color:var(--ink);
+}
+.rn17 .historial-badge{
+  font-size:.85rem;
+  font-weight:700;
+  padding:4px 12px;
+  border-radius:999px;
+}
+.rn17 .historial-badge.ok{ background:#e3f7e9; color:#1a7f42; }
+.rn17 .historial-badge.pending{ background:#fff1e0; color:#b45f06; }
+
+.rn17 .historial-stats{
+  display:grid;
+  grid-template-columns:repeat(3, minmax(0,1fr));
+  gap:12px;
+  margin-bottom:10px;
+}
+@media (max-width:700px){ .rn17 .historial-stats{ grid-template-columns:1fr } }
+.rn17 .stat{
+  display:flex;
+  flex-direction:column;
+  gap:4px;
+  background:#fff;
+  border:1px solid var(--line);
+  border-radius:10px;
+  padding:10px 12px;
+}
+.rn17 .stat-label{ font-size:.8rem; color:var(--mut); font-weight:600; }
+.rn17 .stat-value{ font-size:1.15rem; font-weight:800; color:var(--ink); }
+.rn17 .stat-value.ok{ color:#1a7f42; }
+.rn17 .stat-value.pending{ color:#b45f06; }
+
+.rn17 .historial-progress{
+  height:8px;
+  background:#eef1fa;
+  border-radius:999px;
+  overflow:hidden;
+  margin-bottom:14px;
+}
+.rn17 .historial-progress-bar{
+  height:100%;
+  background:var(--pri);
+  border-radius:999px;
+  transition:width .25s ease;
+}
+.rn17 .historial-progress-bar.ok{ background:#2fa35a; }
+
+.rn17 .historial-table{
+  width:100%;
+  border-collapse:collapse;
+  font-size:.92rem;
+}
+.rn17 .historial-table th{
+  text-align:left;
+  color:var(--mut);
+  font-weight:700;
+  font-size:.8rem;
+  padding:6px 8px;
+  border-bottom:1px solid var(--line);
+}
+.rn17 .historial-table td{
+  padding:8px;
+  border-bottom:1px solid var(--line);
+}
+.rn17 .historial-table tr:last-child td{ border-bottom:none; }
+.rn17 .historial-table a{ color:var(--pri); font-weight:700; text-decoration:none; }
+.rn17 .historial-table a:hover{ text-decoration:underline; }
+
+.rn17 .tag-directo,
+.rn17 .tag-vinculado{
+  font-size:.75rem;
+  font-weight:700;
+  padding:2px 8px;
+  border-radius:999px;
+}
+.rn17 .tag-directo{ background:#eef1fa; color:var(--mut); }
+.rn17 .tag-vinculado{ background:#e6ecff; color:#2f4fb0; }
+
+.rn17 .historial-empty{
+  color:var(--mut);
+  font-size:.92rem;
+  margin:4px 0 0;
+}
+
 /* === Modal SIEMPRE por encima del sidebar y centrado === */
 .modal-backdrop {
   position: fixed !important;

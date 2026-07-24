@@ -1,6 +1,7 @@
 // src/components/Protocolito.jsx
 import React, { useEffect, useRef, useState } from 'react';
 import axios from 'axios';
+import { io } from 'socket.io-client';
 import { DataGrid } from '@mui/x-data-grid';
 import {
   Dialog, DialogTitle, DialogContent, DialogActions,
@@ -8,10 +9,17 @@ import {
 } from '@mui/material';
 
 import { useAuth } from '../auth/AuthContext';
+import CustodiaControl from './custodia/CustodiaControl';
 
 import '../css/styles.css';
+import '../css/Protocolito.css';
 
 const API = process.env.REACT_APP_API_URL || 'http://localhost:8010';
+// Socket.io toma la parte de la URL después del host como namespace, no como
+// ruta HTTP: si conectáramos con "API" tal cual (trae "/api"), el cliente
+// caería en el namespace "/api" y nunca vería lo que el backend emite sobre
+// el namespace por defecto ("/"). Por eso aquí se usa solo el origen.
+const SOCKET_ORIGIN = API.replace(/\/api\/?$/, '');
 
 // ----- utils -----
 const emptyRow = {
@@ -614,6 +622,117 @@ const descargarPlantilla = (id) => {
     setPickerOpen(false);
   };
 
+  // Contador de volumen: se refresca junto con fetchData (después de cada
+  // alta/edición propia) y además en tiempo real vía socket cada vez que
+  // CUALQUIER usuario toma un número nuevo, sin necesidad de recargar.
+  const [volInfo, setVolInfo] = useState(null);
+  const fetchVolumenActual = async () => {
+    try {
+      const { data } = await axios.get(`${API}/protocolito/volumen-actual`);
+      if (data?.ok) setVolInfo(data.data);
+    } catch {
+      // silencioso: si falla, simplemente no se muestra el contador
+    }
+  };
+
+  useEffect(() => {
+    const socket = io(SOCKET_ORIGIN, { path: '/socket.io' });
+    socket.on('protocolito:volumen', (data) => setVolInfo(data));
+    return () => socket.disconnect();
+  }, []);
+
+  // Candado de solo lectura: solo ADMIN lo puede cambiar; cuando está
+  // deshabilitado, TODOS quedan en modo lectura (incluido ADMIN).
+  const esAdmin = user?.role === 'ADMIN' || user?.role === 'admin';
+  const [protocolitoHabilitado, setProtocolitoHabilitado] = useState(true);
+  const [togglingCandado, setTogglingCandado] = useState(false);
+  const soloLectura = !protocolitoHabilitado;
+
+  // Umbrales de la alerta automática de cambio de volumen (100/50/10 por
+  // defecto, editables por ADMIN). El de "salto de volumen" (faltan=0) no
+  // es editable: siempre existe, es el evento en sí.
+  const [umbralesAlerta, setUmbralesAlerta] = useState([100, 50, 10]);
+  const [umbralesEdit, setUmbralesEdit] = useState('100, 50, 10');
+  const [guardandoUmbrales, setGuardandoUmbrales] = useState(false);
+
+  const fetchCandado = async () => {
+    try {
+      const { data } = await axios.get(`${API}/protocolito/config`);
+      if (data?.ok) {
+        setProtocolitoHabilitado(data.data.habilitado !== false);
+        const u = Array.isArray(data.data.umbralesAlerta) && data.data.umbralesAlerta.length
+          ? data.data.umbralesAlerta
+          : [100, 50, 10];
+        setUmbralesAlerta(u);
+        setUmbralesEdit(u.join(', '));
+      }
+    } catch {
+      // silencioso: si falla, se asume habilitado (no se bloquea por error de red)
+    }
+  };
+
+  useEffect(() => {
+    fetchCandado();
+    const socket = io(SOCKET_ORIGIN, { path: '/socket.io' });
+    socket.on('protocolito:config', (data) => {
+      setProtocolitoHabilitado(data.habilitado !== false);
+      if (Array.isArray(data.umbralesAlerta) && data.umbralesAlerta.length) {
+        setUmbralesAlerta(data.umbralesAlerta);
+        setUmbralesEdit(data.umbralesAlerta.join(', '));
+      }
+    });
+    return () => socket.disconnect();
+  }, []);
+
+  const toggleCandado = async () => {
+    setTogglingCandado(true);
+    try {
+      const { data } = await axios.patch(`${API}/protocolito/config`, { habilitado: !protocolitoHabilitado });
+      if (data?.ok) setProtocolitoHabilitado(data.data.habilitado !== false);
+    } catch (err) {
+      setMsg({ type: 'error', text: err?.response?.data?.mensaje || 'No se pudo cambiar el candado de Protocolito' });
+    } finally {
+      setTogglingCandado(false);
+    }
+  };
+
+  const guardarUmbrales = async () => {
+    const nums = umbralesEdit
+      .split(',')
+      .map((s) => Number(s.trim()))
+      .filter((n) => Number.isFinite(n) && n > 0);
+
+    if (!nums.length) {
+      setMsg({ type: 'warn', text: 'Escribe al menos un número de umbral válido, separados por coma' });
+      return;
+    }
+
+    setGuardandoUmbrales(true);
+    try {
+      const { data } = await axios.patch(`${API}/protocolito/config`, { umbralesAlerta: nums });
+      if (data?.ok) {
+        setUmbralesAlerta(data.data.umbralesAlerta);
+        setUmbralesEdit(data.data.umbralesAlerta.join(', '));
+        setMsg({ type: 'ok', text: 'Umbrales de alerta actualizados' });
+      }
+    } catch (err) {
+      setMsg({ type: 'error', text: err?.response?.data?.mensaje || 'No se pudieron guardar los umbrales' });
+    } finally {
+      setGuardandoUmbrales(false);
+    }
+  };
+
+  // Guardia común para toda acción que escribe: si está en solo lectura,
+  // avisa y corta antes de siquiera llamar al backend (que de todos modos
+  // lo rechazaría con 423).
+  const bloqueadoPorSoloLectura = () => {
+    if (soloLectura) {
+      setMsg({ type: 'warn', text: 'Protocolito está deshabilitado temporalmente por administración (modo solo lectura).' });
+      return true;
+    }
+    return false;
+  };
+
   const fetchData = async () => {
     setLoading(true);
     try {
@@ -626,11 +745,13 @@ const descargarPlantilla = (id) => {
     } finally {
       setLoading(false);
     }
+    fetchVolumenActual();
   };
   useEffect(() => { fetchData(); }, [q]);
 
   // acciones
   const onEdit = (row) => {
+    if (bloqueadoPorSoloLectura()) return;
     setEditingId(row._id);
     setDrafts(prev => ({
       ...prev,
@@ -675,6 +796,7 @@ const descargarPlantilla = (id) => {
   };
 
   const onSaveNew = async () => {
+    if (bloqueadoPorSoloLectura()) return;
     const cid = selectedCliente?._id || selectedCliente?.id;
     if (!cid) return setMsg({ type: 'warn', text: 'Selecciona un cliente primero' });
 
@@ -723,6 +845,7 @@ const descargarPlantilla = (id) => {
   };
 
   const onSaveEdit = async (id) => {
+    if (bloqueadoPorSoloLectura()) return;
     const draft = drafts[id];
     const err = validateRow(draft);
     if (err) return setMsg({ type: 'warn', text: err });
@@ -749,6 +872,7 @@ const descargarPlantilla = (id) => {
   };
 
   const onDelete = async (id) => {
+    if (bloqueadoPorSoloLectura()) return;
     if (!window.confirm('¿Eliminar este registro?')) return;
     try {
       await axios.delete(`${API}/protocolito/${id}`);
@@ -760,6 +884,7 @@ const descargarPlantilla = (id) => {
   };
 
   const startAdd = () => {
+  if (bloqueadoPorSoloLectura()) return;
   if (!canTakeProtocolito) {
     setMsg({ type: 'warn', text: 'Tu usuario no tiene permiso para tomar número de protocolito' });
     return;
@@ -775,6 +900,7 @@ const descargarPlantilla = (id) => {
   const handleSelectFile = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    if (bloqueadoPorSoloLectura()) { e.target.value = ''; return; }
     setImporting(true);
     setMsg(null);
     try {
@@ -834,6 +960,7 @@ const descargarPlantilla = (id) => {
 
   const confirmDeliver = async () => {
     if (!deliverRow?._id) return;
+    if (bloqueadoPorSoloLectura()) return;
     setDeliverLoading(true);
     try {
       await axios.post(`${API}/protocolito/${deliverRow._id}/entregar`, {
@@ -902,6 +1029,30 @@ const descargarPlantilla = (id) => {
     },
     { field: 'abogado', headerName: 'Abogado', width: 140, minWidth: 130 },
      { field: 'volumen', headerName: 'Volumen', width: 110, minWidth: 90, type: 'number' }, // ✅ NUEVO
+    {
+      field: 'custodia',
+      headerName: 'Custodia',
+      width: 220,
+      minWidth: 200,
+      sortable: false,
+      filterable: false,
+      renderCell: (p) => {
+        const row = p?.row ?? {};
+        return (
+          <CustodiaControl
+            tipoTramite="Protocolito"
+            control={row.numeroTramite}
+            custodia={row.custodia}
+            abogadoAsignado={row.abogado}
+            onChanged={(nueva) =>
+              setRows((prev) =>
+                prev.map((r) => (r.numeroTramite === row.numeroTramite ? { ...r, custodia: nueva } : r))
+              )
+            }
+          />
+        );
+      },
+    },
   ];
 
   const plantillasColumn = {
@@ -1117,13 +1268,104 @@ const descargarPlantilla = (id) => {
   ];
 
   return (
-    <div style={{ padding: 16 }}>
-      <h2>Protocolito</h2>
+    <div className="protocolito-container" style={{ padding: 16 }}>
+      <div className="protocolito-title-wrap">
+        <span className="protocolito-title-line" />
+        <h2 className="protocolito-title">Protocolito</h2>
+        <span className="protocolito-title-line right" />
+      </div>
+
+      {volInfo && (
+        <div
+          className={`protocolito-volumen-banner ${volInfo.faltan <= 20 ? 'alerta' : ''}`}
+          title={`El volumen ${volInfo.volumenActual + 1} empieza en el trámite #${volInfo.inicioSiguienteVolumen}`}
+        >
+          <span className="protocolito-volumen-banner-vol">Volumen {volInfo.volumenActual}</span>
+          <span className="protocolito-volumen-banner-txt">
+            Faltan <strong className="protocolito-volumen-numero">{volInfo.faltan}</strong> trámite{volInfo.faltan === 1 ? '' : 's'} para cambiar de volumen
+          </span>
+        </div>
+      )}
+
+      {soloLectura && (
+        <div className="protocolito-candado-banner">
+          <span className="protocolito-candado-icono">🔒</span>
+          <span>
+            Protocolito está <strong>deshabilitado</strong> por administración — modo solo lectura. Nadie puede
+            tomar, editar ni entregar trámites hasta que un administrador lo vuelva a habilitar.
+          </span>
+        </div>
+      )}
+
+      {esAdmin && (
+        <div className="protocolito-candado-admin">
+          <span>
+            Estado del módulo: <strong>{protocolitoHabilitado ? 'Habilitado' : 'Deshabilitado'}</strong>
+          </span>
+          <button
+            className={`protocolito-candado-btn ${protocolitoHabilitado ? 'apagar' : 'encender'}`}
+            onClick={toggleCandado}
+            disabled={togglingCandado}
+          >
+            {togglingCandado
+              ? 'Actualizando…'
+              : protocolitoHabilitado ? '🔒 Deshabilitar Protocolito' : '🔓 Habilitar Protocolito'}
+          </button>
+        </div>
+      )}
+
+      {esAdmin && (
+        <div className="protocolito-alertas-admin">
+          <div className="protocolito-alertas-admin-titulo">
+            Alerta automática de cambio de volumen
+          </div>
+
+          <div className="protocolito-alertas-admin-estado">
+            {volInfo ? (
+              [...umbralesAlerta].sort((a, b) => b - a).map((u) => {
+                let estado;
+                if (volInfo.faltan > u) estado = `faltan ${volInfo.faltan - u} para esta alerta`;
+                else if (volInfo.faltan === u) estado = 'se dispara ahora mismo';
+                else estado = 'ya se disparó en este volumen';
+                return (
+                  <span key={u} className="protocolito-alertas-admin-pill">
+                    <strong>{u}</strong> restantes — {estado}
+                  </span>
+                );
+              })
+            ) : (
+              <span>Cargando estado…</span>
+            )}
+            <span className="protocolito-alertas-admin-pill fijo">
+              <strong>Salto de volumen</strong> — {volInfo?.faltan === 0 ? 'se dispara ahora mismo' : 'siempre se dispara al llegar a 0 (no editable)'}
+            </span>
+          </div>
+
+          <div className="protocolito-alertas-admin-edit">
+            <label>
+              Umbrales de preaviso (separados por coma):
+              <input
+                type="text"
+                value={umbralesEdit}
+                onChange={(e) => setUmbralesEdit(e.target.value)}
+                placeholder="100, 50, 10"
+              />
+            </label>
+            <button
+              className="protocolito-candado-btn encender"
+              onClick={guardarUmbrales}
+              disabled={guardandoUmbrales}
+            >
+              {guardandoUmbrales ? 'Guardando…' : 'Guardar umbrales'}
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Barra de acciones */}
       <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
         {canTakeProtocolito && (
-          <button className="btn btn-primary" onClick={startAdd} disabled={adding || editingId}>
+          <button className="btn btn-primary" onClick={startAdd} disabled={adding || editingId || soloLectura}>
             + Agregar trámite
           </button>
         )}
@@ -1136,7 +1378,11 @@ const descargarPlantilla = (id) => {
           style={{ display: 'none' }}
           onChange={handleSelectFile}
         />
-        <button className="btn btn-primary btn-excel" onClick={() => fileInputRef.current?.click()} disabled={importing}>
+        <button
+          className="btn btn-primary btn-excel"
+          onClick={() => fileInputRef.current?.click()}
+          disabled={importing || soloLectura}
+        >
           {importing ? 'Importando…' : 'Importar Excel'}
         </button>
 
@@ -1520,6 +1766,7 @@ const descargarPlantilla = (id) => {
           <Button
             variant="contained"
             onClick={async () => {
+              if (bloqueadoPorSoloLectura()) return;
               try {
                 await axios.post(`${API}/protocolito/${missingRow._id}/justificante`, { motivo: justifyText });
                 setJustifyOpen(false);
@@ -1531,7 +1778,7 @@ const descargarPlantilla = (id) => {
                 setMsg({ type: 'error', text: e?.response?.data?.mensaje || 'No se pudo guardar el justificante' });
               }
             }}
-            disabled={!justifyText?.trim()}
+            disabled={!justifyText?.trim() || soloLectura}
           >
             Guardar justificante
           </Button>

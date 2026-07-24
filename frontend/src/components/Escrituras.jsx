@@ -1,6 +1,7 @@
 // src/components/Escrituras.jsx
 import React, { useEffect, useRef, useState } from 'react';
 import axios from 'axios';
+import { io } from 'socket.io-client';
 import { DataGrid } from '@mui/x-data-grid';
 import {
   Dialog, DialogTitle, DialogContent, DialogActions,
@@ -9,12 +10,19 @@ import {
 
 import { useAuth } from '../auth/AuthContext';
 import '../css/styles.css';
+import '../css/Escrituras.css';
 import EscrituraEstatus from './EscriturasEstatus';
 import ExpedientePLD from './pld/ExpedientePLD';
 import { listarAvisos } from './pld/pldApi';
 import { estadoMeta, puedeAccederPLD } from './pld/pldHelpers';
+import CustodiaControl from './custodia/CustodiaControl';
 
 const API = process.env.REACT_APP_API_URL || 'http://localhost:8010';
+// Socket.io toma la parte de la URL después del host como namespace, no como
+// ruta HTTP: si conectáramos con "API" tal cual (trae "/api"), el cliente
+// caería en el namespace "/api" y nunca vería lo que el backend emite sobre
+// el namespace por defecto ("/"). Por eso aquí se usa solo el origen.
+const SOCKET_ORIGIN = API.replace(/\/api\/?$/, '');
 
 // ----- utils -----
 const emptyRow = {
@@ -1238,6 +1246,25 @@ const openPresupuestoPicker = async (target) => {
   };
 
 
+  // Contador de folios: se refresca junto con fetchData (después de cada
+  // alta/edición propia) y además en tiempo real vía socket cada vez que
+  // CUALQUIER usuario toma un folio nuevo, sin necesidad de recargar.
+  const [folioInfo, setFolioInfo] = useState(null);
+  const fetchFolioActual = async () => {
+    try {
+      const { data } = await axios.get(`${API}/escrituras/folio-actual`);
+      if (data?.ok) setFolioInfo(data.data);
+    } catch {
+      // silencioso: si falla, simplemente no se muestra el contador
+    }
+  };
+
+  useEffect(() => {
+    const socket = io(SOCKET_ORIGIN, { path: '/socket.io' });
+    socket.on('escrituras:folio', (data) => setFolioInfo(data));
+    return () => socket.disconnect();
+  }, []);
+
   const fetchData = async () => {
     setLoading(true);
     try {
@@ -1250,6 +1277,7 @@ const openPresupuestoPicker = async (target) => {
     } finally {
       setLoading(false);
     }
+    fetchFolioActual();
   };
   useEffect(() => { fetchData(); }, [q]);
 
@@ -1900,6 +1928,30 @@ const onSaveEdit = async (id) => {
       width: 180,
       minWidth: 160,
     },
+    {
+      field: 'custodia',
+      headerName: 'Custodia',
+      width: 220,
+      minWidth: 200,
+      sortable: false,
+      filterable: false,
+      renderCell: (p) => {
+        const row = p?.row ?? {};
+        return (
+          <CustodiaControl
+            tipoTramite="Escritura"
+            control={row.numeroControl}
+            custodia={row.custodia}
+            abogadoAsignado={row.abogado}
+            onChanged={(nueva) =>
+              setRows((prev) =>
+                prev.map((r) => (r.numeroControl === row.numeroControl ? { ...r, custodia: nueva } : r))
+              )
+            }
+          />
+        );
+      },
+    },
   ];
 
   // columnas de montos
@@ -2210,7 +2262,25 @@ const onSaveEdit = async (id) => {
 
   return (
     <div style={{ padding: 16 }}>
-      <h2>Escrituras</h2>
+      <div className="escritura-title-wrap">
+        <span className="escritura-title-line" />
+        <h2 className="escritura-title">Escrituras</h2>
+        <span className="escritura-title-line right" />
+      </div>
+
+      {folioInfo && (
+        <div
+          className={`escritura-folio-banner ${folioInfo.foliosRestantes <= 20 ? 'alerta' : ''}`}
+          title={folioInfo.volumenActual ? `Próximo folio libre: ${folioInfo.siguienteFolio}` : ''}
+        >
+          <span className="escritura-folio-banner-vol">
+            Volumen {folioInfo.volumenActual || '—'}
+          </span>
+          <span className="escritura-folio-banner-txt">
+            Faltan <strong className="escritura-folio-numero">{folioInfo.foliosRestantes}</strong> folio{folioInfo.foliosRestantes === 1 ? '' : 's'} para cambiar de volumen
+          </span>
+        </div>
+      )}
 
       {/* Barra de acciones */}
       <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>

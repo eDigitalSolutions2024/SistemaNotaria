@@ -70,8 +70,8 @@ export default function ReciboNotaria17() {
 
   /* ---------------- Escritura: pendiente + historial ---------------- */
 
-  async function loadEscrituraPendiente() {
-    const numero = String(f.control || "").trim();
+  async function loadEscrituraPendiente(numeroOverride) {
+    const numero = String(numeroOverride ?? f.control ?? "").trim();
     if (!numero) return;
     try {
       setSaving(true);
@@ -94,7 +94,7 @@ export default function ReciboNotaria17() {
         return {
           ...prev,
           tipoTramite: "Escritura",
-          control: info.control,
+          control: String(info.control ?? ""),
           concepto: keepConcept ? prev.concepto : "Pago de Escritura",
           totalTramite: String(info.totalTramite ?? ""),
           totalPagado: String(info.pagadoAcum ?? ""), // acumulado (readOnly)
@@ -122,8 +122,8 @@ export default function ReciboNotaria17() {
     }
   }
 
-  async function loadEscrituraHistorial() {
-    const numero = String(f.control || "").trim();
+  async function loadEscrituraHistorial(numeroOverride) {
+    const numero = String(numeroOverride ?? f.control ?? "").trim();
     if (!numero) {
       setHist(null);
       return;
@@ -133,6 +133,70 @@ export default function ReciboNotaria17() {
       `${API}/recibos/escrituras/${encodeURIComponent(numero)}/history`,
       authCfg
     );
+      setHist(data?.data || null);
+    } catch (e) {
+      console.error("HIST ERROR:", e);
+      setHist(null);
+    }
+  }
+
+  /* ---------------- Protocolito: pendiente + historial ---------------- */
+
+  async function loadProtocolitoPendiente(numeroOverride) {
+    const numero = String(numeroOverride ?? f.control ?? "").trim();
+    if (!numero) return;
+    try {
+      setSaving(true);
+      const { data } = await axios.get(
+        `${API}/recibos/protocolitos/${encodeURIComponent(numero)}/pending`,
+        authCfg
+      );
+      const info = data?.data || null;
+      if (!info) return; // sin recibos previos: el total lo teclea la recepcionista
+
+      setF((prev) => {
+        const keepConcept = conceptoTouched && prev.concepto.trim();
+        const total = Number(info.totalTramite ?? 0);
+        const pagAc = Number(info.pagadoAcum ?? 0);
+        const restanteSugerido = Math.max(0, total - pagAc);
+        const rec = info.last || {};
+        return {
+          ...prev,
+          tipoTramite: "Protocolito",
+          control: String(info.control ?? ""),
+          concepto: keepConcept ? prev.concepto : "Pago de Protocolito",
+          totalTramite: String(info.totalTramite ?? ""),
+          totalPagado: String(info.pagadoAcum ?? ""), // acumulado (readOnly)
+          abono: String(restanteSugerido),            // sugerencia (editable)
+          recibiDe: rec.recibiDe || prev.recibiDe,
+          abogado: rec.abogado || prev.abogado,
+        };
+      });
+
+      if (info.last?.abogado) {
+        const found = catalogAbogados.find(
+          (a) => (a.nombre || "").trim() === (info.last.abogado || "").trim()
+        );
+        if (found) setAbogadoId(String(found.id));
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function loadProtocolitoHistorial(numeroOverride) {
+    const numero = String(numeroOverride ?? f.control ?? "").trim();
+    if (!numero) {
+      setHist(null);
+      return;
+    }
+    try {
+      const { data } = await axios.get(
+        `${API}/recibos/protocolitos/${encodeURIComponent(numero)}/history`,
+        authCfg
+      );
       setHist(data?.data || null);
     } catch (e) {
       console.error("HIST ERROR:", e);
@@ -236,8 +300,8 @@ export default function ReciboNotaria17() {
     }
 
     // carga pendiente + historial para autocompletar totales/abonos
-    await loadEscrituraPendiente();
-    await loadEscrituraHistorial();
+    await loadEscrituraPendiente(value);
+    await loadEscrituraHistorial(value);
   }
 
   /* ---------------- autollenado de concepto ---------------- */
@@ -294,6 +358,11 @@ export default function ReciboNotaria17() {
         (a) => (a.nombre || "").trim() === (d.abogado || "").trim()
       );
       if (found) setAbogadoId(String(found.id));
+
+      // carga pendiente + historial para autocompletar totales/abonos
+      const numero = d.numeroTramite ? String(d.numeroTramite) : String(value);
+      await loadProtocolitoPendiente(numero);
+      await loadProtocolitoHistorial(numero);
     } catch (e) {
       alert(e.response?.data?.msg || e.message || "Error");
     }
@@ -318,17 +387,28 @@ export default function ReciboNotaria17() {
   });
 
   const toNum = (v) => Number(String(v).replace(/[^0-9.]/g, "")) || 0;
+  const fmtMoney = (v) =>
+    Number(v || 0).toLocaleString("es-MX", { minimumFractionDigits: 2 });
+  const fmtFecha = (v) => {
+    if (!v) return "—";
+    const d = new Date(v);
+    return Number.isNaN(d.getTime()) ? "—" : d.toLocaleDateString("es-MX");
+  };
 
   const isEscritura = f.tipoTramite === "Escritura";
-  const hasPrevEscritura =
-    isEscritura && Array.isArray(hist?.items) && hist.items.length > 0;
+  const isProto = f.tipoTramite === "Protocolito";
+  // Escritura y Protocolito acumulan abonos hasta completar el total;
+  // Contrato/Otro se cobran completos en un solo recibo.
+  const usaAbono = isEscritura || isProto;
+  const hasPrevPago =
+    usaAbono && Array.isArray(hist?.items) && hist.items.length > 0;
 
-  // Escritura: pagado acumulado (desde historial/pending)
-  const pagadoAcum = isEscritura ? toNum(f.totalPagado) : 0;
+  // pagado acumulado (desde historial/pending)
+  const pagadoAcum = usaAbono ? toNum(f.totalPagado) : 0;
   const maxAbono = Math.max(0, toNum(f.totalTramite) - pagadoAcum);
 
   // Pago actual (clamp)
-  const pagoActual = isEscritura
+  const pagoActual = usaAbono
     ? Math.min(toNum(f.abono), maxAbono)
     : Math.min(toNum(f.totalPagado), toNum(f.totalTramite));
 
@@ -341,7 +421,7 @@ export default function ReciboNotaria17() {
   if (!f.recibiDe.trim()) errors.recibiDe = "Requerido";
   if (!f.totalTramite || isNaN(toNum(f.totalTramite))) errors.totalTramite = "Inválido";
 
-  if (isEscritura) {
+  if (usaAbono) {
     if (!f.abono || isNaN(toNum(f.abono))) {
       errors.abono = "Inválido";
     } else if (toNum(f.abono) > maxAbono) {
@@ -355,7 +435,7 @@ export default function ReciboNotaria17() {
     }
   }
 
-  if (f.tipoTramite === "Protocolito" && !f.control.trim()) {
+  if (f.tipoTramite === "Protocolito" && !String(f.control || "").trim()) {
     errors.control = "Requerido";
   }
 
@@ -368,8 +448,8 @@ export default function ReciboNotaria17() {
       setSaveError("");
       setSavedId("");
 
-      const abonoNum = isEscritura ? Math.min(toNum(f.abono), maxAbono) : 0;
-      const totalPagadoEnviar = isEscritura
+      const abonoNum = usaAbono ? Math.min(toNum(f.abono), maxAbono) : 0;
+      const totalPagadoEnviar = usaAbono
         ? abonoNum
         : Math.min(toNum(f.totalPagado), toNum(f.totalTramite));
 
@@ -383,7 +463,7 @@ export default function ReciboNotaria17() {
         control: f.control || null,
         totalTramite: toNum(f.totalTramite),
         totalPagado: totalPagadoEnviar,
-        abono: isEscritura ? abonoNum : undefined,
+        abono: usaAbono ? abonoNum : undefined,
         restante,
         /*totalImpuestos: toNum(f.totalImpuestos),
         valorAvaluo: toNum(f.valorAvaluo),
@@ -416,7 +496,6 @@ export default function ReciboNotaria17() {
 
   /* ---------------- control label/placeholder ---------------- */
 
-  const isProto = f.tipoTramite === "Protocolito";
   const controlLabel = isProto
     ? "# Trámite *"
     : isEscritura
@@ -605,55 +684,117 @@ export default function ReciboNotaria17() {
                   ))}
                 </datalist>
               )}
-              {isEscritura && hist && (
-                <small style={{ display: "block", marginTop: 6, lineHeight: 1.4 }}>
-                  <b>Historial:</b>{" "}
-                  Total: $
-                  {Number(hist.totalTramite || hist.totalTramiteBase || 0).toLocaleString(
-                    "es-MX",
-                    { minimumFractionDigits: 2 }
-                  )}
-                  {" · "}Pagado: $
-                  {Number(hist.pagadoAcum || 0).toLocaleString("es-MX", {
-                    minimumFractionDigits: 2,
-                  })}
-                  {" · "}Restante: $
-                  {Number(hist.restante || 0).toLocaleString("es-MX", {
-                    minimumFractionDigits: 2,
-                  })}
-                  {Array.isArray(hist.items) && hist.items.length > 0 && (
-                    <>
-                      <br />
-                      {hist.items.map((r, i) => (
-                        <span key={r._id} style={{ marginRight: 10 }}>
-                          #{r.numeroRecibo}{" "}
-                          <a
-                            href={`${API}${r.pdfUrl}`}
-                            target="_blank"
-                            rel="noreferrer"
-                            title="Abrir PDF del recibo"
-                          >
-                            PDF
-                          </a>
-                          {i < hist.items.length - 1 ? " | " : ""}
-                        </span>
-                      ))}
-                    </>
-                  )}
-                </small>
-              )}
             </Field>
+
+            {usaAbono && hist && (
+              <div className="span-2 historial-panel">
+                {(() => {
+                  const total = Number(hist.totalTramite ?? hist.totalTramiteBase ?? 0);
+                  const pagado = Number(hist.pagadoAcum || 0);
+                  const restante = Number(hist.restante || 0);
+                  const liquidado = restante <= 0 && total > 0;
+                  const pct = total > 0 ? Math.min(100, (pagado / total) * 100) : 0;
+                  const items = Array.isArray(hist.items) ? hist.items : [];
+
+                  return (
+                    <>
+                      <div className="historial-header">
+                        <span className="historial-title">
+                          Historial de pagos · {isEscritura ? "Escritura" : "Protocolito"} #{f.control}
+                        </span>
+                        <span className={`historial-badge ${liquidado ? "ok" : "pending"}`}>
+                          {liquidado ? "Liquidado" : "Pendiente de pago"}
+                        </span>
+                      </div>
+
+                      <div className="historial-stats">
+                        <div className="stat">
+                          <span className="stat-label">Total del trámite</span>
+                          <span className="stat-value">${fmtMoney(total)}</span>
+                        </div>
+                        <div className="stat">
+                          <span className="stat-label">Pagado</span>
+                          <span className="stat-value ok">${fmtMoney(pagado)}</span>
+                        </div>
+                        <div className="stat">
+                          <span className="stat-label">Restante</span>
+                          <span className={`stat-value ${liquidado ? "ok" : "pending"}`}>
+                            ${fmtMoney(restante)}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="historial-progress" title={`${pct.toFixed(0)}% pagado`}>
+                        <div
+                          className={`historial-progress-bar ${liquidado ? "ok" : ""}`}
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
+
+                      {items.length > 0 ? (
+                        <table className="historial-table">
+                          <thead>
+                            <tr>
+                              <th>Recibo</th>
+                              <th>Fecha</th>
+                              <th>Abonado</th>
+                              <th>Origen</th>
+                              <th></th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {items.map((r) => (
+                              <tr key={r._id}>
+                                <td>#{r.numeroRecibo}</td>
+                                <td>{fmtFecha(r.fecha)}</td>
+                                <td>${fmtMoney(r.totalPagado)}</td>
+                                <td>
+                                  {r.vinculado ? (
+                                    <span
+                                      className="tag-vinculado"
+                                      title="Este recibo se creó para otro número de trámite y fue adjuntado a este"
+                                    >
+                                      Vinculado
+                                    </span>
+                                  ) : (
+                                    <span className="tag-directo">Directo</span>
+                                  )}
+                                </td>
+                                <td>
+                                  <a
+                                    href={`${API}${r.pdfUrl}`}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    title="Abrir PDF del recibo"
+                                  >
+                                    Ver PDF
+                                  </a>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      ) : (
+                        <p className="historial-empty">
+                          Todavía no hay recibos registrados para este trámite.
+                        </p>
+                      )}
+                    </>
+                  );
+                })()}
+              </div>
+            )}
 
             <Field label="Total del Trámite *" error={errors.totalTramite}>
               <MoneyInput
                 value={f.totalTramite}
                 onChange={(v) => setF({ ...f, totalTramite: v })}
-                readOnly={isEscritura && hasPrevEscritura} // ← BLOQUEA desde el 2º recibo
+                readOnly={usaAbono && hasPrevPago} // ← BLOQUEA desde el 2º recibo
               />
             </Field>
 
-            {/* Escritura: acumulado (readOnly) + Abono */}
-            {isEscritura ? (
+            {/* Escritura / Protocolito: acumulado (readOnly) + Abono */}
+            {usaAbono ? (
               <>
                 <Field label="Total Pagado (acumulado)">
                   <MoneyInput value={f.totalPagado} onChange={() => {}} readOnly />
