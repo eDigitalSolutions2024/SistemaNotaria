@@ -7,9 +7,50 @@ const Recibo = require('../models/Recibo');
 const ReciboLink = require('../models/ReciboLink');
 const Protocolito = require('../models/Protocolito');
 const Escritura = require('../models/Escritura');
+const Presupuesto = require('../models/Presupuesto');
 
 const { buildReciboPDF } = require('../utils/pdfRecibo');
 const XLSX = require('xlsx');
+
+// Si la Escritura tiene presupuesto ligado, el total del trámite lo manda
+// el presupuesto (Presupuesto.totalPresupuesto, fuente viva) — no lo que
+// algún recibo anterior haya tecleado ni una copia cacheada en la Escritura,
+// que puede quedar desactualizada si el presupuesto se edita después.
+async function montoPresupuestoDeEscritura(numeroControl) {
+  const escritura = await Escritura.findOne({ numeroControl })
+    .select('presupuestoId')
+    .lean();
+  if (!escritura?.presupuestoId) return null;
+
+  const presupuesto = await Presupuesto.findById(escritura.presupuestoId)
+    .select('totalPresupuesto')
+    .lean();
+  if (!presupuesto) return null;
+
+  return Number(presupuesto.totalPresupuesto || 0);
+}
+
+// Un recibo puede "pertenecer" a un #Trámite (Escritura o Protocolito) de
+// dos formas: directo (Recibo.control === numero) o vinculado después vía
+// ReciboLink (p.ej. un recibo creado para otro #trámite que también se
+// adjuntó a este). El historial/pendiente de un trámite debe contar ambos,
+// sin duplicar.
+async function recibosDeTramite(numeroControl) {
+  const links = await ReciboLink.find({ control: numeroControl }).lean();
+  const linkedIds = links.map((l) => l.reciboId);
+
+  const recibos = await Recibo.find({
+    estatus: { $ne: 'Cancelado' },
+    $or: [
+      { control: numeroControl },
+      ...(linkedIds.length ? [{ _id: { $in: linkedIds } }] : []),
+    ],
+  })
+    .sort({ createdAt: -1, _id: -1 })
+    .lean();
+
+  return recibos;
+}
 
 /* ----------------------------- Helpers ----------------------------- */
 function escapeRegex(s = '') {
@@ -159,6 +200,89 @@ router.get('/protocolitos/:numero', async (req, res) => {
   }
 });
 
+// GET /api/recibos/protocolitos/:numero/pending
+// Protocolito no tiene presupuesto: el total del trámite sale de lo que ya
+// se haya tecleado en recibos anteriores (directos o vinculados).
+router.get('/protocolitos/:numero/pending', async (req, res) => {
+  try {
+    const numero = Number(req.params.numero);
+    if (!Number.isFinite(numero)) {
+      return res.status(400).json({ ok: false, msg: 'Número de Protocolito inválido' });
+    }
+
+    const items = await recibosDeTramite(numero);
+
+    if (!items.length) {
+      return res.json({
+        ok: true,
+        data: null,
+        msg: 'No hay recibos para ese Número de Protocolito (o todos están cancelados).'
+      });
+    }
+
+    const totalTramite = items.reduce((acc, r) => Math.max(acc, Number(r.totalTramite || 0)), 0);
+    const pagadoAcum = items.reduce((acc, r) => acc + Number(r.totalPagado || 0), 0);
+    const restante = Math.max(0, totalTramite - pagadoAcum);
+
+    return res.json({
+      ok: true,
+      data: {
+        control: numero,
+        totalTramite,
+        pagadoAcum,
+        restante,
+        count: items.length,
+        liquidado: restante <= 0,
+        last: items[0],
+      }
+    });
+  } catch (e) {
+    console.error('PENDING PROTOCOLITO ERROR:', e);
+    return res.status(500).json({ ok: false, msg: 'Error calculando pendiente de Protocolito' });
+  }
+});
+
+// GET /api/recibos/protocolitos/:numero/history
+router.get('/protocolitos/:numero/history', async (req, res) => {
+  try {
+    const numero = Number(req.params.numero);
+    if (!Number.isFinite(numero)) {
+      return res.status(400).json({ ok: false, msg: 'Número de Protocolito inválido' });
+    }
+
+    const items = (await recibosDeTramite(numero)).sort(
+      (a, b) => new Date(a.fecha) - new Date(b.fecha) || String(a._id).localeCompare(String(b._id))
+    );
+
+    const totalTramiteBase = items.reduce((acc, r) => Math.max(acc, Number(r.totalTramite || 0)), 0);
+    const pagadoAcum = items.reduce((acc, r) => acc + Number(r.totalPagado || 0), 0);
+    const restante = Math.max(0, totalTramiteBase - pagadoAcum);
+
+    const rows = items.map(r => ({
+      _id: r._id,
+      numeroRecibo: String(r._id).slice(-4).toUpperCase(),
+      fecha: r.fecha,
+      recibiDe: r.recibiDe,
+      abogado: r.abogado,
+      concepto: r.concepto,
+      totalTramite: Number(r.totalTramite || 0),
+      totalPagado: Number(r.totalPagado || 0),
+      total: Number((r.total ?? r.totalPagado) || 0),
+      estatus: r.estatus || 'Activo',
+      pdfUrl: `/recibos/${r._id}/pdf`,
+      vinculado: Number(r.control) !== numero,
+    }));
+
+    res.json({
+      ok: true,
+      data: { control: numero, totalTramiteBase, pagadoAcum, restante, items: rows }
+    });
+  } catch (e) {
+    console.error('PROTOCOLITO HISTORY ERROR:', e);
+    res.status(500).json({ ok: false, msg: 'Error obteniendo historial de Protocolito' });
+  }
+});
+
 /* --------------------- Escrituras relacionadas --------------------- */
 
 // GET /api/recibos/escrituras/numeros
@@ -281,17 +405,29 @@ router.post('/', async (req, res) => {
 
     let restante = 0;
 
-    if (tipoTramite === 'Escritura') {
+    if (tipoTramite === 'Escritura' || tipoTramite === 'Protocolito') {
       if (!Number.isFinite(controlNum)) {
-        return res.status(400).json({ ok: false, msg: 'Número de Escritura (control) inválido' });
+        return res.status(400).json({
+          ok: false,
+          msg: `Número de ${tipoTramite === 'Escritura' ? 'Escritura' : 'Protocolito'} (control) inválido`,
+        });
       }
 
-      const agg = await Recibo.aggregate([
-        { $match: { tipoTramite: 'Escritura', control: controlNum, estatus: { $ne: 'Cancelado' } } },
-        { $group: { _id: null, sum: { $sum: '$totalPagado' } } }
-      ]);
+      // Si la Escritura tiene presupuesto ligado, el total del trámite lo
+      // manda el presupuesto (fuente viva) — no lo que haya llegado en el
+      // body, que puede venir desactualizado o editado a mano. Protocolito
+      // no tiene presupuesto: el total siempre lo teclea la recepcionista.
+      if (tipoTramite === 'Escritura') {
+        const montoPresupuesto = await montoPresupuestoDeEscritura(controlNum);
+        if (montoPresupuesto != null) {
+          totalTramite = montoPresupuesto;
+        }
+      }
 
-      const pagadoAcum = Number(agg?.[0]?.sum || 0);
+      // pagadoAcum: directos + vinculados vía ReciboLink (no solo directos,
+      // para no permitir sobre-pagar cuando ya hay un abono adjuntado).
+      const previos = await recibosDeTramite(controlNum);
+      const pagadoAcum = previos.reduce((acc, r) => acc + Number(r.totalPagado || 0), 0);
       const maxAbono = Math.max(0, totalTramite - pagadoAcum);
 
       if (abono <= 0 && totalPagado > 0) abono = totalPagado;
@@ -551,69 +687,55 @@ router.get('/escrituras/:numero/pending', async (req, res) => {
       return res.status(400).json({ ok: false, msg: 'Número de Escritura inválido' });
     }
 
-    const pipeline = [
-      {
-        $match: {
-          tipoTramite: 'Escritura',
-          control: numero, // ✅ NUMBER
-          estatus: { $ne: 'Cancelado' }
-        }
-      },
-      { $sort: { createdAt: -1, _id: -1 } },
-      {
-        $group: {
-          _id: '$control',
-          totalBase: { $max: '$totalTramite' },
-          pagadoAcum: { $sum: '$totalPagado' },
-          count: { $sum: 1 },
-          last: { $first: '$$ROOT' }
-        }
-      },
-      {
-        $project: {
-          _id: 0,
-          control: '$_id',
-          totalTramite: '$totalBase',
-          pagadoAcum: 1,
-          restante: { $max: [{ $subtract: ['$totalBase', '$pagadoAcum'] }, 0] },
-          count: 1,
-          last: {
-            _id: '$last._id',
-            fecha: '$last.fecha',
-            recibiDe: '$last.recibiDe',
-            abogado: '$last.abogado',
-            concepto: '$last.concepto',
-            totalTramite: '$last.totalTramite',
-            totalPagado: '$last.totalPagado',
-            restante: '$last.restante',
-            /*totalImpuestos: '$last.totalImpuestos',
-            valorAvaluo: '$last.valorAvaluo',
-            totalGastosExtra: '$last.totalGastosExtra',
-            totalHonorarios: '$last.totalHonorarios'*/
-          }
-        }
-      }
-    ];
+    const montoPresupuesto = await montoPresupuestoDeEscritura(numero);
 
-    const [row] = await Recibo.aggregate(pipeline);
+    const items = await recibosDeTramite(numero);
+
+    const row = items.length
+      ? {
+          control: numero,
+          totalTramite: items.reduce((acc, r) => Math.max(acc, Number(r.totalTramite || 0)), 0),
+          pagadoAcum: items.reduce((acc, r) => acc + Number(r.totalPagado || 0), 0),
+          count: items.length,
+          last: items[0], // ya viene ordenado createdAt desc
+        }
+      : null;
 
     if (!row) {
+      if (montoPresupuesto == null) {
+        return res.json({
+          ok: true,
+          data: null,
+          msg: 'No hay recibos para ese Número de Escritura (o todos están cancelados).'
+        });
+      }
+      // Primer pago de un trámite con presupuesto: no hay recibos previos de
+      // dónde sacar el total, así que se prellena directo desde el presupuesto.
       return res.json({
         ok: true,
-        data: null,
-        msg: 'No hay recibos para ese Número de Escritura (o todos están cancelados).'
+        data: {
+          control: numero,
+          totalTramite: montoPresupuesto,
+          pagadoAcum: 0,
+          restante: montoPresupuesto,
+          count: 0,
+          liquidado: montoPresupuesto <= 0,
+          last: {}
+        }
       });
     }
 
-    const liquidado = Number(row.restante || 0) <= 0;
+    const totalTramite = montoPresupuesto != null ? montoPresupuesto : row.totalTramite;
+    const restante = Math.max(0, totalTramite - Number(row.pagadoAcum || 0));
+    const liquidado = restante <= 0;
 
     return res.json({
       ok: true,
       data: {
         control: row.control,
-        totalTramite: row.totalTramite,
+        totalTramite,
         pagadoAcum: row.pagadoAcum,
-        restante: row.restante,
+        restante,
         count: row.count,
         liquidado,
         last: row.last
@@ -661,19 +783,21 @@ router.get('/escrituras/:numero/history', async (req, res) => {
     const numero = Number(req.params.numero);
 if (!Number.isFinite(numero)) return res.status(400).json({ ok:false, msg:'Número de Escritura inválido' });
 
-const filter = {
-  tipoTramite: 'Escritura',
-  control: numero, // ✅ NUMBER
-  estatus: { $ne: 'Cancelado' }
-};
+    // Directos (control === numero) + vinculados vía ReciboLink (p.ej. un
+    // recibo creado para otra Escritura que también se adjuntó a esta).
+    const items = (await recibosDeTramite(numero)).sort(
+      (a, b) => new Date(a.fecha) - new Date(b.fecha) || String(a._id).localeCompare(String(b._id))
+    );
 
+    // Mismo criterio que /pending: si el trámite tiene presupuesto, el total
+    // lo manda el presupuesto y no lo que se haya tecleado en recibos previos.
+    const montoPresupuesto = await montoPresupuestoDeEscritura(numero);
 
-    const items = await Recibo.find(filter).sort({ fecha: 1, _id: 1 }).lean();
-
-    const totalTramiteBase = items.reduce(
+    const totalTramiteGuess = items.reduce(
       (acc, r) => Math.max(acc, Number(r.totalTramite || 0)),
       0
     );
+    const totalTramiteBase = montoPresupuesto != null ? montoPresupuesto : totalTramiteGuess;
     const pagadoAcum = items.reduce(
       (acc, r) => acc + Number(r.totalPagado || 0),
       0
@@ -689,9 +813,12 @@ const filter = {
       concepto: r.concepto,
       totalTramite: Number(r.totalTramite || 0),
       totalPagado: Number(r.totalPagado || 0),
-      total: Number((r.total ?? r.totalPagado) || 0), 
+      total: Number((r.total ?? r.totalPagado) || 0),
       estatus: r.estatus || 'Activo',
       pdfUrl: `/recibos/${r._id}/pdf`,
+      // ✅ true si este recibo pertenece originalmente a otro #trámite y
+      // fue adjuntado a este vía "Adjuntar recibos" (ReciboLink).
+      vinculado: Number(r.control) !== numero,
     }));
 
     res.json({

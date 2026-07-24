@@ -64,8 +64,22 @@ const protocolitoSchema = new mongoose.Schema({
   justificante_text: { type: String, trim: true, default: '' },
   justificante_by:   { type: String, trim: true, default: '' },
   justificante_at:   { type: Date, default: null },
-  
- 
+
+  // ===== Custodia física del expediente (abogado ⇄ recepción) =====
+  // Estado denormalizado para lectura rápida en tablas; el historial
+  // completo e inmutable vive en la colección CustodiaEvento.
+  custodia: {
+    estado: {
+      type: String,
+      enum: ['CON_ABOGADO', 'ENVIADO_A_RECEPCION', 'EN_RECEPCION', 'ENTREGADO_PENDIENTE_CONFIRMACION'],
+      default: 'CON_ABOGADO',
+    },
+    abogadoId: { type: Number, default: null },
+    abogadoNombre: { type: String, default: '' },
+    actualizadoEn: { type: Date, default: null },
+    actualizadoPor: { type: String, default: '' },
+  },
+
   creadoEn: { type: Date, default: Date.now }
 }, { timestamps: true });
 

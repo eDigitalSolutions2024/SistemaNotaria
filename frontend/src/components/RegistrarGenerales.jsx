@@ -293,10 +293,6 @@ export default function RegistrarGenerales() {
         setMensaje(`La persona ${sinRol + 1} debe tener un rol (Apoderado o Poderdante).`);
         return false;
       }
-      if (!personas.some((p) => p.rol === "Apoderado")) {
-        setMensaje("Se requiere al menos un Apoderado.");
-        return false;
-      }
       if (!personas.some((p) => p.rol === "Poderdante")) {
         setMensaje("Se requiere al menos un Poderdante.");
         return false;

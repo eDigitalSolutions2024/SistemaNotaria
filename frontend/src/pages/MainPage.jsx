@@ -17,6 +17,8 @@ import MenuBookIcon       from '@mui/icons-material/MenuBook';
 import RequestQuoteIcon   from '@mui/icons-material/RequestQuote';
 import CalendarMonthIcon  from '@mui/icons-material/CalendarMonth';
 import PolicyOutlinedIcon from '@mui/icons-material/PolicyOutlined';
+import SwapHorizIcon      from '@mui/icons-material/SwapHoriz';
+import CampaignIcon       from '@mui/icons-material/Campaign';
 import LogoutIcon         from '@mui/icons-material/Logout';
 import ChevronLeftIcon    from '@mui/icons-material/ChevronLeft';
 import ChevronRightIcon   from '@mui/icons-material/ChevronRight';
@@ -34,6 +36,10 @@ import ConsultarGenerales from '../components/ConsultarGenerales';
 import Presupuesto        from '../components/Presupuesto';
 import Calendario         from '../components/Calendario';
 import PLDSeccion         from '../components/pld/PLDSeccion';
+import CustodiaBitacora   from '../components/custodia/CustodiaBitacora';
+import CustodiaPendientesBanner from '../components/custodia/CustodiaPendientesBanner';
+import AnunciosAdmin      from '../components/anuncios/AnunciosAdmin';
+import AnunciosDisplay    from '../components/anuncios/AnunciosDisplay';
 
 import { useAuth } from '../auth/AuthContext';
 import Login from '../components/Login';
@@ -51,6 +57,8 @@ const SECTION_LABELS = {
   'presupuesto':         'Presupuesto',
   'calendario':          'Calendario',
   'ExpedientesPLD':      'Expedientes PLD',
+  'custodia':            'Custodia de Documentos',
+  'anuncios':            'Anuncios',
 };
 
 export default function MainPage() {
@@ -66,6 +74,9 @@ function AuthedApp() {
   // PLD en sí (ExpedientePLD, sus tabs) sigue teniendo su propio control de
   // permisos interno (puedeEditarPLD/puedePresentarPLD, sin cambios aquí).
   const puedeVerExpedientesPLD = role === 'ADMIN' || role === 'admin';
+  // Anuncios: solo ADMIN redacta/envía; el aviso emergente (AnunciosDisplay)
+  // en cambio se monta para todos los roles, más abajo.
+  const puedeVerAnuncios = role === 'ADMIN' || role === 'admin';
 
   const INACTIVITY_LIMIT = 60 * 60 * 1000;
 
@@ -152,8 +163,11 @@ function AuthedApp() {
         );
       case 'presupuesto': return <Presupuesto />;
       case 'calendario':  return <Calendario />;
+      case 'custodia':    return <CustodiaBitacora />;
       case 'ExpedientesPLD':
         return puedeVerExpedientesPLD ? <PLDSeccion /> : <RegistrarCliente />;
+      case 'anuncios':
+        return puedeVerAnuncios ? <AnunciosAdmin /> : <RegistrarCliente />;
       default:            return <RegistrarCliente />;
     }
   };
@@ -170,6 +184,8 @@ function AuthedApp() {
 
   return (
     <div className="main-layout">
+      {/* Anuncios manuales en vivo: modal urgente / toast, para cualquier rol */}
+      <AnunciosDisplay />
 
       {/* ── SIDEBAR ── */}
       <aside className={`sidebar ${sidebarOpen ? 'expanded' : 'collapsed'}`}>
@@ -351,6 +367,22 @@ function AuthedApp() {
                 <CalendarMonthIcon sx={isz} />
                 {sidebarOpen && <span>Calendario</span>}
               </li>
+
+              {/* ── Custodia de documentos ── */}
+              <li className={`nav-item ${seccion === 'custodia' ? 'active' : ''}`}
+                  title="Custodia de Documentos" onClick={() => go('custodia')}>
+                <SwapHorizIcon sx={isz} />
+                {sidebarOpen && <span>Custodia de Documentos</span>}
+              </li>
+
+              {/* ── Anuncios (solo ADMIN) ── */}
+              {puedeVerAnuncios && (
+                <li className={`nav-item ${seccion === 'anuncios' ? 'active' : ''}`}
+                    title="Anuncios" onClick={() => go('anuncios')}>
+                  <CampaignIcon sx={isz} />
+                  {sidebarOpen && <span>Anuncios</span>}
+                </li>
+              )}
             </>
           )}
         </ul>
@@ -394,6 +426,8 @@ function AuthedApp() {
             </div>
           </div>
         </header>
+
+        <CustodiaPendientesBanner />
 
         <main className="contenido">
           {renderContenido()}

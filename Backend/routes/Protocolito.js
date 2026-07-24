@@ -13,6 +13,8 @@ const Protocolito = require('../models/Protocolito');
 const Cliente     = require('../models/Cliente');
 const Abogado     = require('../models/Abogado');
 const Recibo = require('../models/Recibo');
+const ProtocolitoConfig = require('../models/ProtocolitoConfig');
+const Anuncio = require('../models/Anuncio');
 
 const auth = require('../middleware/auth');
 const { buildVariables, generarDocx, PLANTILLAS_DIR, resolveFilePath } = require('../services/plantillaService');
@@ -256,8 +258,179 @@ function calcVolumen(numeroTramite) {
   return Math.floor((n - BASE_NUMERO) / ACTOS_POR_VOLUMEN) + BASE_VOLUMEN;
 }
 
+// Compartida entre el endpoint GET /volumen-actual y el broadcast por socket
+// que se dispara cada vez que se toma un número nuevo (ver POST /).
+async function computeVolumenActual() {
+  const last = await Protocolito
+    .findOne({}, { numeroTramite: 1 })
+    .sort({ numeroTramite: -1 })
+    .lean();
 
+  const ultimoNumero = Number(last?.numeroTramite) || 0;
+  const volumenActual = calcVolumen(ultimoNumero) ?? BASE_VOLUMEN;
+  const inicioSiguienteVolumen = BASE_NUMERO + (volumenActual - BASE_VOLUMEN + 1) * ACTOS_POR_VOLUMEN;
+  const faltan = Math.max(0, inicioSiguienteVolumen - ultimoNumero);
 
+  return { ultimoNumero, volumenActual, inicioSiguienteVolumen, faltan };
+}
+
+/* ---------------------------------------------------------------------- */
+/* Alerta automática de cambio de volumen.                                 */
+/* Se evalúa después de cada alta: si "faltan" cae exactamente en uno de   */
+/* los umbrales configurados (p.ej. 100/50/10) o llega a 0 (el volumen ya  */
+/* se llenó — el próximo trámite será el primero del siguiente), se crea   */
+/* un Anuncio tipo AUTOMATICO y se transmite por el mismo canal que ya usa */
+/* AnunciosDisplay ('anuncio:nuevo'), así hereda gratis modal/toast, sonido,*/
+/* historial y el registro de quién dio clic en "Entendido".               */
+/* La llave (modulo,volumen,umbral) + el índice único del modelo Anuncio   */
+/* garantizan que cada alerta se dispare una sola vez por volumen.         */
+/* ---------------------------------------------------------------------- */
+async function dispararAlertasVolumen(volInfo, io) {
+  try {
+    const { umbralesAlerta } = await getProtocolitoConfig();
+    const umbralMinimo = Math.min(...umbralesAlerta);
+
+    const candidatos = [];
+    if (umbralesAlerta.includes(volInfo.faltan)) {
+      candidatos.push({
+        umbral: volInfo.faltan,
+        urgencia: volInfo.faltan === umbralMinimo ? 'URGENTE' : 'NORMAL',
+        titulo: `Protocolito: quedan ${volInfo.faltan} números para cambiar de volumen`,
+        mensaje: `Volumen ${volInfo.volumenActual}: quedan ${volInfo.faltan} números de trámite disponibles antes de saltar al volumen ${volInfo.volumenActual + 1}.`,
+      });
+    }
+    if (volInfo.faltan === 0) {
+      candidatos.push({
+        umbral: 0,
+        urgencia: 'URGENTE',
+        titulo: 'Protocolito: el volumen se acaba de completar',
+        mensaje: `El volumen ${volInfo.volumenActual} llegó a su último número (#${volInfo.ultimoNumero}). El siguiente trámite que se tome será el PRIMERO del volumen ${volInfo.volumenActual + 1}.`,
+      });
+    }
+
+    for (const c of candidatos) {
+      try {
+        const anuncio = await Anuncio.create({
+          tipo: 'AUTOMATICO',
+          titulo: c.titulo,
+          mensaje: c.mensaje,
+          urgencia: c.urgencia,
+          sonido: true,
+          alcance: 'TODOS',
+          creadoPorNombre: 'Sistema (alerta automática)',
+          automatico: { modulo: 'PROTOCOLITO_VOLUMEN', volumen: volInfo.volumenActual, umbral: c.umbral },
+        });
+        io?.emit?.('anuncio:nuevo', anuncio.toObject());
+      } catch (err) {
+        if (err?.code !== 11000) console.error('PROTOCOLITO ALERTA VOLUMEN ERROR:', err);
+        // 11000 = ya se había disparado esta alerta para este volumen; no pasa nada
+      }
+    }
+  } catch (err) {
+    console.error('PROTOCOLITO DISPARAR ALERTAS ERROR:', err);
+  }
+}
+
+/* ---------------------------------------------------------------------- */
+/* GET /api/Protocolito/volumen-actual                                     */
+/* Para el contador de la esquina superior derecha: cuántos números de     */
+/* trámite faltan antes de que el siguiente trámite salte de volumen.      */
+/* ---------------------------------------------------------------------- */
+router.get('/volumen-actual', async (req, res) => {
+  try {
+    const data = await computeVolumenActual();
+    res.json({ ok: true, data });
+  } catch (err) {
+    console.error('PROTOCOLITO VOLUMEN-ACTUAL ERROR:', err);
+    res.status(500).json({ ok: false, msg: 'Error calculando el volumen actual' });
+  }
+});
+
+/* ---------------------------------------------------------------------- */
+/* Candado de "solo lectura": ADMIN puede deshabilitar la toma de números  */
+/* mientras se autorizan casos especiales. Deshabilitado bloquea a TODOS, */
+/* incluido ADMIN — la única acción que sigue viva es volver a habilitarlo.*/
+/* ---------------------------------------------------------------------- */
+async function getProtocolitoConfig() {
+  const cfg = await ProtocolitoConfig.findById('singleton').lean();
+  return {
+    habilitado: cfg ? cfg.habilitado !== false : true,
+    umbralesAlerta: Array.isArray(cfg?.umbralesAlerta) && cfg.umbralesAlerta.length
+      ? cfg.umbralesAlerta
+      : [100, 50, 10],
+  };
+}
+
+async function bloquearSiDeshabilitado(req, res, next) {
+  try {
+    const { habilitado } = await getProtocolitoConfig();
+    if (!habilitado) {
+      return res.status(423).json({
+        mensaje: 'Protocolito está deshabilitado temporalmente por administración. El sistema está en modo solo lectura.',
+      });
+    }
+    next();
+  } catch (err) {
+    console.error('PROTOCOLITO CANDADO ERROR:', err);
+    next(); // un error de infraestructura aquí no debe tumbar la escritura
+  }
+}
+
+router.get('/config', async (req, res) => {
+  try {
+    const data = await getProtocolitoConfig();
+    res.json({ ok: true, data });
+  } catch (err) {
+    console.error('PROTOCOLITO CONFIG GET ERROR:', err);
+    res.status(500).json({ ok: false, mensaje: 'Error obteniendo configuración' });
+  }
+});
+
+router.patch('/config', auth, async (req, res) => {
+  try {
+    const role = String(req.user?.role || req.user?.rol || '').toUpperCase();
+    if (role !== 'ADMIN') {
+      return res.status(403).json({ ok: false, mensaje: 'Solo un administrador puede modificar la configuración de Protocolito' });
+    }
+
+    const update = {
+      actualizadoPorId: req.user?.id != null ? Number(req.user.id) : null,
+      actualizadoPorNombre: req.user?.nombre || '',
+    };
+
+    if (typeof req.body?.habilitado === 'boolean') {
+      update.habilitado = req.body.habilitado;
+    }
+
+    if (Array.isArray(req.body?.umbralesAlerta)) {
+      const limpios = [...new Set(
+        req.body.umbralesAlerta.map(Number).filter((n) => Number.isFinite(n) && n > 0)
+      )].sort((a, b) => b - a);
+
+      if (!limpios.length) {
+        return res.status(400).json({ ok: false, mensaje: 'Los umbrales de alerta deben ser números positivos' });
+      }
+      update.umbralesAlerta = limpios;
+    }
+
+    const cfg = await ProtocolitoConfig.findByIdAndUpdate(
+      'singleton',
+      update,
+      { upsert: true, new: true }
+    ).lean();
+
+    const data = {
+      habilitado: cfg.habilitado !== false,
+      umbralesAlerta: cfg.umbralesAlerta?.length ? cfg.umbralesAlerta : [100, 50, 10],
+    };
+    req.app.get('io')?.emit('protocolito:config', data);
+
+    res.json({ ok: true, data });
+  } catch (err) {
+    console.error('PROTOCOLITO CONFIG PATCH ERROR:', err);
+    res.status(500).json({ ok: false, mensaje: 'Error actualizando configuración' });
+  }
+});
 
 router.get('/', async (req, res) => {
   try {
@@ -318,7 +491,7 @@ router.get('/', async (req, res) => {
 
 /* ============================ POST / ============================ */
 // Crear desde clienteId (o payload directo) con número autogenerado
-router.post('/', auth, async (req, res) => {
+router.post('/', auth, bloquearSiDeshabilitado, async (req, res) => {
   try {
             // 🔐 Candado: máximo 2 trámites sin recibo/justificante por abogado (no-admin)
     const userName = getUserNameFromReq(req);
@@ -440,6 +613,14 @@ router.post('/', auth, async (req, res) => {
           volumen: calcVolumen(siguiente),
         });
 
+        // Tiempo real: cualquier pantalla de Protocolito abierta (de
+        // cualquier usuario) actualiza su contador de volumen al instante,
+        // sin esperar a que alguien recargue la página.
+        const io = req.app.get('io');
+        const volInfo = await computeVolumenActual();
+        io?.emit('protocolito:volumen', volInfo);
+        await dispararAlertasVolumen(volInfo, io);
+
         return res.status(201).json(created);
       } catch (err) {
         if (err && err.code === 11000) {
@@ -463,7 +644,7 @@ router.post('/', auth, async (req, res) => {
 
 /* ============================ PUT /:id ============================ */
 // routes/protocolitos.js  (en el handler PUT /:id)
-router.put('/:id', async (req, res) => {
+router.put('/:id', bloquearSiDeshabilitado, async (req, res) => {
   try {
     const { numeroTramite, tipoTramite, cliente, fecha, abogado, observaciones } = req.body;
 
@@ -500,7 +681,7 @@ router.put('/:id', async (req, res) => {
 
 
 /* ============================ DELETE /:id ============================ */
-router.delete('/:id', async (req, res) => {
+router.delete('/:id', bloquearSiDeshabilitado, async (req, res) => {
   try {
     const deleted = await Protocolito.findByIdAndDelete(req.params.id);
     if (!deleted) return res.status(404).json({ mensaje: 'No encontrado' });
@@ -512,7 +693,7 @@ router.delete('/:id', async (req, res) => {
 });
 
 /* ============================ IMPORT ============================ */
-router.post('/import', upload.single('file'), async (req, res) => {
+router.post('/import', upload.single('file'), bloquearSiDeshabilitado, async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ mensaje: 'Falta el archivo "file"' });
@@ -1125,7 +1306,7 @@ router.get('/:id/entrega-info', async (req, res) => {
  * Opcional: actualiza el teléfono del Cliente si se envía.
  * body: { telefono?: string, notas?: string }
  */
-router.post('/:id/entregar', async (req, res) => {
+router.post('/:id/entregar', bloquearSiDeshabilitado, async (req, res) => {
   try {
     const { id } = req.params;
     const { telefono, notas } = req.body || {};
@@ -1185,7 +1366,7 @@ router.post('/:id/entregar', async (req, res) => {
 
 
 // POST /protocolito/:id/justificante
-router.post('/:id/justificante', /*authMiddleware,*/ async (req, res) => {
+router.post('/:id/justificante', /*authMiddleware,*/ bloquearSiDeshabilitado, async (req, res) => {
   try {
     const { id } = req.params;
     const { motivo } = req.body;

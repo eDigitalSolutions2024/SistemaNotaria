@@ -1,0 +1,226 @@
+/* frontend/src/css/Protocolito.css */
+
+/* Título de página: look editorial, mayúsculas con degradado + líneas
+   ornamentales a los costados que convergen hacia el texto. */
+.protocolito-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  margin: 4px 0 26px;
+}
+.protocolito-title-line {
+  flex: 1;
+  height: 3px;
+  min-width: 24px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(59, 130, 246, 0), #3b82f6);
+}
+.protocolito-title-line.right {
+  background: linear-gradient(90deg, #3b82f6, rgba(59, 130, 246, 0));
+}
+.protocolito-title {
+  margin: 0;
+  flex-shrink: 0;
+  font-size: clamp(26px, 3.4vw, 38px);
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  white-space: nowrap;
+  color: #1e3a8a;
+  background: linear-gradient(135deg, #0f2f76 0%, #2f68ff 55%, #38bdf8 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+@media (max-width: 560px) {
+  .protocolito-title { letter-spacing: 0.06em; }
+  .protocolito-title-line { min-width: 12px; }
+}
+
+/* Banner de volumen: ancho completo, imposible de perder de vista */
+.protocolito-volumen-banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin: 0 0 20px;
+  padding: 14px 20px;
+  border-radius: 12px;
+  background: #eef2ff;
+  border: 1px solid #c7d2fe;
+  box-shadow: 0 1px 3px rgba(30, 41, 59, 0.06);
+}
+.protocolito-volumen-banner-vol {
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #4338ca;
+  background: #fff;
+  border: 1px solid #c7d2fe;
+  border-radius: 999px;
+  padding: 5px 14px;
+  white-space: nowrap;
+}
+.protocolito-volumen-banner-txt {
+  font-size: 1.08rem;
+  font-weight: 700;
+  color: #312e81;
+}
+.protocolito-volumen-numero {
+  display: inline-block;
+  font-size: 1.35em;
+  font-weight: 900;
+  color: #dc2626;
+  background: #fee2e2;
+  border: 1px solid #fca5a5;
+  border-radius: 8px;
+  padding: 0px 10px;
+  margin: 0 2px;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.5);
+}
+.protocolito-volumen-banner.alerta .protocolito-volumen-numero {
+  color: #fff;
+  background: #dc2626;
+  border-color: #b91c1c;
+  text-shadow: none;
+}
+
+/* Cuando quedan pocos números, se resalta con color de alerta + pulso sutil */
+.protocolito-volumen-banner.alerta {
+  background: #fff1e0;
+  border-color: #f3c78a;
+  animation: protocolito-volumen-pulso 1.7s ease-in-out infinite;
+}
+.protocolito-volumen-banner.alerta .protocolito-volumen-banner-vol {
+  color: #b45f06;
+  border-color: #f3c78a;
+}
+.protocolito-volumen-banner.alerta .protocolito-volumen-banner-txt {
+  color: #7a4300;
+}
+
+@keyframes protocolito-volumen-pulso {
+  0%, 100% { box-shadow: 0 1px 3px rgba(30, 41, 59, 0.06); }
+  50% { box-shadow: 0 0 0 5px rgba(243, 199, 138, 0.4); }
+}
+
+/* Candado de solo lectura: visible para TODOS cuando está deshabilitado */
+.protocolito-candado-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0 0 20px;
+  padding: 14px 20px;
+  border-radius: 12px;
+  background: #fef2f2;
+  border: 1.5px solid #fca5a5;
+  color: #7f1d1d;
+  font-size: 1rem;
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(127, 29, 29, 0.08);
+}
+.protocolito-candado-icono {
+  font-size: 1.4rem;
+  flex-shrink: 0;
+}
+
+/* Control exclusivo de ADMIN para habilitar/deshabilitar */
+.protocolito-candado-admin {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 0 0 20px;
+  padding: 12px 18px;
+  border-radius: 12px;
+  background: #f7f8fc;
+  border: 1px solid #dfe3ec;
+  font-size: 0.92rem;
+  color: #334155;
+}
+.protocolito-candado-btn {
+  border: none;
+  border-radius: 8px;
+  padding: 8px 16px;
+  font-weight: 700;
+  font-size: 0.9rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.protocolito-candado-btn.apagar {
+  background: #fee2e2;
+  color: #b91c1c;
+  border: 1px solid #fca5a5;
+}
+.protocolito-candado-btn.encender {
+  background: #dcfce7;
+  color: #15803d;
+  border: 1px solid #86efac;
+}
+.protocolito-candado-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* Panel de ADMIN: estado y edición de umbrales de la alerta de volumen */
+.protocolito-alertas-admin {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 0 0 20px;
+  padding: 14px 18px;
+  border-radius: 12px;
+  background: #f7f8fc;
+  border: 1px solid #dfe3ec;
+}
+.protocolito-alertas-admin-titulo {
+  font-size: 0.82rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: #4338ca;
+}
+.protocolito-alertas-admin-estado {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.protocolito-alertas-admin-pill {
+  background: #fff;
+  border: 1px solid #dfe3ec;
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 0.85rem;
+  color: #334155;
+}
+.protocolito-alertas-admin-pill.fijo {
+  background: #eef2ff;
+  border-color: #c7d2fe;
+  color: #312e81;
+}
+.protocolito-alertas-admin-edit {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding-top: 10px;
+  border-top: 1px dashed #dfe3ec;
+}
+.protocolito-alertas-admin-edit label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.85rem;
+  color: #6b7390;
+  font-weight: 600;
+}
+.protocolito-alertas-admin-edit input {
+  padding: 6px 10px;
+  border: 1px solid #dfe3ec;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  min-width: 160px;
+}
