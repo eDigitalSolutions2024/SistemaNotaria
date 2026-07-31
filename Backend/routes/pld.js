@@ -845,15 +845,23 @@ router.get('/manual', requirePermisoPLD('puedeEditar'), async (req, res) => {
     });
     const page = await browser.newPage();
     await page.setContent(html, { waitUntil: 'networkidle0' });
-    // Márgenes explícitos en 0: la plantilla (manualPLD.js) controla su
-    // propio espaciado con padding interno por sección. Sin esto, Puppeteer
-    // aplica un margen de página por default que descuadra la portada
-    // (que asume la altura completa de una hoja A4) y deja todo el
-    // contenido desplazado hacia arriba, con espacio vacío abajo.
+    // Márgenes reales de 25mm (2.5cm) en los cuatro lados — la plantilla
+    // (manualPLD.js v2) ya no controla su propio espaciado con padding
+    // interno por sección; el margen de página lo da Puppeteer y el CSS
+    // asume una caja de contenido de 160mm x 247mm (A4 menos el margen).
+    // displayHeaderFooter agrega numeración de página dentro de esa misma
+    // banda de margen (no resta espacio adicional al contenido).
     const pdfBuffer = await page.pdf({
       format: 'A4',
       printBackground: true,
-      margin: { top: '0mm', right: '0mm', bottom: '0mm', left: '0mm' },
+      margin: { top: '25mm', right: '25mm', bottom: '25mm', left: '25mm' },
+      displayHeaderFooter: true,
+      headerTemplate: '<div></div>',
+      footerTemplate: `
+        <div style="width:100%; font-size:8px; color:#94a3b8; text-align:center;
+                    font-family: Arial, sans-serif; padding-bottom: 10mm;">
+          Página <span class="pageNumber"></span> de <span class="totalPages"></span>
+        </div>`,
     });
 
     res.set({
