@@ -136,11 +136,22 @@ const ACTIVIDADES_PLD = [
     umbralUMAs: 8000,
     requiereMonto: true,
     detectar: [
-      /compraventa(?!\s+de\s+(acciones|partes\s+sociales))/i,
+      // admite "compraventa", "compra venta" y "compra-venta" (así aparece
+      // indistintamente en captura real) — igual que ya hace c_acciones más
+      // arriba para "compra venta de acciones"
+      /compra\s*-?\s*venta(?!\s+de\s+(acciones|partes\s+sociales))/i,
       /traslado\s+de\s+dominio/i,
       /transmisi[oó]n\s+de\s+(propiedad|dominio|derechos\s+reales)/i,
       /donaci[oó]n\s+de\s+inmueble/i,
       /permuta\s+de\s+inmueble/i,
+    ],
+    // "Donación" a secas no dice qué se dona (inmueble, mueble, dinero...) y
+    // solo la de inmueble es actividad vulnerable. En vez de dejarla sin
+    // clasificar, se marca como coincidencia AMBIGUA: el aviso se crea con
+    // el nombre de esta actividad pero forzando REQUIERE_REVISION (nunca
+    // AUTOMATICA) hasta que alguien confirme el tipo de bien.
+    detectarRevision: [
+      /donaci[oó]n/i,
     ],
   },
 ];

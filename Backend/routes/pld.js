@@ -85,10 +85,20 @@ function escapeRegex(s) {
 // en false omite el filtro "estado" — las tarjetas de métricas necesitan ver
 // el desglose completo por estado sin que el estado ya filtrado en la tabla
 // las reduzca a un solo número.
+// Estados terminales/no accionables — un aviso en alguno de estos nunca
+// cuenta como "vencido" ni "por vencer", sin importar su fechaVencimiento
+// (ya se presentó, no aplicaba, o se canceló). Mismo criterio que ya usa
+// GET /avisos/metricas para la tarjeta "Vencidos".
+const ESTADOS_FUERA_DE_VENCIMIENTO = ['PRESENTADO', 'NO_APLICA', 'CANCELADO'];
+
+// Ventana de "por vencer" — mismo umbral de 5 días que ya usa el frontend
+// (pldHelpers.diasRestantesTexto) para pintar la fecha límite en naranja.
+const DIAS_POR_VENCER = 5;
+
 function buildFiltroAvisos(req, { incluirEstado = true } = {}) {
   const {
     estado, desde, hasta, tipoActo, numeroControl, compareciente, q,
-    abogado: abogadoQuery, portal, confianza,
+    abogado: abogadoQuery, portal, confianza, vencimiento,
   } = req.query;
 
   const filtro = { ...buildFiltroScope(req) };
@@ -96,6 +106,25 @@ function buildFiltroAvisos(req, { incluirEstado = true } = {}) {
   if (incluirEstado && estado) filtro.estado = estado;
   if (portal)    filtro.portal             = portal;
   if (confianza) filtro.confianzaDeteccion = confianza;
+
+  // Igual que "estado": en /avisos/metricas (incluirEstado=false) se ignora
+  // la tarjeta de vencimiento activa, para que las demás tarjetas sigan
+  // mostrando el desglose completo y no se reduzcan al filtro ya aplicado.
+  if (incluirEstado && (vencimiento === 'VENCIDO' || vencimiento === 'POR_VENCER')) {
+    const ahora = new Date();
+    // filtro.estado en este punto es undefined o un string (viene de la
+    // línea de arriba) — nunca un objeto todavía, así que es seguro
+    // envolverlo en $eq en vez de mezclarlo a ciegas con spread.
+    filtro.estado = filtro.estado !== undefined
+      ? { $eq: filtro.estado, $nin: ESTADOS_FUERA_DE_VENCIMIENTO }
+      : { $nin: ESTADOS_FUERA_DE_VENCIMIENTO };
+    if (vencimiento === 'VENCIDO') {
+      filtro.fechaVencimiento = { $lt: ahora };
+    } else {
+      const limite = new Date(ahora.getTime() + DIAS_POR_VENCER * 86400000);
+      filtro.fechaVencimiento = { $gte: ahora, $lte: limite };
+    }
+  }
 
   if (abogadoQuery && req.permisos.puedeVerTodo) {
     filtro.abogado = { $regex: escapeRegex(abogadoQuery), $options: 'i' };
@@ -460,18 +489,20 @@ router.get('/avisos/metricas', requirePermisoPLD('puedeEditar'), async (req, res
   try {
     const base = buildFiltroAvisos(req, { incluirEstado: false });
     const ahora = new Date();
+    const limitePorVencer = new Date(ahora.getTime() + DIAS_POR_VENCER * 86400000);
 
-    const [total, pendientes, xmlGenerados, presentados, rechazados, acusesRegistrados, vencidos] = await Promise.all([
+    const [total, pendientes, xmlGenerados, presentados, rechazados, acusesRegistrados, vencidos, porVencer] = await Promise.all([
       AvisoPLD.countDocuments(base),
       AvisoPLD.countDocuments({ ...base, estado: { $in: ['PENDIENTE', 'LISTO', 'PENDIENTE_DECLARANOT'] } }),
       AvisoPLD.countDocuments({ ...base, estado: 'XML_GENERADO' }),
       AvisoPLD.countDocuments({ ...base, estado: 'PRESENTADO' }),
       AvisoPLD.countDocuments({ ...base, estado: 'RECHAZADO_SPPLD' }),
       AvisoPLD.countDocuments({ ...base, acusePdfPath: { $ne: null } }),
-      AvisoPLD.countDocuments({ ...base, fechaVencimiento: { $lt: ahora }, estado: { $nin: ['PRESENTADO', 'NO_APLICA', 'CANCELADO'] } }),
+      AvisoPLD.countDocuments({ ...base, fechaVencimiento: { $lt: ahora }, estado: { $nin: ESTADOS_FUERA_DE_VENCIMIENTO } }),
+      AvisoPLD.countDocuments({ ...base, fechaVencimiento: { $gte: ahora, $lte: limitePorVencer }, estado: { $nin: ESTADOS_FUERA_DE_VENCIMIENTO } }),
     ]);
 
-    return res.json({ total, pendientes, xmlGenerados, presentados, rechazados, acusesRegistrados, vencidos });
+    return res.json({ total, pendientes, xmlGenerados, presentados, rechazados, acusesRegistrados, vencidos, porVencer });
   } catch (err) {
     console.error('[pld/avisos/metricas]', err);
     return res.status(500).json({ mensaje: 'Error interno del servidor.', error: err.message });

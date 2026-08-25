@@ -45,6 +45,31 @@ function detectarObligacion(escritura) {
   );
 
   if (coincidencias.length === 0) {
+    // Segunda pasada: patrones ambiguos (p.ej. "donación" sin especificar el
+    // bien) que sugieren una actividad posible pero no permiten decidir sola
+    // ni el umbral. Nunca se resuelven como AUTOMATICA.
+    const ambiguas = ACTIVIDADES_PLD.filter(act =>
+      (act.detectarRevision || []).some(regex => regex.test(tipoTramite))
+    );
+
+    if (ambiguas.length > 0) {
+      const primera = ambiguas[0];
+      const umbralPesos = primera.umbralUMAs ? calcularUmbralPesos(primera.umbralUMAs) : null;
+      return {
+        aplica: true,
+        confianza: 'REQUIERE_REVISION',
+        actividad: primera,
+        portal: primera.portal,
+        tipoFEP: primera.tipoFEP,
+        incisoLegal: primera.id,
+        requiereMonto: primera.requiereMonto,
+        monto: primera.requiereMonto ? monto : null,
+        umbralPesos,
+        fechaVencimiento,
+        razon: `Posible "${primera.nombre}" (inciso ${primera.id}), pero el tipo de trámite no especifica el bien/detalle exacto; se requiere confirmación manual antes de decidir si aplica.`,
+      };
+    }
+
     return {
       aplica: true,
       confianza: 'REQUIERE_REVISION',

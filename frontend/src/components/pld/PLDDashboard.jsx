@@ -15,9 +15,11 @@ import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import {
   Box, Paper, Stack, Typography, Chip, TextField, MenuItem, Button,
   IconButton, Menu, Alert, CircularProgress, Tooltip, Dialog, DialogContent,
+  DialogTitle, DialogActions, Collapse, Badge,
 } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
 import { ThemeProvider } from '@mui/material/styles';
+import { esES } from '@mui/x-data-grid/locales';
 
 import { useAuth } from '../../auth/AuthContext';
 import { listarAvisos, listarAvisosMetricas, generarXML, descargarXML, descargarAcuse } from './pldApi';
@@ -32,12 +34,17 @@ import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
 import FactCheckOutlinedIcon from '@mui/icons-material/FactCheckOutlined';
 import WarningAmberOutlinedIcon from '@mui/icons-material/WarningAmberOutlined';
+import AccessTimeOutlinedIcon from '@mui/icons-material/AccessTimeOutlined';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
 import VisibilityOutlinedIcon from '@mui/icons-material/VisibilityOutlined';
 import DownloadOutlinedIcon from '@mui/icons-material/DownloadOutlined';
 import HistoryOutlinedIcon from '@mui/icons-material/HistoryOutlined';
 import ReplayOutlinedIcon from '@mui/icons-material/ReplayOutlined';
 import ClearOutlinedIcon from '@mui/icons-material/ClearOutlined';
+import FilterAltOutlinedIcon from '@mui/icons-material/FilterAltOutlined';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import SentimentSatisfiedAltOutlinedIcon from '@mui/icons-material/SentimentSatisfiedAltOutlined';
+import SearchOffOutlinedIcon from '@mui/icons-material/SearchOffOutlined';
 
 // Estados reales del modelo AvisoPLD (Backend/models/AvisoPLD.js) — a
 // diferencia de pldHelpers.ESTADO_META, que también incluye los estados
@@ -50,6 +57,7 @@ const ESTADOS_AVISO = [
 
 const FILTROS_INICIALES = {
   estado: '', desde: '', hasta: '', tipoActo: '', abogado: '', numeroControl: '', compareciente: '', q: '',
+  vencimiento: '',
 };
 
 function getUserRoles(u) {
@@ -75,22 +83,25 @@ const CARD_DEFS = [
   { key: 'presentados', label: 'Presentados', icon: CheckCircleOutlineIcon, color: '#16a34a', estadoFiltro: 'PRESENTADO' },
   { key: 'rechazados', label: 'Rechazados', icon: ErrorOutlineIcon, color: '#dc2626', estadoFiltro: 'RECHAZADO_SPPLD' },
   { key: 'acusesRegistrados', label: 'Acuses registrados', icon: FactCheckOutlinedIcon, color: '#0f766e' },
-  { key: 'vencidos', label: 'Vencidos', icon: WarningAmberOutlinedIcon, color: '#b91c1c' },
+  { key: 'porVencer', label: 'Por vencer', icon: AccessTimeOutlinedIcon, color: '#e65100', vencimientoFiltro: 'POR_VENCER' },
+  { key: 'vencidos', label: 'Vencidos', icon: WarningAmberOutlinedIcon, color: '#b91c1c', vencimientoFiltro: 'VENCIDO' },
 ];
 
 function MetricCard({ def, valor, cargando, activo, onClick }) {
   const Icon = def.icon;
-  return (
+  const esClicable = !!(def.estadoFiltro || def.vencimientoFiltro);
+  const tarjeta = (
     <Paper
       variant="outlined"
-      onClick={def.estadoFiltro ? onClick : undefined}
+      onClick={esClicable ? onClick : undefined}
       sx={{
         p: 1.75, flex: '1 1 150px', minWidth: 150,
         borderColor: activo ? def.color : undefined,
         borderWidth: activo ? 2 : 1,
-        cursor: def.estadoFiltro ? 'pointer' : 'default',
+        borderStyle: esClicable && !activo ? 'dashed' : 'solid',
+        cursor: esClicable ? 'pointer' : 'default',
         transition: 'border-color .15s, box-shadow .15s',
-        '&:hover': def.estadoFiltro ? { boxShadow: 1, borderColor: def.color } : undefined,
+        '&:hover': esClicable ? { boxShadow: 1, borderColor: def.color } : undefined,
       }}
     >
       <Stack direction="row" spacing={1.25} alignItems="center">
@@ -100,10 +111,15 @@ function MetricCard({ def, valor, cargando, activo, onClick }) {
         }}>
           <Icon fontSize="small" />
         </Box>
-        <Box sx={{ minWidth: 0 }}>
-          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', lineHeight: 1.2 }}>
-            {def.label}
-          </Typography>
+        <Box sx={{ minWidth: 0, flex: 1 }}>
+          <Stack direction="row" spacing={0.5} alignItems="center">
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', lineHeight: 1.2 }}>
+              {def.label}
+            </Typography>
+            {esClicable && (
+              <FilterAltOutlinedIcon sx={{ fontSize: 13, color: activo ? def.color : 'text.disabled' }} />
+            )}
+          </Stack>
           <Typography variant="h6" sx={{ fontWeight: 700, lineHeight: 1.3 }}>
             {cargando ? <CircularProgress size={16} /> : (valor ?? 0)}
           </Typography>
@@ -111,10 +127,17 @@ function MetricCard({ def, valor, cargando, activo, onClick }) {
       </Stack>
     </Paper>
   );
+  if (!esClicable) return tarjeta;
+  return (
+    <Tooltip title={activo ? 'Clic para quitar el filtro' : 'Clic para filtrar la tabla por esta tarjeta'}>
+      {tarjeta}
+    </Tooltip>
+  );
 }
 
 function AccionesCell({ row, puedeGenerar, onAbrir, onAccionDirecta }) {
   const [anchorEl, setAnchorEl] = useState(null);
+  const [confirmarRegenerar, setConfirmarRegenerar] = useState(false);
   const abierto = Boolean(anchorEl);
 
   const tieneXML = !!row.xmlContenido;
@@ -124,6 +147,15 @@ function AccionesCell({ row, puedeGenerar, onAbrir, onAccionDirecta }) {
   const esRechazado = row.estado === 'RECHAZADO_SPPLD';
 
   const cerrar = () => setAnchorEl(null);
+
+  function clickGenerarXML() {
+    cerrar();
+    if (tieneXML) {
+      setConfirmarRegenerar(true);
+    } else {
+      onAccionDirecta('generarXML', row);
+    }
+  }
 
   return (
     <Stack direction="row" spacing={0.5} alignItems="center">
@@ -137,7 +169,7 @@ function AccionesCell({ row, puedeGenerar, onAbrir, onAccionDirecta }) {
       </IconButton>
       <Menu anchorEl={anchorEl} open={abierto} onClose={cerrar}>
         {puedeGenerarXML && (
-          <MenuItem onClick={() => { cerrar(); onAccionDirecta('generarXML', row); }}>
+          <MenuItem onClick={clickGenerarXML}>
             <DescriptionOutlinedIcon fontSize="small" style={{ marginRight: 8 }} />
             {tieneXML ? 'Regenerar XML' : 'Generar XML'}
           </MenuItem>
@@ -175,6 +207,25 @@ function AccionesCell({ row, puedeGenerar, onAbrir, onAccionDirecta }) {
           </Tooltip>
         )}
       </Menu>
+
+      <Dialog open={confirmarRegenerar} onClose={() => setConfirmarRegenerar(false)} maxWidth="xs" fullWidth>
+        <DialogTitle>¿Regenerar el XML?</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2">
+            El aviso #{row.numeroControl} ya tiene un XML generado. Si lo regeneras, el anterior se reemplaza
+            — si ya lo descargaste o lo usaste en el portal del SAT, vuelve a descargar el nuevo antes de subirlo.
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setConfirmarRegenerar(false)}>Cancelar</Button>
+          <Button
+            variant="contained"
+            onClick={() => { setConfirmarRegenerar(false); onAccionDirecta('generarXML', row); }}
+          >
+            Sí, regenerar
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Stack>
   );
 }
@@ -202,6 +253,7 @@ export default function PLDDashboard() {
   const [refreshTick, setRefreshTick] = useState(0);
   const [mensaje, setMensaje] = useState(null); // { severidad, texto }
   const [expediente, setExpediente] = useState(null); // { row: {numeroControl}, tabInicial }
+  const [masFiltros, setMasFiltros] = useState(false);
 
   // Debounce de 250ms — mismo patrón que onChangePickerQ en Escrituras.jsx
   useEffect(() => {
@@ -260,8 +312,35 @@ export default function PLDDashboard() {
   }
 
   function onClickTarjeta(def) {
-    if (!def.estadoFiltro) return;
-    actualizarFiltro('estado', filtrosInput.estado === def.estadoFiltro ? '' : def.estadoFiltro);
+    if (def.estadoFiltro) {
+      actualizarFiltro('estado', filtrosInput.estado === def.estadoFiltro ? '' : def.estadoFiltro);
+    } else if (def.vencimientoFiltro) {
+      actualizarFiltro('vencimiento', filtrosInput.vencimiento === def.vencimientoFiltro ? '' : def.vencimientoFiltro);
+    }
+  }
+
+  const filtrosAvanzadosActivos = ['desde', 'hasta', 'tipoActo', 'numeroControl', 'compareciente', 'abogado']
+    .filter((campo) => filtrosInput[campo] !== '').length;
+
+  function NoRowsOverlay() {
+    let icono = <SearchOffOutlinedIcon sx={{ fontSize: 40 }} color="disabled" />;
+    let texto = 'No se encontraron avisos con estos filtros.';
+    if (filtrosInput.vencimiento === 'VENCIDO') {
+      icono = <SentimentSatisfiedAltOutlinedIcon sx={{ fontSize: 40 }} color="success" />;
+      texto = 'No tienes avisos vencidos en este momento.';
+    } else if (filtrosInput.vencimiento === 'POR_VENCER') {
+      icono = <SentimentSatisfiedAltOutlinedIcon sx={{ fontSize: 40 }} color="success" />;
+      texto = 'No hay avisos por vencer en los próximos días.';
+    } else if (filtrosInput.estado === 'RECHAZADO_SPPLD') {
+      icono = <SentimentSatisfiedAltOutlinedIcon sx={{ fontSize: 40 }} color="success" />;
+      texto = 'No hay avisos rechazados por el SAT.';
+    }
+    return (
+      <Stack alignItems="center" justifyContent="center" spacing={1} sx={{ height: '100%', p: 3 }}>
+        {icono}
+        <Typography variant="body2" color="text.secondary">{texto}</Typography>
+      </Stack>
+    );
   }
 
   function abrirExpediente(row, tabInicial) {
@@ -301,13 +380,31 @@ export default function PLDDashboard() {
     { field: 'numeroControl', headerName: 'Núm. control', width: 110 },
     {
       field: 'descripcionActividad', headerName: 'Tipo de acto', flex: 1, minWidth: 200,
-      valueGetter: (value, row) => value || row.tipoFEP || '—',
+      valueGetter: (value, row) => value || row.tipoFEP || '',
+      renderCell: (params) => {
+        if (params.value) {
+          return <span title={params.value}>{params.value}</span>;
+        }
+        return (
+          <Tooltip title="El sistema no pudo identificar el acto a partir del 'Tipo de trámite' de la escritura — clic para abrir el expediente y confirmarlo a mano.">
+            <Chip
+              size="small" color="warning" variant="outlined" label="Sin clasificar"
+              onClick={() => abrirExpediente(params.row, 'dashboard')}
+              sx={{ cursor: 'pointer' }}
+            />
+          </Tooltip>
+        );
+      },
     },
     {
       field: 'comparecientes', headerName: 'Compareciente(s)', flex: 1, minWidth: 200, sortable: false,
       valueGetter: (value) => resumenComparecientes(value),
+      renderCell: (params) => <span title={params.value}>{params.value}</span>,
     },
-    { field: 'abogado', headerName: 'Responsable', width: 170, valueGetter: (value) => value || '—' },
+    {
+      field: 'abogado', headerName: 'Responsable', width: 170, valueGetter: (value) => value || '—',
+      renderCell: (params) => <span title={params.value}>{params.value}</span>,
+    },
     {
       field: 'estado', headerName: 'Estado', width: 160,
       renderCell: (params) => {
@@ -367,7 +464,10 @@ export default function PLDDashboard() {
               def={def}
               valor={metricas?.[def.key]}
               cargando={cargandoMetricas}
-              activo={!!def.estadoFiltro && filtrosInput.estado === def.estadoFiltro}
+              activo={
+                (!!def.estadoFiltro && filtrosInput.estado === def.estadoFiltro) ||
+                (!!def.vencimientoFiltro && filtrosInput.vencimiento === def.vencimientoFiltro)
+              }
               onClick={() => onClickTarjeta(def)}
             />
           ))}
@@ -392,40 +492,54 @@ export default function PLDDashboard() {
                 <MenuItem key={e} value={e}>{estadoMeta(e).label}</MenuItem>
               ))}
             </TextField>
-            <TextField
-              label="Desde" type="date" size="small" InputLabelProps={{ shrink: true }}
-              value={filtrosInput.desde} onChange={(e) => actualizarFiltro('desde', e.target.value)}
-            />
-            <TextField
-              label="Hasta" type="date" size="small" InputLabelProps={{ shrink: true }}
-              value={filtrosInput.hasta} onChange={(e) => actualizarFiltro('hasta', e.target.value)}
-            />
-            <TextField
-              label="Tipo de acto" size="small" value={filtrosInput.tipoActo}
-              onChange={(e) => actualizarFiltro('tipoActo', e.target.value)}
-              sx={{ minWidth: 170 }}
-            />
-            <TextField
-              label="Núm. de escritura" type="number" size="small" value={filtrosInput.numeroControl}
-              onChange={(e) => actualizarFiltro('numeroControl', e.target.value)}
-              sx={{ minWidth: 150 }}
-            />
-            <TextField
-              label="Compareciente" size="small" value={filtrosInput.compareciente}
-              onChange={(e) => actualizarFiltro('compareciente', e.target.value)}
-              sx={{ minWidth: 170 }}
-            />
-            {puedeVerTodo && (
-              <TextField
-                label="Abogado responsable" size="small" value={filtrosInput.abogado}
-                onChange={(e) => actualizarFiltro('abogado', e.target.value)}
-                sx={{ minWidth: 170 }}
-              />
-            )}
+            <Badge badgeContent={filtrosAvanzadosActivos} color="primary">
+              <Button
+                size="small"
+                endIcon={<ExpandMoreIcon sx={{ transform: masFiltros ? 'rotate(180deg)' : 'none', transition: 'transform .15s' }} />}
+                onClick={() => setMasFiltros((v) => !v)}
+              >
+                Más filtros
+              </Button>
+            </Badge>
             <Button size="small" startIcon={<ClearOutlinedIcon />} onClick={limpiarFiltros}>
               Limpiar
             </Button>
           </Stack>
+
+          <Collapse in={masFiltros}>
+            <Stack direction="row" spacing={1.25} flexWrap="wrap" useFlexGap alignItems="center" sx={{ pt: 1.5, mt: 1.5, borderTop: '1px solid', borderColor: 'divider' }}>
+              <TextField
+                label="Desde" type="date" size="small" InputLabelProps={{ shrink: true }}
+                value={filtrosInput.desde} onChange={(e) => actualizarFiltro('desde', e.target.value)}
+              />
+              <TextField
+                label="Hasta" type="date" size="small" InputLabelProps={{ shrink: true }}
+                value={filtrosInput.hasta} onChange={(e) => actualizarFiltro('hasta', e.target.value)}
+              />
+              <TextField
+                label="Tipo de acto" size="small" value={filtrosInput.tipoActo}
+                onChange={(e) => actualizarFiltro('tipoActo', e.target.value)}
+                sx={{ minWidth: 170 }}
+              />
+              <TextField
+                label="Núm. de escritura" type="number" size="small" value={filtrosInput.numeroControl}
+                onChange={(e) => actualizarFiltro('numeroControl', e.target.value)}
+                sx={{ minWidth: 150 }}
+              />
+              <TextField
+                label="Compareciente" size="small" value={filtrosInput.compareciente}
+                onChange={(e) => actualizarFiltro('compareciente', e.target.value)}
+                sx={{ minWidth: 170 }}
+              />
+              {puedeVerTodo && (
+                <TextField
+                  label="Abogado responsable" size="small" value={filtrosInput.abogado}
+                  onChange={(e) => actualizarFiltro('abogado', e.target.value)}
+                  sx={{ minWidth: 170 }}
+                />
+              )}
+            </Stack>
+          </Collapse>
         </Paper>
 
         {mensaje && (
@@ -452,6 +566,8 @@ export default function PLDDashboard() {
               onSortModelChange={setSortModel}
               disableRowSelectionOnClick
               density="comfortable"
+              localeText={esES.components.MuiDataGrid.defaultProps.localeText}
+              slots={{ noRowsOverlay: NoRowsOverlay }}
             />
           </div>
         </Paper>
