@@ -58,16 +58,30 @@ const PERMISOS_PLD = Object.freeze({
   },
 });
 
+// Overrides de rol PLD por usuario individual (Abogado._id), para casos que
+// no encajan en el mapeo genérico por rol del sistema y no ameritan
+// re-clasificar a todos los usuarios de ese rol.
+const PLD_OVERRIDE_POR_USUARIO = Object.freeze({
+  1017: PLD_ROLES.CAPTURISTA, // Fátima (RECEPCION) — acceso de captura a PLD
+});
+
 /**
- * Resuelve el rol PLD a partir del role del sistema (req.user.role).
- * Retorna null si el rol no tiene acceso PLD.
+ * Resuelve el rol PLD a partir del usuario del sistema (req.user).
+ * Acepta el objeto req.user completo (con id/role) o, por compatibilidad,
+ * directamente el string de role. Retorna null si no tiene acceso PLD.
  */
-function resolverRolPLD(rolesSistema) {
+function resolverRolPLD(userOrRole) {
+  const esObjeto = userOrRole && typeof userOrRole === 'object';
+  const id = esObjeto ? userOrRole.id : undefined;
+  if (id != null && PLD_OVERRIDE_POR_USUARIO[id]) {
+    return PLD_OVERRIDE_POR_USUARIO[id];
+  }
+  const rol = esObjeto ? userOrRole.role : userOrRole;
   // Normaliza mayúsculas/minúsculas: la colección de abogados tiene roles
   // guardados de forma inconsistente (ej. "admin" en vez de "ADMIN" para el
   // usuario Administrador semilla), y este mapa siempre usa claves en
   // mayúsculas.
-  const clave = String(rolesSistema || '').toUpperCase();
+  const clave = String(rol || '').toUpperCase();
   return MAPA_ROL_SISTEMA[clave] || null;
 }
 
@@ -78,7 +92,7 @@ function resolverRolPLD(rolesSistema) {
  */
 function requirePermisoPLD(permiso) {
   return (req, res, next) => {
-    const rolPLD = resolverRolPLD(req.user?.role);
+    const rolPLD = resolverRolPLD(req.user);
     if (!rolPLD) {
       return res.status(403).json({ mensaje: 'Sin acceso al módulo PLD.' });
     }

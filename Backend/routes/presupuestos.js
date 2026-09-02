@@ -4,7 +4,7 @@ const router = express.Router();
 const path = require('path');
 const fs = require('fs');
 const axios = require("axios");
-const { uploadMediaFromUrl, sendDocumentById } = require("../services/whatsapp");
+const { uploadMediaFromUrl, sendDocumentTemplate } = require("../services/whatsapp");
 
 const Presupuesto = require('../models/Presupuesto');
 const Cliente = require('../models/Cliente');
@@ -450,11 +450,13 @@ router.post("/", async (req, res) => {
 
     // ===== lo demás igual (WhatsApp) =====
     const total = Number(presupuesto.totalPresupuesto || 0);
-    if (total < 100000) return;
+    if (total <= 100000) return;
 
-    const notarioPhone = process.env.NOTARIO_PHONE;
+    const notarioPhones = [process.env.NOTARIO_PHONE, process.env.NOTARIO_PHONE_2].filter(Boolean);
 
-    const baseUrl = process.env.PUBLIC_BASE_URL || "http://localhost:8020";
+    // Self-fetch (mismo proceso/máquina): usar el puerto real del backend,
+    // no una IP/puerto fijo que puede desincronizarse entre entornos.
+    const baseUrl = process.env.PUBLIC_BASE_URL || `http://localhost:${process.env.PORT || 8010}`;
     const pdfUrl = `${baseUrl}/api/presupuestos/${presupuesto._id}/pdf`;
 
     setImmediate(async () => {
@@ -465,16 +467,23 @@ router.post("/", async (req, res) => {
         });
         console.log("✅ Media subido:", up?.id);
 
-        const sent = await sendDocumentById({
-          to: notarioPhone,
-          mediaId: up.id,
-          filename: `presupuesto_${presupuesto._id}.pdf`,
-          caption: `Nuevo presupuesto. Total: ${money(total)}`,
-        });
+        const bodyParams = [money(total), nombreCliente || '—', responsableReal];
 
-        console.log("✅ WhatsApp/PDF enviado:", sent);
+        for (const phone of notarioPhones) {
+          try {
+            const sent = await sendDocumentTemplate({
+              to: phone,
+              mediaId: up.id,
+              filename: `presupuesto_${presupuesto._id}.pdf`,
+              bodyParams,
+            });
+            console.log(`✅ WhatsApp/PDF enviado a ${phone}:`, sent);
+          } catch (e) {
+            console.error(`⚠️ WhatsApp/PDF falló para ${phone}:`, e?.response?.data || e.message);
+          }
+        }
       } catch (e) {
-        console.error("⚠️ WhatsApp/PDF falló (no afecta guardado):", e?.response?.data || e.message);
+        console.error("⚠️ WhatsApp/PDF falló al subir el media (no afecta guardado):", e?.response?.data || e.message);
       }
     });
   } catch (err) {
@@ -505,26 +514,37 @@ router.get('/', async (req, res) => {
       filter.cliente = cnum;
     }
 
-    // Populate para mostrar nombre e idCliente
-    // Si necesitas búsqueda por nombre/idCliente, se hace con aggregate o con un paso extra.
-    // Aquí lo hacemos simple: si viene q, traemos más y filtramos en memoria.
+    // ✅ Búsqueda a nivel de base de datos (antes de paginar), para que encuentre
+    // coincidencias en TODO el listado y no solo en la página actualmente cargada.
+    if (q) {
+      const or = [
+        { tipoTramite: { $regex: escapeRegex(q), $options: 'i' } },
+      ];
+
+      if (/^[0-9a-fA-F]{24}$/.test(q)) {
+        or.push({ _id: q });
+      }
+
+      const qNum = Number(q);
+      const clienteOr = [{ nombre: { $regex: escapeRegex(q), $options: 'i' } }];
+      if (Number.isFinite(qNum)) clienteOr.push({ _id: qNum });
+
+      const clientesMatch = await Cliente.find({ $or: clienteOr }).select('_id').lean();
+      if (clientesMatch.length) {
+        or.push({ cliente: { $in: clientesMatch.map((c) => c._id) } });
+      }
+
+      filter.$or = or;
+    }
+
     const cursor = Presupuesto.find(filter)
       .sort({ createdAt: -1 })
       .populate('cliente', 'nombre idCliente');
 
-    let items = await cursor.skip(skip).limit(limit).lean();
-
-    if (q) {
-      const qq = q.toLowerCase();
-      items = items.filter((p) => {
-        const cn = (p.cliente?.nombre || '').toLowerCase();
-        const ci = String(p.cliente?.idCliente || '').toLowerCase();
-        const tt = String(p.tipoTramite || '').toLowerCase();
-        return cn.includes(qq) || ci.includes(qq) || tt.includes(qq) || String(p._id).includes(q);
-      });
-    }
-
-    const total = await Presupuesto.countDocuments(filter);
+    const [items, total] = await Promise.all([
+      cursor.skip(skip).limit(limit).lean(),
+      Presupuesto.countDocuments(filter),
+    ]);
 
     res.json({
       page,

@@ -73,7 +73,12 @@ function AuthedApp() {
   // mismo criterio ya usado para "Registrar Abogado" más abajo. El módulo
   // PLD en sí (ExpedientePLD, sus tabs) sigue teniendo su propio control de
   // permisos interno (puedeEditarPLD/puedePresentarPLD, sin cambios aquí).
-  const puedeVerExpedientesPLD = role === 'ADMIN' || role === 'admin';
+  // PLD_USUARIOS_EXTRA: usuarios no-Administrador con acceso concedido a mano
+  // (backend/pld/roles.js ya limita lo que ven a sus propios avisos, vía el
+  // mapeo ABOGADO -> NOTARIO).
+  const PLD_USUARIOS_EXTRA = [1012, 1017]; // Sahara Rodríguez, Fátima
+  const puedeVerExpedientesPLD =
+    role === 'ADMIN' || role === 'admin' || PLD_USUARIOS_EXTRA.includes(user?.id);
   // Anuncios: solo ADMIN redacta/envía; el aviso emergente (AnunciosDisplay)
   // en cambio se monta para todos los roles, más abajo.
   const puedeVerAnuncios = role === 'ADMIN' || role === 'admin';

@@ -10,6 +10,7 @@ export default function ConsultarPresupuestosModal({
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
   const [q, setQ] = useState("");
+  const [debouncedQ, setDebouncedQ] = useState("");
   const [items, setItems] = useState([]);
   const [page, setPage] = useState(1);
 
@@ -34,7 +35,7 @@ export default function ConsultarPresupuestosModal({
       if (clienteIdNumber) params.idCliente = clienteIdNumber;
 
       // búsqueda general
-      if (q.trim()) params.q = q.trim();
+      if (debouncedQ.trim()) params.q = debouncedQ.trim();
 
       const res = await api.get("/presupuestos", { params });
 
@@ -49,11 +50,29 @@ export default function ConsultarPresupuestosModal({
     }
   };
 
+  // Búsqueda en tiempo real: espera a que el usuario deje de escribir
+  // (400ms) antes de disparar la búsqueda, y regresa a la página 1.
+  useEffect(() => {
+    if (!open) return;
+    const t = setTimeout(() => {
+      setDebouncedQ(q);
+      setPage(1);
+    }, 400);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [q, open]);
+
   useEffect(() => {
     if (!open) return;
     fetchData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, page]);
+  }, [open, page, debouncedQ]);
+
+  // Enter en el campo de búsqueda: dispara al instante, sin esperar el debounce
+  const searchNow = () => {
+    setDebouncedQ(q);
+    setPage(1);
+  };
 
   if (!open) return null;
 
@@ -94,14 +113,14 @@ export default function ConsultarPresupuestosModal({
             placeholder="Buscar por cliente, idCliente, trámite o ID..."
             value={q}
             onChange={(e) => setQ(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") searchNow();
+            }}
           />
           <button
             type="button"
             className="pres-btn"
-            onClick={() => {
-              setPage(1);
-              fetchData();
-            }}
+            onClick={searchNow}
             disabled={loading}
           >
             {loading ? "Buscando..." : "Buscar"}

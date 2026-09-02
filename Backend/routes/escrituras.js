@@ -12,8 +12,11 @@ const xlsx = require('xlsx');
 const Escritura = require('../models/Escritura');
 const Presupuesto = require('../models/Presupuesto');
 const Recibo = require('../models/Recibo');
+const EscrituraConfig = require('../models/EscrituraConfig');
 
 const ReciboLink = require('../models/ReciboLink');
+
+const auth = require('../middleware/auth');
 
 // (Opcional) si tienes modelo Cliente; si no, no pasa nada
 let Cliente = null;
@@ -104,6 +107,73 @@ function getUserRolesFromReq(req) {
 function escapeRegex(text) {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
+
+/* ---------------------------------------------------------------------- */
+/* Candado de "solo lectura": ADMIN puede deshabilitar la toma/edición de  */
+/* escrituras mientras se autorizan casos especiales. Deshabilitado       */
+/* bloquea a TODOS, incluido ADMIN — la única acción que sigue viva es    */
+/* volver a habilitarlo.                                                  */
+/* ---------------------------------------------------------------------- */
+async function getEscrituraConfig() {
+  const cfg = await EscrituraConfig.findById('singleton').lean();
+  return { habilitado: cfg ? cfg.habilitado !== false : true };
+}
+
+async function bloquearSiDeshabilitado(req, res, next) {
+  try {
+    const { habilitado } = await getEscrituraConfig();
+    if (!habilitado) {
+      return res.status(423).json({
+        mensaje: 'Escrituras está deshabilitado temporalmente por administración. El sistema está en modo solo lectura.',
+      });
+    }
+    next();
+  } catch (err) {
+    console.error('ESCRITURAS CANDADO ERROR:', err);
+    next(); // un error de infraestructura aquí no debe tumbar la escritura
+  }
+}
+
+router.get('/config', async (req, res) => {
+  try {
+    const data = await getEscrituraConfig();
+    res.json({ ok: true, data });
+  } catch (err) {
+    console.error('ESCRITURAS CONFIG GET ERROR:', err);
+    res.status(500).json({ ok: false, mensaje: 'Error obteniendo configuración' });
+  }
+});
+
+router.patch('/config', auth, async (req, res) => {
+  try {
+    const role = String(req.user?.role || req.user?.rol || '').toUpperCase();
+    if (role !== 'ADMIN') {
+      return res.status(403).json({ ok: false, mensaje: 'Solo un administrador puede modificar la configuración de Escrituras' });
+    }
+
+    if (typeof req.body?.habilitado !== 'boolean') {
+      return res.status(400).json({ ok: false, mensaje: 'Falta el campo habilitado (boolean)' });
+    }
+
+    const cfg = await EscrituraConfig.findByIdAndUpdate(
+      'singleton',
+      {
+        habilitado: req.body.habilitado,
+        actualizadoPorId: req.user?.id != null ? Number(req.user.id) : null,
+        actualizadoPorNombre: req.user?.nombre || '',
+      },
+      { upsert: true, new: true }
+    ).lean();
+
+    const data = { habilitado: cfg.habilitado !== false };
+    req.app.get('io')?.emit('escrituras:config', data);
+
+    res.json({ ok: true, data });
+  } catch (err) {
+    console.error('ESCRITURAS CONFIG PATCH ERROR:', err);
+    res.status(500).json({ ok: false, mensaje: 'Error actualizando configuración' });
+  }
+});
 
 /**
  * Cuenta cuántas escrituras sin recibo / justificante tiene
@@ -1169,7 +1239,7 @@ summary.porAbogado.forEach(item => {
 
 
 // POST /escrituras/import
-router.post('/import', upload.single('file'), async (req, res) => {
+router.post('/import', upload.single('file'), bloquearSiDeshabilitado, async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ mensaje: 'Sube un archivo .xlsx o .csv' });
 
@@ -1275,7 +1345,7 @@ router.get('/folio/next', async (req, res) => {
 });
 
 // POST /escrituras
-router.post('/', async (req, res) => {
+router.post('/', bloquearSiDeshabilitado, async (req, res) => {
   let base = null;
   try {
     // 🔐 Candado: máximo 5 escrituras sin recibo por abogado
@@ -1643,7 +1713,7 @@ router.get('/:id', async (req, res) => {
 });
 
 // PUT /escrituras/:id
-router.put('/:id', async (req, res) => {
+router.put('/:id', bloquearSiDeshabilitado, async (req, res) => {
   try {
     const MAX_FOLIOS_POR_VOLUMEN = 300;
 
@@ -2045,7 +2115,7 @@ console.log('PUT merged.fecha:', merged.fecha);
 });
 
 // DELETE /escrituras/:id
-router.delete('/:id', async (req, res) => {
+router.delete('/:id', bloquearSiDeshabilitado, async (req, res) => {
   try {
     const it = await Escritura.findById(req.params.id);
     if (!it) return res.status(404).json({ mensaje: 'No encontrado' });
@@ -2093,7 +2163,7 @@ router.get('/:id/entrega-info', async (req, res) => {
 
 
 // POST /escrituras/:id/entregar
-router.post('/:id/entregar', async (req, res) => {
+router.post('/:id/entregar', bloquearSiDeshabilitado, async (req, res) => {
   try {
     const { telefono, notas } = req.body || {};
     const it = await Escritura.findById(req.params.id);
@@ -2115,7 +2185,7 @@ router.post('/:id/entregar', async (req, res) => {
 });
 
 // POST /escrituras/:id/justificante
-router.post('/:id/justificante', async (req, res) => {
+router.post('/:id/justificante', bloquearSiDeshabilitado, async (req, res) => {
   try {
     const { motivo } = req.body || {};
     if (!motivo || !motivo.trim()) return res.status(400).json({ mensaje: 'Motivo requerido' });

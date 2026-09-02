@@ -795,8 +795,9 @@ router.post('/import', upload.single('file'), bloquearSiDeshabilitado, async (re
 // GET /protocolito/export?format=excel|pdf&from=YYYY-MM-DD&to=YYYY-MM-DD&cliente=...&abogado=...
 // routes/protocolitos.js
 // GET /protocolito/export?format=excel|pdf&from=YYYY-MM-DD&to=YYYY-MM-DD&cliente=...&abogado=...
-router.get('/export', async (req, res) => {
+router.get('/export', auth, async (req, res) => {
   try {
+    const isAdmin = String(req.user?.role || req.user?.rol || '').toUpperCase() === 'ADMIN';
     // deps locales para no tocar el resto del archivo
     const PDFDocument = require('pdfkit');
     const dayjs = require('dayjs');
@@ -1208,8 +1209,10 @@ router.get('/export', async (req, res) => {
       let y = drawTableHeader(headerBottomY);
       rows.forEach(r => { y = drawRow(y, r); });
 
-      // resumen al final, con tabla + dinero
-      y = drawResumenContabilidad(y + 8);
+      // resumen al final, con tabla + dinero — solo visible para ADMIN
+      if (isAdmin) {
+        y = drawResumenContabilidad(y + 8);
+      }
 
       doc.end();
       return;
@@ -1226,12 +1229,14 @@ router.get('/export', async (req, res) => {
     const ws = XLSX.utils.aoa_to_sheet(aoa);
     XLSX.utils.book_append_sheet(wb, ws, 'Protocolito');
 
-    // Hoja 2: resumen contable
-    const ws2 = XLSX.utils.aoa_to_sheet([
-      ['Abogado', '# Trámites', 'Total Recibos'],
-      ...tablaResumen.map(r => [r.abogado, r.tramites, Number(r.total || 0)]),
-    ]);
-    XLSX.utils.book_append_sheet(wb, ws2, 'Resumen');
+    // Hoja 2: resumen contable — solo visible para ADMIN
+    if (isAdmin) {
+      const ws2 = XLSX.utils.aoa_to_sheet([
+        ['Abogado', '# Trámites', 'Total Recibos'],
+        ...tablaResumen.map(r => [r.abogado, r.tramites, Number(r.total || 0)]),
+      ]);
+      XLSX.utils.book_append_sheet(wb, ws2, 'Resumen');
+    }
 
     const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');

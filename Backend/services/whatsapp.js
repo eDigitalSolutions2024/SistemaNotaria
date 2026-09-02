@@ -70,8 +70,56 @@ async function sendDocumentById({ to, mediaId, filename = "presupuesto.pdf", cap
   return res.data;
 }
 
+// ✅ 3) Enviar documento vía plantilla aprobada (obligatorio para mensajes
+// que inicia el negocio, fuera de la ventana de 24h de sesión con el cliente)
+async function sendDocumentTemplate({ to, mediaId, filename = "documento.pdf", bodyParams = [] }) {
+  const phoneNumberId = process.env.WA_PHONE_NUMBER_ID;
+  const token = process.env.WA_ACCESS_TOKEN;
+  const templateName = process.env.WA_TEMPLATE_NAME;
+  const templateLang = process.env.WA_TEMPLATE_LANG || "es_MX";
+
+  if (!phoneNumberId || !token) throw new Error("WA_CONFIG_MISSING");
+  if (!templateName) throw new Error("WA_TEMPLATE_NAME_MISSING");
+  if (!to) throw new Error("WA_TO_MISSING");
+  if (!mediaId) throw new Error("WA_MEDIA_ID_MISSING");
+
+  const url = `${GRAPH}/${phoneNumberId}/messages`;
+
+  const components = [
+    {
+      type: "header",
+      parameters: [{ type: "document", document: { id: mediaId, filename } }],
+    },
+  ];
+
+  if (bodyParams.length) {
+    components.push({
+      type: "body",
+      parameters: bodyParams.map((text) => ({ type: "text", text: String(text) })),
+    });
+  }
+
+  const payload = {
+    messaging_product: "whatsapp",
+    to: cleanPhone(to),
+    type: "template",
+    template: {
+      name: templateName,
+      language: { code: templateLang },
+      components,
+    },
+  };
+
+  const res = await axios.post(url, payload, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+
+  return res.data;
+}
+
 module.exports = {
   cleanPhone,
   uploadMediaFromUrl,
   sendDocumentById,
+  sendDocumentTemplate,
 };

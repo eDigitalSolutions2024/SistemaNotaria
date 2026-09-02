@@ -1265,6 +1265,51 @@ const openPresupuestoPicker = async (target) => {
     return () => socket.disconnect();
   }, []);
 
+  // Candado de solo lectura: solo ADMIN lo puede cambiar; cuando está
+  // deshabilitado, TODOS quedan en modo lectura (incluido ADMIN).
+  const [escriturasHabilitado, setEscriturasHabilitado] = useState(true);
+  const [togglingCandado, setTogglingCandado] = useState(false);
+  const soloLectura = !escriturasHabilitado;
+
+  const fetchCandado = async () => {
+    try {
+      const { data } = await axios.get(`${API}/escrituras/config`);
+      if (data?.ok) setEscriturasHabilitado(data.data.habilitado !== false);
+    } catch {
+      // silencioso: si falla, se asume habilitado (no se bloquea por error de red)
+    }
+  };
+
+  useEffect(() => {
+    fetchCandado();
+    const socket = io(SOCKET_ORIGIN, { path: '/socket.io' });
+    socket.on('escrituras:config', (data) => setEscriturasHabilitado(data.habilitado !== false));
+    return () => socket.disconnect();
+  }, []);
+
+  const toggleCandado = async () => {
+    setTogglingCandado(true);
+    try {
+      const { data } = await axios.patch(`${API}/escrituras/config`, { habilitado: !escriturasHabilitado });
+      if (data?.ok) setEscriturasHabilitado(data.data.habilitado !== false);
+    } catch (err) {
+      setMsg({ type: 'error', text: err?.response?.data?.mensaje || 'No se pudo cambiar el candado de Escrituras' });
+    } finally {
+      setTogglingCandado(false);
+    }
+  };
+
+  // Guardia común para toda acción que escribe: si está en solo lectura,
+  // avisa y corta antes de siquiera llamar al backend (que de todos modos
+  // lo rechazaría con 423).
+  const bloqueadoPorSoloLectura = () => {
+    if (soloLectura) {
+      setMsg({ type: 'warn', text: 'Escrituras está deshabilitado temporalmente por administración (modo solo lectura).' });
+      return true;
+    }
+    return false;
+  };
+
   const fetchData = async () => {
     setLoading(true);
     try {
@@ -1283,6 +1328,7 @@ const openPresupuestoPicker = async (target) => {
 
   // acciones
   const onEdit = (row) => {
+    if (bloqueadoPorSoloLectura()) return;
     setEditingId(row._id);
     setDrafts(prev => ({
       ...prev,
@@ -1346,6 +1392,8 @@ const openPresupuestoPicker = async (target) => {
 
   const onSaveNew = async () => {
   // 1) Validación central (obligatorios + folios + testamento HH:mm + montos si aplica)
+
+    if (bloqueadoPorSoloLectura()) return;
 
     if (!canTakeEscritura) {
   return setMsg({
@@ -1526,6 +1574,7 @@ if (isTramiteConMontos(newRow?.tipoTramite) && !newRow?.presupuestoId) {
 
 
 const onSaveEdit = async (id) => {
+  if (bloqueadoPorSoloLectura()) return;
   const draft = drafts[id] || {};
 
   // ---------- helpers locales ----------
@@ -1693,6 +1742,7 @@ const onSaveEdit = async (id) => {
 
 
   const onDelete = async (id) => {
+    if (bloqueadoPorSoloLectura()) return;
     if (!window.confirm('¿Eliminar esta escritura?')) return;
     try {
       await axios.delete(`${API}/escrituras/${id}`);
@@ -1704,6 +1754,7 @@ const onSaveEdit = async (id) => {
   };
 
     const startAdd = async () => {
+  if (bloqueadoPorSoloLectura()) return;
   if (!canTakeEscritura) {
     setMsg({
       type: 'warn',
@@ -1757,6 +1808,10 @@ const onSaveEdit = async (id) => {
   const handleSelectFile = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    if (bloqueadoPorSoloLectura()) {
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      return;
+    }
     setImporting(true);
     setMsg(null);
     try {
@@ -1806,6 +1861,7 @@ const onSaveEdit = async (id) => {
 
   const confirmDeliver = async () => {
     if (!deliverRow?._id) return;
+    if (bloqueadoPorSoloLectura()) return;
     setDeliverLoading(true);
     try {
       await axios.post(`${API}/escrituras/${deliverRow._id}/entregar`, {
@@ -2282,13 +2338,40 @@ const onSaveEdit = async (id) => {
         </div>
       )}
 
+      {soloLectura && (
+        <div className="escritura-candado-banner">
+          <span className="escritura-candado-icono">🔒</span>
+          <span>
+            Escrituras está <strong>deshabilitado</strong> por administración — modo solo lectura. Nadie puede
+            tomar, editar ni entregar escrituras hasta que un administrador lo vuelva a habilitar.
+          </span>
+        </div>
+      )}
+
+      {isAdmin && (
+        <div className="escritura-candado-admin">
+          <span>
+            Estado del módulo: <strong>{escriturasHabilitado ? 'Habilitado' : 'Deshabilitado'}</strong>
+          </span>
+          <button
+            className={`escritura-candado-btn ${escriturasHabilitado ? 'apagar' : 'encender'}`}
+            onClick={toggleCandado}
+            disabled={togglingCandado}
+          >
+            {togglingCandado
+              ? 'Actualizando…'
+              : escriturasHabilitado ? '🔒 Deshabilitar Escrituras' : '🔓 Habilitar Escrituras'}
+          </button>
+        </div>
+      )}
+
       {/* Barra de acciones */}
       <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
         {canTakeEscritura && (
   <button
     className="btn btn-primary"
     onClick={startAdd}
-    disabled={adding || editingId || bloqueoPorRecibo}
+    disabled={adding || editingId || bloqueoPorRecibo || soloLectura}
   >
     + Agregar escritura
   </button>
@@ -2317,7 +2400,7 @@ const onSaveEdit = async (id) => {
               <button
                 className="btn btn-primary btn-excel"
                 onClick={() => fileInputRef.current?.click()}
-                disabled={importing}
+                disabled={importing || soloLectura}
               >
                 {importing ? 'Importando…' : 'Importar Excel'}
               </button>
@@ -2884,7 +2967,7 @@ if (sugerido != null) {
         </DialogContent>
         <DialogActions>
           <Button onClick={closeDeliver}>Cancelar</Button>
-          <Button variant="contained" onClick={confirmDeliver} disabled={deliverLoading}>
+          <Button variant="contained" onClick={confirmDeliver} disabled={deliverLoading || soloLectura}>
             {deliverLoading ? 'Entregando…' : 'Entregar'}
           </Button>
         </DialogActions>
@@ -3001,6 +3084,7 @@ if (sugerido != null) {
           <Button
             variant="contained"
             onClick={async () => {
+              if (bloqueadoPorSoloLectura()) return;
               try {
                 await axios.post(`${API}/escrituras/${missingRow._id}/justificante`, { motivo: justifyText });
                 setJustifyOpen(false);
@@ -3012,7 +3096,7 @@ if (sugerido != null) {
                 setMsg({ type: 'error', text: e?.response?.data?.mensaje || 'No se pudo guardar el justificante' });
               }
             }}
-            disabled={!justifyText?.trim()}
+            disabled={!justifyText?.trim() || soloLectura}
           >
             Guardar justificante
           </Button>

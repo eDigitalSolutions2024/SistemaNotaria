@@ -502,19 +502,36 @@ const canJustifyRecibos =
   }, [visibleRows]);
 
   // Data inicial
-  const buildExportUrl = (format) => {
-    const url = new URL(`${API}/protocolito/export`);
-    url.searchParams.set('format', format);
-    if (filtroFrom) url.searchParams.set('from', filtroFrom);
-    if (filtroTo) url.searchParams.set('to', filtroTo);
-    if (filtroCliente) url.searchParams.set('cliente', filtroCliente);
-    if (filtroAbogado) url.searchParams.set('abogado', filtroAbogado);
-    return url.toString();
-  };
+  const handleExport = async (format) => {
+    try {
+      const params = { format };
+      if (filtroFrom) params.from = filtroFrom;
+      if (filtroTo) params.to = filtroTo;
+      if (filtroCliente) params.cliente = filtroCliente;
+      if (filtroAbogado) params.abogado = filtroAbogado;
 
-  const handleExport = (format) => {
-    const href = buildExportUrl(format);
-    window.open(href, '_blank');
+      const res = await axios.get(`${API}/protocolito/export`, {
+        params,
+        responseType: 'blob',
+      });
+
+      const isPdf = format === 'pdf';
+      const blob = new Blob([res.data], {
+        type: isPdf
+          ? 'application/pdf'
+          : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      });
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `protocolito_${Date.now()}.${isPdf ? 'pdf' : 'xlsx'}`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Error al exportar reporte de Protocolito:', err);
+    }
   };
 
   useEffect(() => {
