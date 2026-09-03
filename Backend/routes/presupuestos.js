@@ -7,8 +7,16 @@ const axios = require("axios");
 const { uploadMediaFromUrl, sendDocumentTemplate } = require("../services/whatsapp");
 
 const Presupuesto = require('../models/Presupuesto');
+const PresupuestoVersion = require('../models/PresupuestoVersion');
 const Cliente = require('../models/Cliente');
+const Abogado = require('../models/Abogado');
 const PDFDocument = require('pdfkit');
+const { validateRealClientName } = require('../utils/clientNameValidation');
+const auth = require('../middleware/auth');
+
+function getRole(req) {
+  return String(req.user?.role || req.user?.rol || '').toUpperCase();
+}
 
 function stripAccents(s = '') {
   return String(s).normalize('NFD').replace(/[̀-ͯ]/g, '');
@@ -54,17 +62,11 @@ const findLogoPath = () => {
   return null;
 };
 
-router.get('/:id/pdf', async (req, res) => {
-  try {
-    const presupuesto = await Presupuesto.findById(req.params.id).populate(
-      'cliente',
-      'nombre idCliente rfc RFC rSocial'
-    );
-
-    if (!presupuesto) {
-      return res.status(404).json({ message: 'Presupuesto no encontrado' });
-    }
-
+// Dibuja el PDF de un presupuesto (objeto con forma de Presupuesto: cliente
+// poblado {nombre}, cargos, honorariosCalc, totalPresupuesto, etc). Se separó
+// del handler de /:id/pdf para poder reusarlo al ver una versión histórica
+// (PresupuestoVersion.versionAnterior/versionNueva) con el mismo layout.
+function renderPresupuestoPDF(res, presupuesto) {
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `inline; filename=presupuesto_${presupuesto._id}.pdf`);
 
@@ -368,13 +370,27 @@ const fitOneLine = (doc, text, maxW) => {
     });
 
     doc.end();
+}
+
+router.get('/:id/pdf', async (req, res) => {
+  try {
+    const presupuesto = await Presupuesto.findById(req.params.id).populate(
+      'cliente',
+      'nombre idCliente rfc RFC rSocial'
+    );
+
+    if (!presupuesto) {
+      return res.status(404).json({ message: 'Presupuesto no encontrado' });
+    }
+
+    renderPresupuestoPDF(res, presupuesto);
   } catch (err) {
     console.error('Error PDF presupuesto:', err);
     res.status(500).json({ message: 'Error al generar PDF', error: err.message });
   }
 });
 
-router.post("/", async (req, res) => {
+router.post("/", auth, async (req, res) => {
   try {
     // ✅ NO confiar en responsable del body si puedes evitarlo.
     // Si tienes auth middleware y viene req.user, úsalo.
@@ -401,6 +417,21 @@ router.post("/", async (req, res) => {
     // ✅ LÍMITE POR NOMBRE: buscar todos los IDs de clientes con el mismo nombre
     // (cubre el bypass de crear duplicados del mismo cliente)
     const clienteDoc = await Cliente.findById(clienteId).lean();
+    if (!clienteDoc) {
+      return res.status(404).json({ message: "Cliente no encontrado." });
+    }
+
+    // 🔒 Mismo candado de nombre que /api/clientes: por si el cliente elegido
+    // es un registro viejo (previo a este candado) que el selector no filtró,
+    // o si esta ruta se llama directo sin pasar por el frontend.
+    const vName = await validateRealClientName(clienteDoc.nombre || '');
+    if (!vName.ok) {
+      return res.status(400).json({
+        message: `Este cliente tiene un nombre no válido ("${clienteDoc.nombre}"). Registra un cliente nuevo con su nombre real antes de crear el presupuesto.`,
+        code: 'CLIENTE_NOMBRE_INVALIDO',
+      });
+    }
+
     const nombreCliente = clienteDoc?.nombre || '';
     const nombreStripped = stripAccents(nombreCliente).toLowerCase().replace(/\s+/g, ' ').trim();
 
@@ -625,23 +656,154 @@ router.get('/:id', async (req, res) => {
   }
 });
 
-// Actualizar
-router.put('/:id', async (req, res) => {
+// 🔒 Actualizar — solo ADMIN, con motivo obligatorio y versión anterior/nueva
+// guardada en PresupuestoVersion (bitácora inmutable, nunca se toca desde aquí).
+router.put('/:id', auth, async (req, res) => {
   try {
-    const presupuesto = await Presupuesto.findByIdAndUpdate(req.params.id, req.body, { new: true });
-    if (!presupuesto) return res.status(404).json({ message: 'Presupuesto no encontrado' });
-    res.json(presupuesto);
+    if (getRole(req) !== 'ADMIN') {
+      return res.status(403).json({ message: 'Solo un administrador puede modificar un presupuesto ya creado.' });
+    }
+
+    const { motivo, abogadoSolicitanteId, ...cambios } = req.body || {};
+    if (!motivo || !String(motivo).trim()) {
+      return res.status(400).json({ message: 'Debes indicar el motivo de la modificación.' });
+    }
+
+    // El ADMIN ejecuta el cambio, pero la petición casi siempre viene de un
+    // abogado — se exige y se resuelve el nombre real desde el catálogo
+    // (nunca se confía en un nombre suelto que mande el body).
+    if (abogadoSolicitanteId == null || abogadoSolicitanteId === '') {
+      return res.status(400).json({ message: 'Indica qué abogado solicitó esta modificación.' });
+    }
+    const solicitante = await Abogado.findById(Number(abogadoSolicitanteId)).select('nombre').lean();
+    if (!solicitante) {
+      return res.status(400).json({ message: 'El abogado solicitante no es válido.' });
+    }
+
+    // Un presupuesto ya usado en una Escritura no debería moverse por esta
+    // vía a la ligera: el monto ya quedó comprometido en el trámite.
+    const presupuestoAnterior = await Presupuesto.findById(req.params.id).lean();
+    if (!presupuestoAnterior) {
+      return res.status(404).json({ message: 'Presupuesto no encontrado' });
+    }
+
+    // No permitir tocar el vínculo con la Escritura por esta vía (eso es
+    // responsabilidad del flujo de Escrituras, no de una edición manual).
+    delete cambios.usadoEnEscritura;
+    delete cambios.escrituraId;
+    delete cambios.fechaUsoEscritura;
+    delete cambios._id;
+
+    const presupuestoActualizado = await Presupuesto.findByIdAndUpdate(
+      req.params.id,
+      cambios,
+      { new: true, runValidators: true }
+    );
+
+    await PresupuestoVersion.create({
+      presupuestoId: presupuestoActualizado._id,
+      versionAnterior: presupuestoAnterior,
+      versionNueva: presupuestoActualizado.toObject(),
+      motivo: String(motivo).trim(),
+      modificadoPorId: req.user?.id != null ? Number(req.user.id) : null,
+      modificadoPorNombre: req.user?.nombre || req.user?.name || req.user?.username || '',
+      solicitanteId: Number(abogadoSolicitanteId),
+      solicitanteNombre: solicitante.nombre || '',
+    });
+
+    res.json(presupuestoActualizado);
   } catch (err) {
     console.error('Error al actualizar presupuesto:', err);
     res.status(500).json({ message: 'Error al actualizar presupuesto', error: err.message });
   }
 });
 
-// Eliminar
-router.delete('/:id', async (req, res) => {
+// 📜 Historial de versiones de un presupuesto (más reciente primero) —
+// cualquier usuario logueado puede consultarlo (mismo criterio que "Ver
+// PDF", que hoy ya es visible para todos); solo ADMIN puede modificar.
+router.get('/:id/versiones', auth, async (req, res) => {
   try {
-    const presupuesto = await Presupuesto.findByIdAndDelete(req.params.id);
+    const versiones = await PresupuestoVersion.find({ presupuestoId: req.params.id })
+      .sort({ createdAt: -1 })
+      .lean();
+
+    res.json({ data: versiones });
+  } catch (err) {
+    console.error('Error al obtener historial de presupuesto:', err);
+    res.status(500).json({ message: 'Error al obtener historial', error: err.message });
+  }
+});
+
+// 📄 PDF de una versión histórica (antes o después de una edición puntual).
+// Sin auth — mismo criterio que /:id/pdf: se abre con window.open() y el
+// ID de Mongo (impredecible) es la única protección, igual que hoy.
+router.get('/:id/versiones/:versionId/pdf', async (req, res) => {
+  try {
+    const version = await PresupuestoVersion.findOne({
+      _id: req.params.versionId,
+      presupuestoId: req.params.id,
+    }).lean();
+
+    if (!version) {
+      return res.status(404).json({ message: 'Versión no encontrada' });
+    }
+
+    const campo = req.query.tipo === 'nueva' ? 'versionNueva' : 'versionAnterior';
+    const snap = version[campo];
+    if (!snap) {
+      return res.status(404).json({ message: 'Esa versión no tiene datos para mostrar (fue una eliminación).' });
+    }
+
+    const clienteDoc = snap.cliente != null
+      ? await Cliente.findById(snap.cliente).select('nombre idCliente').lean()
+      : null;
+
+    renderPresupuestoPDF(res, {
+      ...snap,
+      cliente: clienteDoc || { nombre: '(cliente no disponible)' },
+    });
+  } catch (err) {
+    console.error('Error PDF versión de presupuesto:', err);
+    res.status(500).json({ message: 'Error al generar PDF de la versión', error: err.message });
+  }
+});
+
+// 🔒 Eliminar — solo ADMIN, con motivo obligatorio; queda registrado en
+// PresupuestoVersion (versionNueva: null) antes de borrar, para no perder
+// el rastro de qué había y quién lo borró.
+router.delete('/:id', auth, async (req, res) => {
+  try {
+    if (getRole(req) !== 'ADMIN') {
+      return res.status(403).json({ message: 'Solo un administrador puede eliminar un presupuesto.' });
+    }
+
+    const { motivo, abogadoSolicitanteId } = req.body || {};
+    if (!motivo || !String(motivo).trim()) {
+      return res.status(400).json({ message: 'Debes indicar el motivo de la eliminación.' });
+    }
+    if (abogadoSolicitanteId == null || abogadoSolicitanteId === '') {
+      return res.status(400).json({ message: 'Indica qué abogado solicitó esta eliminación.' });
+    }
+    const solicitante = await Abogado.findById(Number(abogadoSolicitanteId)).select('nombre').lean();
+    if (!solicitante) {
+      return res.status(400).json({ message: 'El abogado solicitante no es válido.' });
+    }
+
+    const presupuesto = await Presupuesto.findById(req.params.id).lean();
     if (!presupuesto) return res.status(404).json({ message: 'Presupuesto no encontrado' });
+
+    await PresupuestoVersion.create({
+      presupuestoId: presupuesto._id,
+      versionAnterior: presupuesto,
+      versionNueva: null,
+      motivo: String(motivo).trim(),
+      modificadoPorId: req.user?.id != null ? Number(req.user.id) : null,
+      modificadoPorNombre: req.user?.nombre || req.user?.name || req.user?.username || '',
+      solicitanteId: Number(abogadoSolicitanteId),
+      solicitanteNombre: solicitante.nombre || '',
+    });
+
+    await Presupuesto.findByIdAndDelete(req.params.id);
     res.json({ message: 'Presupuesto eliminado correctamente' });
   } catch (err) {
     console.error('Error al eliminar presupuesto:', err);

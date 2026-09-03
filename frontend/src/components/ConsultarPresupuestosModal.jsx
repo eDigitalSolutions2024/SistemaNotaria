@@ -6,6 +6,7 @@ export default function ConsultarPresupuestosModal({
   api,
   clienteIdNumber, // si tu backend filtra por idCliente numérico
   onPick,
+  isAdmin = false, // "Cargar" (= editar) solo lo puede hacer un administrador
 }) {
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
@@ -19,6 +20,11 @@ export default function ConsultarPresupuestosModal({
   const [pwd, setPwd] = useState("");
   const [pwdErr, setPwdErr] = useState("");
   const [pendingPick, setPendingPick] = useState(null);
+
+  // Historial de versiones (solo aparece si el presupuesto ya fue editado)
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyPresupuesto, setHistoryPresupuesto] = useState(null);
+  const [historyItems, setHistoryItems] = useState([]);
 
   const limit = 15;
   const baseURL = useMemo(() => api.defaults.baseURL.replace(/\/$/, ""), [api.defaults.baseURL]);
@@ -97,6 +103,26 @@ export default function ConsultarPresupuestosModal({
     setPendingPick(null);
   };
 
+  // "Ver PDF": si el presupuesto nunca se editó, abre el PDF directo (igual
+  // que siempre). Si tiene historial, muestra un modal para elegir cuál ver
+  // (actual, o cualquier versión anterior/posterior a una edición puntual).
+  const verPdf = async (p) => {
+    try {
+      const res = await api.get(`/presupuestos/${p._id}/versiones`);
+      const versiones = res.data?.data || [];
+      if (!versiones.length) {
+        window.open(`${baseURL}/presupuestos/${p._id}/pdf`, "_blank");
+        return;
+      }
+      setHistoryPresupuesto(p);
+      setHistoryItems(versiones);
+      setHistoryOpen(true);
+    } catch (e) {
+      console.error(e);
+      window.open(`${baseURL}/presupuestos/${p._id}/pdf`, "_blank");
+    }
+  };
+
   return (
     <div className="pres-modal-backdrop" onMouseDown={onClose}>
       <div className="pres-modal" onMouseDown={(e) => e.stopPropagation()}>
@@ -164,20 +190,22 @@ export default function ConsultarPresupuestosModal({
                       <button
                         type="button"
                         className="pres-btn"
-                        onClick={() => window.open(`${baseURL}/presupuestos/${p._id}/pdf`, "_blank")}
+                        onClick={() => verPdf(p)}
                       >
                         Ver PDF
                       </button>
 
-                      <button
-                        type="button"
-                        className="pres-btn-primary"
-                        onClick={() => openPasswordPrompt(p)}
-                        style={{ marginLeft: 8 }}
-                        title="Cargar al formulario (requiere contraseña)"
-                      >
-                        Cargar
-                      </button>
+                      {isAdmin && (
+                        <button
+                          type="button"
+                          className="pres-btn-primary"
+                          onClick={() => openPasswordPrompt(p)}
+                          style={{ marginLeft: 8 }}
+                          title="Editar este presupuesto (requiere contraseña)"
+                        >
+                          Cargar
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ))
@@ -267,6 +295,108 @@ export default function ConsultarPresupuestosModal({
                     Confirmar
                   </button>
                 </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* 📜 Historial de versiones — solo aparece si el presupuesto ya se editó */}
+        {historyOpen && (
+          <div
+            className="pres-modal-backdrop"
+            onMouseDown={() => setHistoryOpen(false)}
+            style={{ zIndex: 10000 }}
+          >
+            <div
+              className="pres-modal"
+              onMouseDown={(e) => e.stopPropagation()}
+              style={{ width: "min(680px, 95vw)" }}
+            >
+              <div className="pres-modal-header">
+                <h3>Historial de cambios</h3>
+                <button type="button" className="pres-btn" onClick={() => setHistoryOpen(false)}>
+                  Cerrar
+                </button>
+              </div>
+
+              <div style={{ padding: 12, maxHeight: "70vh", overflowY: "auto" }}>
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    padding: "10px 12px",
+                    border: "1px solid #ddd",
+                    borderRadius: 8,
+                    marginBottom: 10,
+                  }}
+                >
+                  <span><b>Versión actual</b></span>
+                  <button
+                    type="button"
+                    className="pres-btn"
+                    onClick={() =>
+                      window.open(`${baseURL}/presupuestos/${historyPresupuesto._id}/pdf`, "_blank")
+                    }
+                  >
+                    Ver PDF
+                  </button>
+                </div>
+
+                {historyItems.map((v) => (
+                  <div
+                    key={v._id}
+                    style={{
+                      padding: "10px 12px",
+                      border: "1px solid #eee",
+                      borderRadius: 8,
+                      marginBottom: 8,
+                    }}
+                  >
+                    <div style={{ fontSize: 13, color: "#555", marginBottom: 4 }}>
+                      {new Date(v.fecha || v.createdAt).toLocaleString("es-MX")}
+                    </div>
+                    <div style={{ marginBottom: 4 }}>
+                      <b>Motivo:</b> {v.motivo || "-"}
+                    </div>
+                    <div style={{ fontSize: 13, color: "#555", marginBottom: 8 }}>
+                      Solicitado por: <b>{v.solicitanteNombre || "-"}</b> · Modificado por:{" "}
+                      <b>{v.modificadoPorNombre || "-"}</b>
+                    </div>
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <button
+                        type="button"
+                        className="pres-btn"
+                        onClick={() =>
+                          window.open(
+                            `${baseURL}/presupuestos/${historyPresupuesto._id}/versiones/${v._id}/pdf?tipo=anterior`,
+                            "_blank"
+                          )
+                        }
+                      >
+                        Ver antes
+                      </button>
+                      {v.versionNueva ? (
+                        <button
+                          type="button"
+                          className="pres-btn"
+                          onClick={() =>
+                            window.open(
+                              `${baseURL}/presupuestos/${historyPresupuesto._id}/versiones/${v._id}/pdf?tipo=nueva`,
+                              "_blank"
+                            )
+                          }
+                        >
+                          Ver después
+                        </button>
+                      ) : (
+                        <span style={{ fontSize: 13, color: "#a00", alignSelf: "center" }}>
+                          Eliminado
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
           </div>

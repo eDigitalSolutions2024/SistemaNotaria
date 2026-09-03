@@ -10,6 +10,15 @@ const api = axios.create({
   withCredentials: true,
 });
 
+// Esta instancia es propia (axios.create), no hereda el header Authorization
+// que AuthContext pone en el axios global — hay que adjuntarlo aquí también,
+// si no, el backend nunca ve quién eres (req.user queda undefined).
+api.interceptors.request.use((config) => {
+  const token = localStorage.getItem('token');
+  if (token) config.headers.Authorization = `Bearer ${token}`;
+  return config;
+});
+
 const REGISTRO_PUBLICO_TABLAS = {
   2026: [
     { min: 0, max: 100001, fee: 3127 },
@@ -90,7 +99,8 @@ const initialForm = {
 };
 
 export default function Presupuesto() {
-  const { user } = useAuth();
+  const { user, role } = useAuth();
+  const isAdmin = String(role || '').toUpperCase() === 'ADMIN';
 
   const getUserName = (u) =>
     (u?.nombre || u?.name || u?.fullName || u?.username || '').trim();
@@ -106,6 +116,31 @@ export default function Presupuesto() {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [openConsulta, setOpenConsulta] = useState(false);
+
+  // Modo edición: cuando trae un valor, "Guardar" ya no crea un presupuesto
+  // nuevo — actualiza este mismo (PUT), previo motivo obligatorio.
+  const [editingId, setEditingId] = useState(null);
+  const [motivoModalOpen, setMotivoModalOpen] = useState(false);
+  const [motivoTexto, setMotivoTexto] = useState('');
+  const [solicitanteId, setSolicitanteId] = useState('');
+  const [pendingEditBody, setPendingEditBody] = useState(null);
+  const [savingMotivo, setSavingMotivo] = useState(false);
+  const [motivoError, setMotivoError] = useState('');
+
+  // Abogados para "¿quién pidió este cambio?" — el ADMIN ejecuta la edición,
+  // pero la petición casi siempre viene de un abogado; se registra aparte.
+  const [abogadosList, setAbogadosList] = useState([]);
+  useEffect(() => {
+    api.get('/recibos/abogados')
+      .then((res) => setAbogadosList(res.data?.data || []))
+      .catch((err) => console.error('Error al cargar abogados:', err));
+  }, []);
+
+  const cancelarEdicion = () => {
+    setEditingId(null);
+    setSolicitanteId('');
+    setForm({ ...initialForm, responsable: getUserName(user) || '' });
+  };
 
   const [openClienteExpress, setOpenClienteExpress] = useState(false);
 const [clienteExpressNombre, setClienteExpressNombre] = useState('');
@@ -316,8 +351,10 @@ useEffect(() => {
     };
   }, [form.valorOperacion, form.valorTerreno, form.valorConstruccion]);
 
-  // Traslación dominio (auto)
+  // Traslación dominio (auto) — en modo edición se captura a mano, no se
+  // recalcula (si no, cualquier corrección manual se pisaría solita).
   useEffect(() => {
+  if (editingId) return;
   if (!datosCalculo.puedeContinuar) return;
 
   const valorOperacion = parseNum(form.valorOperacion);
@@ -345,12 +382,13 @@ useEffect(() => {
     ...prev,
     cargos: { ...prev.cargos, traslacionDominio: round2(total) },
   }));
-}, [datosCalculo.puedeContinuar, form.valorOperacion, form.tipoTramite]);
+}, [editingId, datosCalculo.puedeContinuar, form.valorOperacion, form.tipoTramite]);
 
 
 
-  // Registro público (auto)
+  // Registro público (auto) — igual, se congela en modo edición.
  useEffect(() => {
+  if (editingId) return;
   if (!datosCalculo.puedeContinuar) return;
 
   const tramite = form.tipoTramite?.value || 'Compraventa';
@@ -391,6 +429,7 @@ if (tramite === 'Garantia Hipotecaria') {
     cargos: { ...prev.cargos, registroPublico: fee },
   }));
 }, [
+  editingId,
   datosCalculo.puedeContinuar,
   form.valorOperacion,
   form.anioRegistro,
@@ -422,8 +461,9 @@ if (tramite === 'Garantia Hipotecaria') {
     }));
   }, [datosCalculo.puedeContinuar, form.valorOperacion, form.honorariosCalc.porcentaje]);
 
-  // Gastos y gestiones (auto)
+  // Gastos y gestiones (auto) — también se congela en modo edición.
   useEffect(() => {
+    if (editingId) return;
     if (!datosCalculo.puedeContinuar) return;
     const valorOperacion = parseNum(form.valorOperacion);
     let gastos = 0;
@@ -434,7 +474,7 @@ if (tramite === 'Garantia Hipotecaria') {
       ...prev,
       cargos: { ...prev.cargos, gastosGestiones: gastos },
     }));
-  }, [datosCalculo.puedeContinuar, form.valorOperacion]);
+  }, [editingId, datosCalculo.puedeContinuar, form.valorOperacion]);
 
   const bloquearAbajo = !datosCalculo.puedeContinuar;
 
@@ -511,6 +551,19 @@ const honorariosMinOk = useMemo(
       observaciones: form.observaciones || undefined,
     };
 
+    // 🔒 Modo edición: no se manda directo — primero se pide el motivo.
+    // No se incluye "responsable" para no pisar el nombre de quien lo creó
+    // originalmente; quién hizo ESTA modificación queda en PresupuestoVersion.
+    if (editingId) {
+      const { responsable, ...bodySinResponsable } = body;
+      setPendingEditBody(bodySinResponsable);
+      setMotivoTexto('');
+      setSolicitanteId('');
+      setMotivoError('');
+      setMotivoModalOpen(true);
+      return;
+    }
+
     try {
       setSaving(true);
       const res = await api.post('/presupuestos', body);
@@ -536,6 +589,47 @@ const honorariosMinOk = useMemo(
     }
   };
 
+  const confirmarEdicionConMotivo = async () => {
+    if (!motivoTexto.trim()) {
+      setMotivoError('Indica el motivo de la modificación.');
+      return;
+    }
+    if (!solicitanteId) {
+      setMotivoError('Indica qué abogado solicitó este cambio.');
+      return;
+    }
+    if (!editingId || !pendingEditBody) return;
+
+    try {
+      setSavingMotivo(true);
+      setMotivoError('');
+
+      const res = await api.put(`/presupuestos/${editingId}`, {
+        ...pendingEditBody,
+        motivo: motivoTexto.trim(),
+        abogadoSolicitanteId: solicitanteId,
+      });
+
+      setSuccess('Presupuesto actualizado correctamente');
+      setMotivoModalOpen(false);
+      setPendingEditBody(null);
+      setMotivoTexto('');
+      setSolicitanteId('');
+
+      const id = res.data?._id || editingId;
+      const base = api.defaults.baseURL.replace(/\/$/, '');
+      window.open(`${base}/presupuestos/${id}/pdf`, '_blank');
+
+      setEditingId(null);
+      setForm({ ...initialForm, responsable: getUserName(user) || '' });
+    } catch (err) {
+      console.error(err);
+      setMotivoError(err.response?.data?.message || 'Error al guardar los cambios');
+    } finally {
+      setSavingMotivo(false);
+    }
+  };
+
   return (
     <div className="pres-page">
 
@@ -543,10 +637,19 @@ const honorariosMinOk = useMemo(
       <div className="pres-header" style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 12 }}>
         <div>
           <h1>Presupuesto</h1>
-          <p>Calcula honorarios y cargos para el cliente seleccionado.</p>
+          <p>
+            {editingId
+              ? 'Editando un presupuesto existente — se guardará como nueva versión con motivo.'
+              : 'Calcula honorarios y cargos para el cliente seleccionado.'}
+          </p>
         </div>
 
         <div style={{ display: 'flex', gap: 10 }}>
+          {editingId && (
+            <button type="button" className="pres-btn" onClick={cancelarEdicion}>
+              Cancelar edición
+            </button>
+          )}
           <button
             type="button"
             className="pres-btn"
@@ -748,7 +851,7 @@ const honorariosMinOk = useMemo(
                   <label>{label}</label>
                   <input
                     disabled={bloquearAbajo}
-                    readOnly={isAuto}
+                    readOnly={isAuto && !editingId}
                     type="number"
                     step="0.01"
                     name={name}
@@ -783,7 +886,7 @@ const honorariosMinOk = useMemo(
                   <label>{label}</label>
                   <input
                     disabled={bloquearAbajo}
-                    readOnly={isAutoOtros}
+                    readOnly={isAutoOtros && !editingId}
                     type="number"
                     step="0.01"
                     name={name}
@@ -819,7 +922,7 @@ const honorariosMinOk = useMemo(
               className="pres-btn-primary"
               disabled={saving || bloquearAbajo || !honorariosMinOk}
             >
-              {saving ? 'Guardando…' : 'Guardar presupuesto'}
+              {saving ? 'Guardando…' : editingId ? 'Guardar cambios' : 'Guardar presupuesto'}
             </button>
 
           </div>
@@ -832,9 +935,24 @@ const honorariosMinOk = useMemo(
         onClose={() => setOpenConsulta(false)}
         api={api}
         clienteIdNumber={clienteIdNumber}
+        isAdmin={isAdmin}
         onPick={(p) => {
+          const clienteId = p.cliente?._id ?? p.cliente ?? null;
+
+          // El cliente original puede no estar ya en la lista del selector
+          // (ej. si el candado de nombres lo filtró después de creado este
+          // presupuesto) — se agrega para que se vea seleccionado.
+          if (clienteId != null && p.cliente?.nombre) {
+            setClientes((prev) =>
+              prev.some((c) => (c._id ?? c.id) === clienteId)
+                ? prev
+                : [...prev, { _id: clienteId, nombre: p.cliente.nombre }]
+            );
+          }
+
           setForm((prev) => ({
             ...prev,
+            clienteId: clienteId ?? prev.clienteId,
             tipoTramite: { value: p.tipoTramite, label: p.tipoTramite },
             valorOperacion: p.valorOperacion ?? "",
             valorTerreno: p.valorTerreno ?? "",
@@ -851,9 +969,98 @@ const honorariosMinOk = useMemo(
             },
             observaciones: p.observaciones ?? "",
           }));
+          setEditingId(p._id);
+          setSuccess('');
+          setError('');
           setOpenConsulta(false);
         }}
       />
+
+      {/* ✅ Motivo obligatorio antes de guardar una edición */}
+      {motivoModalOpen && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.35)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 9999,
+            padding: 16,
+          }}
+        >
+          <div
+            style={{
+              width: '100%',
+              maxWidth: 480,
+              background: '#fff',
+              borderRadius: 12,
+              padding: 20,
+              boxShadow: '0 20px 50px rgba(0,0,0,0.2)',
+            }}
+          >
+            <h3 style={{ marginTop: 0, marginBottom: 8 }}>Motivo de la modificación</h3>
+            <p style={{ marginTop: 0, marginBottom: 16, color: '#555' }}>
+              Se guardará la versión anterior y la nueva del presupuesto, junto con este motivo
+              y tu usuario como responsable del cambio.
+            </p>
+
+            <div className="pres-field">
+              <label>Abogado que solicita el cambio</label>
+              <select
+                value={solicitanteId}
+                onChange={(e) => setSolicitanteId(e.target.value)}
+              >
+                <option value="">Selecciona...</option>
+                {abogadosList.map((a) => (
+                  <option key={a.id} value={a.id}>{a.nombre}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="pres-field">
+              <label>Motivo</label>
+              <textarea
+                rows="3"
+                value={motivoTexto}
+                onChange={(e) => setMotivoTexto(e.target.value)}
+                placeholder="Ej. Se quitó Traslación de Dominio por error de captura."
+                autoFocus
+              />
+            </div>
+
+            {motivoError && (
+              <div className="pres-alert pres-alert-error" style={{ marginTop: 10 }}>
+                {motivoError}
+              </div>
+            )}
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 18 }}>
+              <button
+                type="button"
+                className="pres-btn"
+                onClick={() => {
+                  setMotivoModalOpen(false);
+                  setPendingEditBody(null);
+                }}
+                disabled={savingMotivo}
+              >
+                Cancelar
+              </button>
+
+              <button
+                type="button"
+                className="pres-btn-primary"
+                onClick={confirmarEdicionConMotivo}
+                disabled={savingMotivo || !motivoTexto.trim() || !solicitanteId}
+              >
+                {savingMotivo ? 'Guardando...' : 'Guardar cambios'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
 
 
