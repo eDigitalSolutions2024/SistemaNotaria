@@ -9,19 +9,33 @@ const {
   validateRealClientNameSync,
   getAbogadoNameTokenSets,
 } = require('../utils/clientNameValidation');
+const auth = require('../middleware/auth');
+
+function getRole(req) {
+  return String(req.user?.role || req.user?.rol || '').toUpperCase();
+}
 
 function stripAccents(s = '') {
   return String(s).normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 }
 
-router.post('/', async (req, res) => {
+router.post('/', auth, async (req, res) => {
   try {
     // ⬇️ Compatibilidad de nombres + teléfono
     const nombre           = req.body.nombre;
     const tipoServicio     = req.body.tipoServicio ?? req.body.servicio ?? '';
     const tieneCita        = req.body.tieneCita;
-    const abogadoPreferido = req.body.abogadoPreferido ?? req.body.abogado_preferido ?? null;
+    let   abogadoPreferido = req.body.abogadoPreferido ?? req.body.abogado_preferido ?? null;
     const numero_telefono  = req.body.numero_telefono ?? ''; // ← NUEVO
+
+    // 🔒 Candado: ABOGADO/ASISTENTE solo pueden registrar clientes asignados
+    // a sí mismos — lo que manden en el body para "abogado" se ignora y se
+    // reemplaza por su propio ID. Solo RECEPCION/ADMIN pueden asignar a
+    // otra persona (son quienes reparten trabajo entre el equipo).
+    const rolCreador = getRole(req);
+    if (rolCreador === 'ABOGADO' || rolCreador === 'ASISTENTE') {
+      abogadoPreferido = req.user?.id != null ? Number(req.user.id) : null;
+    }
 
 // ✅ NUEVA REGLA: siempre debe venir abogado seleccionado
 if (!abogadoPreferido) {
@@ -269,16 +283,42 @@ router.get('/search', async (req, res) => {
   const safe = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const re = new RegExp(safe, 'i');
 
+  // El modelo Cliente no tiene un campo "abogado" (solo abogado_asignado /
+  // abogado_preferido) — hay que resolver el nombre igual que en GET '/',
+  // si no, cada cliente sale sin abogado y bloquea el guardado en
+  // Escrituras/Protocolito (que lo exigen como obligatorio).
   const items = await Cliente.find({ nombre: re })
-    .select('id nombre abogado servicio tieneCita hora_llegada accion motivo')
+    .select('_id nombre abogado_asignado abogado_preferido servicio tieneCita hora_llegada accion motivo')
     .limit(10)
     .lean();
 
-  res.json(items);
+  const abogadoIds = [
+    ...new Set(
+      items.flatMap((c) => [c.abogado_asignado, c.abogado_preferido]).filter((id) => id != null)
+    ),
+  ];
+  const abogados = abogadoIds.length
+    ? await Abogado.find({ _id: { $in: abogadoIds } }, { _id: 1, nombre: 1 }).lean()
+    : [];
+  const mapaAbogados = {};
+  abogados.forEach((a) => { mapaAbogados[a._id] = a.nombre; });
+
+  const data = items.map((c) => ({
+    id: c._id,
+    nombre: c.nombre,
+    servicio: c.servicio,
+    tieneCita: c.tieneCita,
+    hora_llegada: c.hora_llegada,
+    accion: c.accion,
+    motivo: c.motivo,
+    abogado: mapaAbogados[c.abogado_asignado] || mapaAbogados[c.abogado_preferido] || 'No asignado',
+  }));
+
+  res.json(data);
 });
 
 // GET /clientes/by-servicio?servicio=Presupuesto
-router.get('/by-servicio', async (req, res) => {
+router.get('/by-servicio', auth, async (req, res) => {
   try {
     const servicio = String(req.query.servicio || '').trim();
     if (!servicio) return res.status(400).json({ mensaje: 'servicio requerido' });
@@ -288,7 +328,22 @@ router.get('/by-servicio', async (req, res) => {
       return res.status(400).json({ mensaje: 'servicio inválido' });
     }
 
-    const clientes = await Cliente.find({ servicio })
+    const filtro = { servicio };
+
+    // 🔒 Candado: en el selector de clientes para Presupuesto, cada quien ve
+    // solo los clientes asignados A ELLA/ÉL (abogado_asignado o
+    // abogado_preferido) — no "quién lo creó", porque recepción crea y
+    // asigna el cliente a un abogado distinto todo el tiempo. ADMIN ve todos.
+    if (servicio === 'Presupuesto' && getRole(req) !== 'ADMIN') {
+      const miId = Number(req.user?.id);
+      if (Number.isFinite(miId)) {
+        filtro.$or = [{ abogado_asignado: miId }, { abogado_preferido: miId }];
+      } else {
+        filtro._id = -1; // sin id de usuario válido, no debe ver nada
+      }
+    }
+
+    const clientes = await Cliente.find(filtro)
       .select('_id nombre numero_telefono servicio')
       .sort({ _id: -1 })
       .lean();
@@ -354,10 +409,9 @@ async function contarNombreHoyPorUsuario(nombreFinal, userId) {
   ).length;
 }
 
-router.post('/express-presupuesto', async (req, res) => {
+router.post('/express-presupuesto', auth, async (req, res) => {
   try {
     const nombre = req.body.nombre?.trim();
-    const abogadoPreferido = req.body.abogadoPreferido ?? null;
     const numero_telefono = req.body.numero_telefono ?? '';
 
     if (!nombre) {
@@ -384,14 +438,13 @@ router.post('/express-presupuesto', async (req, res) => {
     const ultimo = await Cliente.findOne().sort({ _id: -1 }).exec();
     const nuevoId = ultimo ? ultimo._id + 1 : 2001;
 
-    let abogadoMostrar = null;
-
-    if (abogadoPreferido) {
-      abogadoMostrar = await Abogado.findOne({ _id: abogadoPreferido });
-    }
-
+    // 🔒 "Cliente express" siempre se asigna a quien tiene la sesión
+    // iniciada — no hay selector de abogado en esta pantalla, así que nunca
+    // debe caer a "el primero por orden" (eso asignaba todo a quien
+    // estuviera primero en el catálogo, sin importar quién lo creó).
+    const abogadoMostrar = await Abogado.findById(Number(req.user?.id)).lean();
     if (!abogadoMostrar) {
-      abogadoMostrar = await Abogado.findOne().sort({ orden: 1 });
+      return res.status(401).json({ mensaje: 'No se pudo identificar tu usuario. Vuelve a iniciar sesión.' });
     }
 
     const nuevoCliente = new Cliente({

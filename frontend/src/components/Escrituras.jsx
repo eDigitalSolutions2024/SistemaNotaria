@@ -110,6 +110,18 @@ const norm = (s) =>
     .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase();
 
+// Solo para el texto del modal "Brincar volumen" — mismo incremento que
+// incVolumenTag() del backend, únicamente para mostrarle al ADMIN a qué
+// volumen va a saltar antes de confirmar (el cálculo real lo hace el server).
+const incVolumenTagPreview = (vol) => {
+  const s = String(vol ?? '').trim();
+  if (!s) return '—';
+  const m = s.match(/^(.*?)(\d+)\s*$/);
+  if (m) return `${m[1]}${Number(m[2]) + 1}`;
+  if (/^\d+$/.test(s)) return String(Number(s) + 1);
+  return '—';
+};
+
 // Muestra en el picker tanto "Iniciar trámite" como "Finalizar trámite"
 const isEligible = (c) => {
   const a = norm(c?.accion);
@@ -692,7 +704,10 @@ const [pldMap, setPldMap] = useState({});
       control: row?.numeroControl ?? '',
       cliente: row?.cliente ?? '',
       protocoloId: row?._id ?? '',
-      tipoTramite: row?.tipoTramite ?? row?.motivo ?? row?.servicio ?? row?.accion ?? ''
+      // ⚠️ "Escritura" fijo — el selector de Recibo distingue de qué
+      // colección sale el # (Escrituras vs Protocolito), no el tipo legal
+      // del trámite (Donación, Poder, etc.) que trae este row.
+      tipoTramite: 'Escritura',
     };
     if (typeof onOpenRecibo === 'function') onOpenRecibo(payload);
   };
@@ -1296,6 +1311,36 @@ const openPresupuestoPicker = async (target) => {
       setMsg({ type: 'error', text: err?.response?.data?.mensaje || 'No se pudo cambiar el candado de Escrituras' });
     } finally {
       setTogglingCandado(false);
+    }
+  };
+
+  // "Brincar volumen": solo ADMIN, solo cuando quedan pocos folios — cierra
+  // el volumen a propósito (folios restantes se dejan sin usar) y salta al
+  // siguiente. El backend vuelve a validar el límite de 15 por su cuenta.
+  const [brincarOpen, setBrincarOpen] = useState(false);
+  const [brincarMotivo, setBrincarMotivo] = useState('');
+  const [brincarSaving, setBrincarSaving] = useState(false);
+  const [brincarError, setBrincarError] = useState('');
+
+  const confirmarBrincarVolumen = async () => {
+    if (!brincarMotivo.trim()) {
+      setBrincarError('Indica el motivo del brinco de volumen.');
+      return;
+    }
+    try {
+      setBrincarSaving(true);
+      setBrincarError('');
+      const { data } = await axios.post(`${API}/escrituras/brincar-volumen`, {
+        motivo: brincarMotivo.trim(),
+      });
+      if (data?.data) setFolioInfo(data.data);
+      setBrincarOpen(false);
+      setBrincarMotivo('');
+      setMsg({ type: 'ok', text: 'Volumen brincado correctamente.' });
+    } catch (err) {
+      setBrincarError(err?.response?.data?.mensaje || 'No se pudo brincar de volumen');
+    } finally {
+      setBrincarSaving(false);
     }
   };
 
@@ -2335,6 +2380,65 @@ const onSaveEdit = async (id) => {
           <span className="escritura-folio-banner-txt">
             Faltan <strong className="escritura-folio-numero">{folioInfo.foliosRestantes}</strong> folio{folioInfo.foliosRestantes === 1 ? '' : 's'} para cambiar de volumen
           </span>
+
+          {isAdmin && folioInfo.volumenActual && folioInfo.foliosRestantes <= 15 && (
+            <button
+              type="button"
+              className="pres-btn"
+              style={{ marginLeft: 12 }}
+              onClick={() => { setBrincarMotivo(''); setBrincarError(''); setBrincarOpen(true); }}
+              title="Deja sin usar los folios que faltan y arranca el siguiente volumen"
+            >
+              Brincar volumen
+            </button>
+          )}
+        </div>
+      )}
+
+      {brincarOpen && (
+        <div
+          style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            zIndex: 9999, padding: 16,
+          }}
+        >
+          <div style={{
+            width: '100%', maxWidth: 480, background: '#fff', borderRadius: 12,
+            padding: 20, boxShadow: '0 20px 50px rgba(0,0,0,0.2)',
+          }}>
+            <h3 style={{ marginTop: 0, marginBottom: 8 }}>Brincar de volumen</h3>
+            <p style={{ marginTop: 0, marginBottom: 16, color: '#555' }}>
+              Los folios {folioInfo?.siguienteFolio} a 298 del volumen {folioInfo?.volumenActual} quedarán
+              sin usar y el siguiente trámite arrancará en el volumen {incVolumenTagPreview(folioInfo?.volumenActual)}, folio 3.
+            </p>
+            <div className="pres-field">
+              <label>Motivo</label>
+              <textarea
+                rows="3"
+                value={brincarMotivo}
+                onChange={(e) => setBrincarMotivo(e.target.value)}
+                placeholder="Ej. Quedan 2 folios y el trámite necesita 3."
+                autoFocus
+              />
+            </div>
+            {brincarError && (
+              <div className="pres-alert pres-alert-error" style={{ marginTop: 10 }}>{brincarError}</div>
+            )}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 18 }}>
+              <button type="button" className="pres-btn" onClick={() => setBrincarOpen(false)} disabled={brincarSaving}>
+                Cancelar
+              </button>
+              <button
+                type="button"
+                className="pres-btn-primary"
+                onClick={confirmarBrincarVolumen}
+                disabled={brincarSaving || !brincarMotivo.trim()}
+              >
+                {brincarSaving ? 'Guardando...' : 'Brincar volumen'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

@@ -413,6 +413,23 @@ router.post('/', async (req, res) => {
         });
       }
 
+      // 🔒 El abogado de un recibo ligado a Escritura/Protocolito SIEMPRE es
+      // el del trámite — se ignora lo que mande el body (abogado/abogadoId),
+      // igual que ya bloqueamos en el frontend. Sin esto, cualquiera podría
+      // llamar a la API directo y ponerle otro abogado al recibo.
+      const tramiteDoc =
+        tipoTramite === 'Escritura'
+          ? await Escritura.findOne({ numeroControl: controlNum }).select('abogado').lean()
+          : await Protocolito.findOne({ numeroTramite: controlNum }).select('abogado').lean();
+
+      if (!tramiteDoc) {
+        return res.status(400).json({
+          ok: false,
+          msg: `No existe ${tipoTramite === 'Escritura' ? 'la Escritura' : 'el Protocolito'} #${controlNum}`,
+        });
+      }
+      abogadoNombre = tramiteDoc.abogado || abogadoNombre;
+
       // Si la Escritura tiene presupuesto ligado, el total del trámite lo
       // manda el presupuesto (fuente viva) — no lo que haya llegado en el
       // body, que puede venir desactualizado o editado a mano. Protocolito
@@ -505,24 +522,29 @@ router.get('/by-control/:control/latest', async (req, res) => {
     const controlNum = Number(controlRaw);
     const asString = String(controlRaw);
 
-    // A) directo en el recibo
-    let rec = await Recibo.findOne({ control: controlNum })
+    // A) directo en el recibo (excluye cancelados — un recibo cancelado no
+    // debe seguir apareciendo como "el recibo vigente" del trámite)
+    let rec = await Recibo.findOne({ control: controlNum, estatus: { $ne: 'Cancelado' } })
       .sort({ createdAt: -1, _id: -1 })
       .lean();
 
     // soporte por si guardaste control como número en algunos docs
     if (!rec && Number.isFinite(controlNum)) {
-      rec = await Recibo.findOne({ control: String(controlNum) })
+      rec = await Recibo.findOne({ control: String(controlNum), estatus: { $ne: 'Cancelado' } })
         .sort({ createdAt: -1, _id: -1 })
         .lean();
     }
 
-    // B) por vínculo
+    // B) por vínculo (el link ya se borra al cancelar, pero por si acaso
+    // queda alguno huérfano, tampoco debe contar un recibo cancelado)
     if (!rec && Number.isFinite(controlNum)) {
       const link = await ReciboLink.findOne({ control: controlNum })
         .sort({ createdAt: -1, _id: -1 })
         .lean();
-      if (link) rec = await Recibo.findById(link.reciboId).lean();
+      if (link) {
+        const linked = await Recibo.findById(link.reciboId).lean();
+        if (linked && linked.estatus !== 'Cancelado') rec = linked;
+      }
     }
 
     if (!rec) return res.status(404).json({ ok: false, msg: 'No encontrado' });
@@ -659,6 +681,9 @@ router.patch('/:id/cancel', async (req, res) => {
       return res.status(400).json({ ok: false, msg: 'Motivo requerido' });
     }
 
+    const before = await Recibo.findById(id).lean();
+    if (!before) return res.status(404).json({ ok: false, msg: 'No encontrado' });
+
     const update = {
       estatus: 'Cancelado',
       cancelacion: {
@@ -670,7 +695,37 @@ router.patch('/:id/cancel', async (req, res) => {
     };
 
     const doc = await Recibo.findByIdAndUpdate(id, update, { new: true });
-    if (!doc) return res.status(404).json({ ok: false, msg: 'No encontrado' });
+
+    // 🔒 Desvincular: un recibo cancelado no debe seguir contando como
+    // vinculado a ningún trámite — ni el #control directo con el que se
+    // creó, ni los que se le hayan adjuntado después vía ReciboLink.
+    const links = await ReciboLink.find({ reciboId: id }).lean();
+    const controlesAfectados = new Set(links.map((l) => Number(l.control)));
+    if (Number.isFinite(Number(before.control))) {
+      controlesAfectados.add(Number(before.control));
+    }
+
+    if (links.length) {
+      await ReciboLink.deleteMany({ reciboId: id });
+    }
+
+    for (const ctrl of controlesAfectados) {
+      const linksLeft = await ReciboLink.exists({ control: ctrl });
+      const directLeft = await Recibo.exists({ control: ctrl, estatus: { $ne: 'Cancelado' } });
+
+      if (!linksLeft && !directLeft) {
+        const r1 = await Escritura.updateOne(
+          { numeroControl: ctrl, estatus_recibo: { $ne: 'JUSTIFICADO' } },
+          { $set: { estatus_recibo: 'SIN_RECIBO' } }
+        );
+        if (!r1.matchedCount) {
+          await Protocolito.updateOne(
+            { numeroTramite: ctrl, estatus_recibo: { $ne: 'JUSTIFICADO' } },
+            { $set: { estatus_recibo: 'SIN_RECIBO' } }
+          );
+        }
+      }
+    }
 
     res.json({ ok: true, data: doc });
   } catch (e) {

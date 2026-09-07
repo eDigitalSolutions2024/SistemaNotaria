@@ -356,7 +356,10 @@ const canJustifyRecibos =
       control: row?.numeroTramite ?? '',
       cliente: row?.cliente ?? '',
       protocoloId: row?._id ?? '',
-      tipoTramite: row?.tipoTramite ?? row?.motivo ?? row?.servicio ?? row?.accion ?? ''
+      // ⚠️ "Protocolito" fijo — el selector de Recibo distingue de qué
+      // colección sale el # (Escrituras vs Protocolito), no el tipo legal
+      // del trámite (Poder, Ratificación, etc.) que trae este row.
+      tipoTramite: 'Protocolito',
     };
     if (typeof onOpenRecibo === 'function') onOpenRecibo(payload);
   };

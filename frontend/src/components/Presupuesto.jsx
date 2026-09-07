@@ -3,6 +3,7 @@ import Select from 'react-select';
 import axios from 'axios';
 import '../css/Presupuesto.css';
 import { useAuth } from '../auth/AuthContext';
+import { attachAuthInterceptor } from '../auth/httpAuth';
 import ConsultarPresupuestosModal from "../components/ConsultarPresupuestosModal";
 
 const api = axios.create({
@@ -18,6 +19,11 @@ api.interceptors.request.use((config) => {
   if (token) config.headers.Authorization = `Bearer ${token}`;
   return config;
 });
+
+// Tampoco hereda el interceptor de 401 del axios global — sin esto, un
+// token muerto (expirado o inválido) se quedaba como error silencioso en
+// pantalla en vez de regresarte al login.
+attachAuthInterceptor(api);
 
 const REGISTRO_PUBLICO_TABLAS = {
   2026: [
@@ -130,10 +136,18 @@ export default function Presupuesto() {
   // Abogados para "¿quién pidió este cambio?" — el ADMIN ejecuta la edición,
   // pero la petición casi siempre viene de un abogado; se registra aparte.
   const [abogadosList, setAbogadosList] = useState([]);
+  const [abogadosError, setAbogadosError] = useState('');
   useEffect(() => {
     api.get('/recibos/abogados')
       .then((res) => setAbogadosList(res.data?.data || []))
-      .catch((err) => console.error('Error al cargar abogados:', err));
+      .catch((err) => {
+        console.error('Error al cargar abogados:', err);
+        const detalle =
+          err.response?.data?.mensaje || err.response?.data?.msg || err.message;
+        setAbogadosError(
+          `No se pudo cargar la lista de abogados (${err.response?.status || 'sin conexión'}: ${detalle}). Recarga la página o vuelve a iniciar sesión.`
+        );
+      });
   }, []);
 
   const cancelarEdicion = () => {
@@ -1017,6 +1031,11 @@ const honorariosMinOk = useMemo(
                   <option key={a.id} value={a.id}>{a.nombre}</option>
                 ))}
               </select>
+              {abogadosError && (
+                <div className="pres-alert pres-alert-error" style={{ marginTop: 6 }}>
+                  {abogadosError}
+                </div>
+              )}
             </div>
 
             <div className="pres-field">

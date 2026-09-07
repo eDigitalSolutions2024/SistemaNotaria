@@ -1,8 +1,15 @@
 import React, { useState, useEffect } from 'react';
 import '../css/estilos.css';
 import API_URL from '../api';
+import { useAuth } from '../auth/AuthContext';
 
 export default function FormCliente({ onCreado }) {
+  const { user, role } = useAuth();
+  const rolNorm = String(role || '').toUpperCase();
+  // ABOGADO/ASISTENTE solo pueden registrar clientes para sí mismos —
+  // RECEPCION/ADMIN sí pueden repartir a cualquiera del equipo.
+  const bloqueadoASiMismo = rolNorm === 'ABOGADO' || rolNorm === 'ASISTENTE';
+
   const [nombre, setNombre] = useState('');
   const [telefono, setTelefono] = useState('');               // se enviará como numero_telefono
   const [tipoServicio, setTipoServicio] = useState('');       // obligatorio
@@ -28,6 +35,14 @@ export default function FormCliente({ onCreado }) {
     };
     obtenerAbogados();
   }, []);
+
+  // Si el rol está bloqueado a sí mismo, fija el abogado en cuanto sepamos
+  // quién es (el backend lo vuelve a forzar de todos modos, esto es solo UX).
+  useEffect(() => {
+    if (bloqueadoASiMismo && user?.id != null) {
+      setAbogadoPreferido(String(user.id));
+    }
+  }, [bloqueadoASiMismo, user]);
 
   const stripAccents = (s='') =>
   String(s).normalize('NFD').replace(/[\u0300-\u036f]/g, '');
@@ -134,9 +149,13 @@ if (!abogadoPreferido) {
         abogado_asignado: abogadoAsignadoNum,
       };
 
+      const token = localStorage.getItem('token');
       const response = await fetch(`${API_URL}/clientes`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
         body: JSON.stringify(payload),
       });
 
@@ -151,12 +170,13 @@ if (!abogadoPreferido) {
 
         onCreado && onCreado(data.cliente);
 
-        // reset
+        // reset (si el rol está bloqueado a sí mismo, se re-fija en vez de
+        // dejarlo en blanco, ya que no puede elegir a nadie más de todos modos)
         setNombre('');
         setTelefono('');
         setTipoServicio('');
         setTieneCita(false);
-        setAbogadoPreferido('');
+        setAbogadoPreferido(bloqueadoASiMismo && user?.id != null ? String(user.id) : '');
         setErrors({ nombre:'', telefono: '', tipoServicio: '', abogado: '' });
 
       } else {
@@ -262,23 +282,36 @@ if (!abogadoPreferido) {
     <span style={{ color: '#d00' }}>*</span>
   </label>
 
-  <select
-    className={`form-control ${errors.abogado ? 'is-invalid' : ''}`}
-    value={abogadoPreferido}
-    onChange={(e) => setAbogadoPreferido(e.target.value)}
-  >
-    <option value="">-- Selecciona un abogado --</option>
-    {(abogados || [])
-      .filter(a => {
-        const r = String(a.role || '').toLowerCase();
-        return r === 'abogado' || r === 'asistente';
-      })
-      .map((abogado) => (
-        <option key={abogado._id} value={abogado._id}>
-          {abogado.nombre}
-        </option>
-      ))}
-  </select>
+  {bloqueadoASiMismo ? (
+    // ABOGADO/ASISTENTE no pueden asignar el cliente a alguien más — se
+    // muestra fijo con su propio nombre (el backend igual lo fuerza).
+    <input
+      type="text"
+      className="form-control"
+      value={user?.nombre || 'Tú'}
+      disabled
+      readOnly
+      title="Solo puedes registrar clientes asignados a ti mismo"
+    />
+  ) : (
+    <select
+      className={`form-control ${errors.abogado ? 'is-invalid' : ''}`}
+      value={abogadoPreferido}
+      onChange={(e) => setAbogadoPreferido(e.target.value)}
+    >
+      <option value="">-- Selecciona un abogado --</option>
+      {(abogados || [])
+        .filter(a => {
+          const r = String(a.role || '').toLowerCase();
+          return r === 'abogado' || r === 'asistente';
+        })
+        .map((abogado) => (
+          <option key={abogado._id} value={abogado._id}>
+            {abogado.nombre}
+          </option>
+        ))}
+    </select>
+  )}
 
   {errors.abogado && <div className="invalid-feedback">{errors.abogado}</div>}
 </div>

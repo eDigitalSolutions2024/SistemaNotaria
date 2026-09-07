@@ -105,6 +105,57 @@ function tokenizeName(nombre = '') {
     .filter(Boolean);
 }
 
+// Distancia de edición (Levenshtein) — para tolerar errores de captura tipo
+// "Erique" en vez de "Enrique" (evasión típica: cambiar/quitar 1-2 letras).
+function levenshtein(a, b) {
+  const m = a.length, n = b.length;
+  if (m === 0) return n;
+  if (n === 0) return m;
+  const dp = new Array(n + 1);
+  for (let j = 0; j <= n; j++) dp[j] = j;
+  for (let i = 1; i <= m; i++) {
+    let prev = dp[0];
+    dp[0] = i;
+    for (let j = 1; j <= n; j++) {
+      const tmp = dp[j];
+      dp[j] = a[i - 1] === b[j - 1]
+        ? prev
+        : 1 + Math.min(prev, dp[j], dp[j - 1]);
+      prev = tmp;
+    }
+  }
+  return dp[n];
+}
+
+// Umbral de tolerancia según largo de palabra — nombres cortos toleran menos
+// (si no, "Ana" bloquearía medio directorio telefónico).
+function fuzzyThreshold(len) {
+  if (len <= 4) return 1;
+  if (len <= 8) return 2;
+  return 3;
+}
+
+// Colapsa letras repetidas ("ivettthe" -> "ivethe") antes de comparar. Sin
+// esto, basta con teclear una letra de más varias veces para inflar la
+// distancia de edición por encima del umbral y colarse (evasión real vista
+// en producción: "ivettthe villalba" para esquivar "iveth villalba").
+function collapseRepeats(s) {
+  return s.replace(/(.)\1{1,}/g, '$1');
+}
+
+// ¿El nombre del cliente (ya tokenizado) contiene, en cualquier orden, algo
+// muy parecido a CADA palabra de una frase prohibida? Ej. tokens del cliente
+// ["erique","villalba"] vs frase ["enrique","villalba"] -> true (1 letra).
+function fuzzyContainsPhrase(clientTokens, phraseTokens) {
+  return phraseTokens.every((pt) =>
+    clientTokens.some((ct) => {
+      const a = collapseRepeats(ct);
+      const b = collapseRepeats(pt);
+      return levenshtein(a, b) <= fuzzyThreshold(Math.max(a.length, b.length));
+    })
+  );
+}
+
 // Junta de tokens (nombre + apellido/s) por cada abogado/staff activo, para
 // bloquear que un cliente se registre con el nombre real de alguien del
 // equipo. Solo se usan personas con 2+ tokens significativos (nombre +
@@ -147,16 +198,17 @@ function validateRealClientNameSync(nombre = '', abogadoTokenSets = []) {
   }
 
   const norm = stripAccents(original).toLowerCase();
+  const tokens = tokenizeName(original);
 
-  // ✅ Bloqueo por frases completas (contiene)
+  // ✅ Bloqueo por frases completas — tolera 1-2 letras de diferencia (typo
+  // real o a propósito, ej. "Erique Villalba" en vez de "Enrique Villalba")
+  // y no depende del orden de las palabras.
   for (const phrase of BANNED_PHRASES) {
-    const p = stripAccents(phrase).toLowerCase().trim().replace(/\s+/g, ' ');
-    if (norm.includes(p)) {
+    const phraseTokens = tokenizeName(phrase);
+    if (fuzzyContainsPhrase(tokens, phraseTokens)) {
       return { ok: false, mensaje: 'Nombre no permitido. Captura el nombre real del cliente.' };
     }
   }
-
-  const tokens = tokenizeName(original);
 
   if (tokens.some(t => BANNED_TOKENS.has(t) || BANNED_WORDS.has(t))) {
     return { ok: false, mensaje: 'No se permiten nombres genéricos como "Cliente", "Test", "X", etc o de cargos (Notario/Notaría/Lic, etc).' };

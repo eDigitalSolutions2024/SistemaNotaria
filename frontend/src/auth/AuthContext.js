@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
 import axios from 'axios';
+import { setAuthLogoutHandler } from './httpAuth';
 
 const AuthContext = createContext(null);
 export const useAuth = () => useContext(AuthContext);
@@ -198,6 +199,13 @@ export function AuthProvider({ children }) {
     // si quieres, forzar recarga / redirección:
     // window.location.href = '/login';
   };
+
+  // Deja este logout disponible para instancias de axios.create() sueltas
+  // (ver src/auth/httpAuth.js) — sin esto, un 401 fuera del axios global
+  // nunca te sacaba de la sesión aunque el token ya estuviera muerto.
+  useEffect(() => {
+    setAuthLogoutHandler(logout);
+  });
 
   return (
     <AuthContext.Provider value={{ isAuthenticated, token, user, role, login, logout }}>

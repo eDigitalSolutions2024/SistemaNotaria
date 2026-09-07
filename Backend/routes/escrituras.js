@@ -13,6 +13,7 @@ const Escritura = require('../models/Escritura');
 const Presupuesto = require('../models/Presupuesto');
 const Recibo = require('../models/Recibo');
 const EscrituraConfig = require('../models/EscrituraConfig');
+const VolumenSkip = require('../models/VolumenSkip');
 
 const ReciboLink = require('../models/ReciboLink');
 
@@ -407,6 +408,13 @@ async function maxFolioUsado(volumen, excludeId = null) {
       max = Math.max(max, r.hasta);
     }
   }
+
+  // Un ADMIN pudo haber cerrado este volumen a propósito ("Brincar volumen")
+  // dejando los folios restantes sin usar — para todo efecto de cálculo, el
+  // volumen cuenta como agotado a partir de ese momento.
+  const skip = await VolumenSkip.findOne({ volumen }).select('_id').lean();
+  if (skip) max = Math.max(max, MAX_FOLIO_USABLE);
+
   return max;
 }
 
@@ -1344,6 +1352,65 @@ router.get('/folio/next', async (req, res) => {
   }
 });
 
+// POST /escrituras/brincar-volumen
+// Solo ADMIN. Cierra a propósito el volumen vigente (deja sin usar los
+// folios que falten) y salta al siguiente — solo cuando ya casi no quedan
+// folios utilizables, para no desperdiciar un volumen completo por error.
+const LIMITE_FOLIOS_PARA_BRINCAR = 15;
+
+router.post('/brincar-volumen', auth, async (req, res) => {
+  try {
+    const roles = getUserRolesFromReq(req);
+    if (!roles.includes('ADMIN')) {
+      return res.status(403).json({ mensaje: 'Solo un administrador puede brincar de volumen.' });
+    }
+
+    const { motivo } = req.body || {};
+    if (!motivo || !String(motivo).trim()) {
+      return res.status(400).json({ mensaje: 'Debes indicar el motivo del brinco de volumen.' });
+    }
+
+    const estado = await computeFolioActual();
+    if (!estado.volumenActual) {
+      return res.status(400).json({ mensaje: 'Todavía no hay ningún volumen en uso.' });
+    }
+
+    if (estado.foliosRestantes > LIMITE_FOLIOS_PARA_BRINCAR) {
+      return res.status(400).json({
+        mensaje: `Solo puedes brincar de volumen cuando quedan ${LIMITE_FOLIOS_PARA_BRINCAR} folios o menos (quedan ${estado.foliosRestantes}).`,
+      });
+    }
+
+    const volumenNuevo = incVolumenTag(estado.volumenActual);
+    if (!volumenNuevo) {
+      return res.status(400).json({ mensaje: 'No se pudo calcular el siguiente volumen automáticamente.' });
+    }
+
+    const yaExiste = await VolumenSkip.findOne({ volumen: estado.volumenActual }).lean();
+    if (yaExiste) {
+      return res.status(409).json({ mensaje: 'Este volumen ya fue cerrado antes.' });
+    }
+
+    await VolumenSkip.create({
+      volumen: estado.volumenActual,
+      folioDesde: estado.siguienteFolio,
+      folioHasta: MAX_FOLIO_USABLE,
+      volumenNuevo,
+      motivo: String(motivo).trim(),
+      hechoPorId: req.user?.id != null ? Number(req.user.id) : null,
+      hechoPorNombre: req.user?.nombre || '',
+    });
+
+    const nuevoEstado = await computeFolioActual();
+    req.app.get('io')?.emit('escrituras:folio', nuevoEstado);
+
+    res.json({ ok: true, data: nuevoEstado });
+  } catch (e) {
+    console.error('BRINCAR VOLUMEN ERROR:', e);
+    res.status(500).json({ mensaje: 'Error al brincar de volumen', detalle: e.message });
+  }
+});
+
 // POST /escrituras
 router.post('/', bloquearSiDeshabilitado, async (req, res) => {
   let base = null;
@@ -1638,9 +1705,24 @@ res.status(201).json(created);
 });
 
 // ✅ NUEVO: todos los presupuestos (para selector global)
-router.get('/presupuestos', async (req, res) => {
+// 🔒 Candado: cada quien solo ve (y puede elegir) los presupuestos que ELLA
+// MISMA creó (por "responsable", que se guarda desde el usuario autenticado
+// al crear el presupuesto) — evita que se agarre el presupuesto de un
+// compañero para pegarlo a su propia escritura. ADMIN ve y elige de todos.
+router.get('/presupuestos', auth, async (req, res) => {
   try {
-    const presup = await Presupuesto.find({ usadoEnEscritura: false })
+    const roles = getUserRolesFromReq(req);
+    const isAdmin = roles.includes('ADMIN');
+    const nombreUsuario = getUserNameFromReq(req);
+
+    const filtro = { usadoEnEscritura: false };
+    if (!isAdmin) {
+      // Si por algún motivo no hay nombre en el token, que no vea nada
+      // (mejor "vacío" que "todos" por accidente).
+      filtro.responsable = nombreUsuario || ' __sin_usuario__';
+    }
+
+    const presup = await Presupuesto.find(filtro)
       .sort({ fecha: -1 })
       .lean();
 
@@ -1665,7 +1747,10 @@ router.get('/presupuestos', async (req, res) => {
   }
 });
 
-router.get('/presupuestos/cliente/:clienteNumero', async (req, res) => {
+// 🔒 Mismo candado que GET /presupuestos: aunque hoy el frontend no llama
+// esta ruta, sigue viva — sin este filtro sería una puerta directa para
+// esquivar el candado de "solo tus propios presupuestos".
+router.get('/presupuestos/cliente/:clienteNumero', auth, async (req, res) => {
   try {
     const raw = req.params.clienteNumero;
     const clienteNumero = Number(raw);
@@ -1674,8 +1759,17 @@ router.get('/presupuestos/cliente/:clienteNumero', async (req, res) => {
       return res.status(400).json({ mensaje: 'clienteNumero inválido' });
     }
 
+    const roles = getUserRolesFromReq(req);
+    const isAdmin = roles.includes('ADMIN');
+    const nombreUsuario = getUserNameFromReq(req);
+
+    const filtro = { cliente: clienteNumero };
+    if (!isAdmin) {
+      filtro.responsable = nombreUsuario || ' __sin_usuario__';
+    }
+
     const list = await Presupuesto
-      .find({ cliente: clienteNumero })
+      .find(filtro)
       .sort({ createdAt: -1 })
       .lean();
 

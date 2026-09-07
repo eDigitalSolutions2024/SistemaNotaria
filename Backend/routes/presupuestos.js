@@ -432,6 +432,23 @@ router.post("/", auth, async (req, res) => {
       });
     }
 
+    // 🔒 Mismo candado que el selector: solo puedes crear un presupuesto
+    // para un cliente asignado A TI (abogado_asignado/abogado_preferido) —
+    // no importa quién lo haya creado, porque recepción suele registrar y
+    // asignar el cliente a otro abogado. ADMIN puede para cualquiera.
+    if (getRole(req) !== 'ADMIN') {
+      const miId = Number(req.user?.id);
+      const asignadoAMi =
+        Number.isFinite(miId) &&
+        (Number(clienteDoc.abogado_asignado) === miId || Number(clienteDoc.abogado_preferido) === miId);
+      if (!asignadoAMi) {
+        return res.status(403).json({
+          message: 'Este cliente no está asignado a ti. Solo puedes crear presupuestos para tus propios clientes.',
+          code: 'CLIENTE_NO_ASIGNADO',
+        });
+      }
+    }
+
     const nombreCliente = clienteDoc?.nombre || '';
     const nombreStripped = stripAccents(nombreCliente).toLowerCase().replace(/\s+/g, ' ').trim();
 

@@ -8,7 +8,7 @@ import { useAuth } from "../auth/AuthContext";
 const API = process.env.REACT_APP_API_URL || "http://localhost:4000";
 const SAVE_URL = `${API}/recibos`;
 
-export default function ReciboNotaria17() {
+export default function ReciboNotaria17({ row }) {
 
 
   const { token } = useAuth();
@@ -368,6 +368,48 @@ export default function ReciboNotaria17() {
     }
   }
 
+  /* ---------------- precarga desde Escrituras/Protocolito ---------------- */
+  // Cuando llegas aquí desde el botón "Generar recibo" (trámite sin recibo),
+  // `row` trae { tipoTramite: 'Escritura'|'Protocolito', control }. Reusa el
+  // mismo flujo que si lo hubieras seleccionado a mano en el <select>, para
+  // no tener que volver a buscar cliente/abogado/montos.
+  const cameFromTramite = !!row?.control;
+  const tipoTramiteRow = row?.tipoTramite === "Protocolito" ? "Protocolito" : "Escritura";
+
+  // Paso 1: en cuanto llega `row`, fija el tipo de trámite — eso es lo que
+  // dispara (más abajo) la carga de la lista de escrituras/protocolitos.
+  const prefillStartedRef = useRef(false);
+  useEffect(() => {
+    if (!cameFromTramite) return;
+    if (prefillStartedRef.current) return;
+    prefillStartedRef.current = true;
+    setF((prev) => resetFormForType(tipoTramiteRow, prev.fecha));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cameFromTramite]);
+
+  // Paso 2: ya con el tipo fijado, espera a que exista lo necesario para
+  // resolver cliente/abogado (catálogo de abogados siempre; para Escritura
+  // además la lista, porque a diferencia de Protocolito no hay un endpoint
+  // de "una sola escritura por número" — handleSelectEscritura busca en la
+  // lista local) y entonces sí aplica la selección real.
+  const prefilledRef = useRef(false);
+  useEffect(() => {
+    if (!cameFromTramite) return;
+    if (prefilledRef.current) return;
+    if (loadingAbogados) return;
+    if (tipoTramiteRow === "Escritura" && escrituras.length === 0) return;
+
+    prefilledRef.current = true;
+    const control = String(row.control).trim();
+
+    if (tipoTramiteRow === "Protocolito") {
+      handleSelectNumero(control);
+    } else {
+      handleSelectEscritura(control);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cameFromTramite, loadingAbogados, escrituras]);
+
   /* ---------------- helpers / validación / submit ---------------- */
 
   const resetFormForType = (tipo, keepFecha) => ({
@@ -637,6 +679,8 @@ export default function ReciboNotaria17() {
             <Field label="Abogado Responsable">
               <select
                 value={abogadoId}
+                disabled={cameFromTramite}
+                title={cameFromTramite ? "El abogado del trámite no se puede cambiar aquí" : undefined}
                 onChange={(e) => {
                   const id = e.target.value;
                   setAbogadoId(id);
@@ -656,6 +700,11 @@ export default function ReciboNotaria17() {
                   </option>
                 ))}
               </select>
+              {cameFromTramite && (
+                <small style={{ display: "block", marginTop: 4, opacity: 0.75 }}>
+                  Fijo al abogado del trámite #{row?.control}.
+                </small>
+              )}
             </Field>
 
             <Field label="Concepto" className="span-2">
