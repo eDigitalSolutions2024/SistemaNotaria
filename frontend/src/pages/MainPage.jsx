@@ -1,5 +1,7 @@
 // frontend/src/pages/MainPage.jsx
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
+import axios from 'axios';
+import { Dialog, DialogTitle, DialogContent, DialogActions, TextField, Button, MenuItem } from '@mui/material';
 import './MainPage.css';
 
 // MUI Icons
@@ -24,6 +26,12 @@ import ChevronLeftIcon    from '@mui/icons-material/ChevronLeft';
 import ChevronRightIcon   from '@mui/icons-material/ChevronRight';
 import ExpandMoreIcon     from '@mui/icons-material/ExpandMore';
 import ExpandLessIcon     from '@mui/icons-material/ExpandLess';
+import WorkOutlineIcon    from '@mui/icons-material/WorkOutline';
+import SportsBarIcon      from '@mui/icons-material/SportsBar';
+import DomainIcon         from '@mui/icons-material/Domain';
+import StorefrontIcon     from '@mui/icons-material/Storefront';
+import AddCircleOutlineIcon from '@mui/icons-material/AddCircleOutline';
+import EditIcon           from '@mui/icons-material/Edit';
 
 import FormAbogado        from '../components/FormAbogado';
 import RegistrarCliente   from '../pages/Home';
@@ -40,9 +48,12 @@ import CustodiaBitacora   from '../components/custodia/CustodiaBitacora';
 import CustodiaPendientesBanner from '../components/custodia/CustodiaPendientesBanner';
 import AnunciosAdmin      from '../components/anuncios/AnunciosAdmin';
 import AnunciosDisplay    from '../components/anuncios/AnunciosDisplay';
+import ControlCerveceria  from '../components/ControlCerveceria';
 
 import { useAuth } from '../auth/AuthContext';
 import Login from '../components/Login';
+
+const API = process.env.REACT_APP_API_URL || 'http://localhost:8010/api';
 
 const SECTION_LABELS = {
   'registrar-cliente':   'Registrar Cliente',
@@ -59,6 +70,14 @@ const SECTION_LABELS = {
   'ExpedientesPLD':      'Expedientes PLD',
   'custodia':            'Custodia de Documentos',
   'anuncios':            'Anuncios',
+};
+
+// Ícono por nombre de módulo de Gestiones especiales — los dos conocidos
+// tienen su propio ícono; cualquier módulo nuevo que se dé de alta usa el
+// genérico (StorefrontIcon).
+const ICONOS_MODULO = {
+  'Cervecería': SportsBarIcon,
+  'Controladora': DomainIcon,
 };
 
 export default function MainPage() {
@@ -82,6 +101,75 @@ function AuthedApp() {
   // Anuncios: solo ADMIN redacta/envía; el aviso emergente (AnunciosDisplay)
   // en cambio se monta para todos los roles, más abajo.
   const puedeVerAnuncios = role === 'ADMIN' || role === 'admin';
+  const esAdmin = role === 'ADMIN' || role === 'admin';
+
+  // Gestiones especiales: catálogo dinámico de clientes (Cervecería,
+  // Controladora, y los que un ADMIN dé de alta después desde la app). El
+  // propio backend ya filtra lo que no le toca ver a un no-admin.
+  const [modulosGestion, setModulosGestion] = useState([]);
+  const cargarModulosGestion = useCallback(async () => {
+    try {
+      const { data } = await axios.get(`${API}/gestion-especial-modulos`);
+      setModulosGestion(Array.isArray(data) ? data : []);
+    } catch {
+      setModulosGestion([]);
+    }
+  }, []);
+  useEffect(() => { cargarModulosGestion(); }, [cargarModulosGestion]);
+
+  const [nuevoModuloOpen, setNuevoModuloOpen] = useState(false);
+  const [nuevoModuloNombre, setNuevoModuloNombre] = useState('');
+  const [nuevoModuloVisibilidad, setNuevoModuloVisibilidad] = useState('admin');
+  const [nuevoModuloGuardando, setNuevoModuloGuardando] = useState(false);
+  const [nuevoModuloError, setNuevoModuloError] = useState('');
+  // null = creando uno nuevo; con valor = editando ese módulo existente
+  // (mismo modal, reutilizado — así no hay que pedírmelo cada vez que
+  // quieras cambiar quién ve un módulo).
+  const [editandoModuloId, setEditandoModuloId] = useState(null);
+
+  const abrirNuevoModulo = () => {
+    setEditandoModuloId(null);
+    setNuevoModuloNombre('');
+    setNuevoModuloVisibilidad('admin');
+    setNuevoModuloError('');
+    setNuevoModuloOpen(true);
+  };
+  const abrirEditarModulo = (m) => {
+    setEditandoModuloId(m._id);
+    setNuevoModuloNombre(m.nombre);
+    setNuevoModuloVisibilidad(m.soloAdmin ? 'admin' : 'todos');
+    setNuevoModuloError('');
+    setNuevoModuloOpen(true);
+  };
+
+  const crearModuloGestion = async () => {
+    if (!nuevoModuloNombre.trim()) {
+      setNuevoModuloError('El nombre es obligatorio.');
+      return;
+    }
+    setNuevoModuloGuardando(true);
+    setNuevoModuloError('');
+    try {
+      const payload = {
+        nombre: nuevoModuloNombre.trim(),
+        soloAdmin: nuevoModuloVisibilidad === 'admin',
+      };
+      if (editandoModuloId) {
+        await axios.patch(`${API}/gestion-especial-modulos/${editandoModuloId}`, payload);
+      } else {
+        await axios.post(`${API}/gestion-especial-modulos`, payload);
+      }
+      setNuevoModuloOpen(false);
+      setNuevoModuloNombre('');
+      setNuevoModuloVisibilidad('admin');
+      setEditandoModuloId(null);
+      await cargarModulosGestion();
+    } catch (e) {
+      setNuevoModuloError(e?.response?.data?.mensaje || 'No se pudo guardar el módulo.');
+    } finally {
+      setNuevoModuloGuardando(false);
+    }
+  };
 
   const INACTIVITY_LIMIT = 60 * 60 * 1000;
 
@@ -116,6 +204,7 @@ function AuthedApp() {
   const [mostrarSubmenu,           setMostrarSubmenu]           = useState(false);
   const [mostrarSubmenuRecibos,    setMostrarSubmenuRecibos]    = useState(false);
   const [mostrarSubmenuEscrituras, setMostrarSubmenuEscrituras] = useState(false);
+  const [mostrarSubmenuGestiones,  setMostrarSubmenuGestiones]  = useState(false);
   const [sidebarOpen,           setSidebarOpen]           = useState(true);
   const [reciboRow,             setReciboRow]             = useState(null);
 
@@ -126,6 +215,7 @@ function AuthedApp() {
     setMostrarSubmenu(false);
     setMostrarSubmenuRecibos(false);
     setMostrarSubmenuEscrituras(false);
+    setMostrarSubmenuGestiones(false);
     if (isMobile()) setSidebarOpen(false);
   };
 
@@ -140,6 +230,15 @@ function AuthedApp() {
 
   const renderContenido = () => {
     if (role === 'PROTOCOLITO') return <RegistrarGenerales />;
+
+    // Secciones dinámicas de Gestiones especiales: 'gm:<nombre del módulo>'.
+    // modulosGestion ya viene filtrado por el backend según el rol, así que
+    // si el nombre está ahí, este usuario sí puede verlo.
+    if (seccion.startsWith('gm:')) {
+      const nombreModulo = seccion.slice(3);
+      const visible = modulosGestion.some((m) => m.nombre === nombreModulo);
+      return visible ? <ControlCerveceria empresa={nombreModulo} /> : <RegistrarCliente />;
+    }
 
     switch (seccion) {
       case 'registrar-cliente':   return <RegistrarCliente />;
@@ -180,6 +279,7 @@ function AuthedApp() {
   const registrarActive = ['registrar-cliente', 'registrar-generales', 'consultar-generales', 'registrar-abogado'].includes(seccion);
   const recibosActive   = ['recibo', 'recibos-consultar'].includes(seccion);
   const escriturasActive = ['Escrituras', 'ExpedientesPLD'].includes(seccion);
+  const gestionesActive  = seccion.startsWith('gm:');
 
   const today = new Date().toLocaleDateString('es-MX', {
     weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
@@ -240,6 +340,8 @@ function AuthedApp() {
                   if (!sidebarOpen) { setSidebarOpen(true); return; }
                   setMostrarSubmenu((v) => !v);
                   setMostrarSubmenuRecibos(false);
+                  setMostrarSubmenuEscrituras(false);
+                  setMostrarSubmenuGestiones(false);
                 }}
               >
                 <PeopleAltIcon sx={isz} />
@@ -287,6 +389,8 @@ function AuthedApp() {
                   if (!sidebarOpen) { setSidebarOpen(true); return; }
                   setMostrarSubmenuRecibos((v) => !v);
                   setMostrarSubmenu(false);
+                  setMostrarSubmenuEscrituras(false);
+                  setMostrarSubmenuGestiones(false);
                 }}
               >
                 <ReceiptLongIcon sx={isz} />
@@ -330,6 +434,7 @@ function AuthedApp() {
                   setMostrarSubmenuEscrituras((v) => !v);
                   setMostrarSubmenu(false);
                   setMostrarSubmenuRecibos(false);
+                  setMostrarSubmenuGestiones(false);
                 }}
               >
                 <MenuBookIcon sx={isz} />
@@ -380,6 +485,64 @@ function AuthedApp() {
                 {sidebarOpen && <span>Custodia de Documentos</span>}
               </li>
 
+              {/* ── Gestiones especiales (submenu dinámico) ── */}
+              {(esAdmin || modulosGestion.length > 0) && (
+              <>
+              <li
+                className={`nav-item ${gestionesActive ? 'active' : ''}`}
+                title="Gestiones especiales"
+                onClick={() => {
+                  if (!sidebarOpen) { setSidebarOpen(true); return; }
+                  setMostrarSubmenuGestiones((v) => !v);
+                  setMostrarSubmenu(false);
+                  setMostrarSubmenuRecibos(false);
+                  setMostrarSubmenuEscrituras(false);
+                }}
+              >
+                <WorkOutlineIcon sx={isz} />
+                {sidebarOpen && (
+                  <>
+                    <span style={{ flex: 1 }}>Gestiones especiales</span>
+                    {mostrarSubmenuGestiones
+                      ? <ExpandLessIcon sx={{ fontSize: 16 }} />
+                      : <ExpandMoreIcon sx={{ fontSize: 16 }} />}
+                  </>
+                )}
+              </li>
+              {sidebarOpen && mostrarSubmenuGestiones && (
+                <ul className="nav-submenu">
+                  {modulosGestion.map((m) => {
+                    const Icono = ICONOS_MODULO[m.nombre] || StorefrontIcon;
+                    const key = `gm:${m.nombre}`;
+                    return (
+                      <li key={m._id} className={`nav-sub-item ${seccion === key ? 'active' : ''}`}
+                          onClick={() => go(key)}
+                          style={{ display: 'flex', alignItems: 'center' }}>
+                        <Icono sx={{ fontSize: 17 }} />
+                        <span style={{ flex: 1 }}>Control de {m.nombre}</span>
+                        {esAdmin && (
+                          <span
+                            onClick={(e) => { e.stopPropagation(); abrirEditarModulo(m); }}
+                            title="Editar módulo"
+                            style={{ display: 'inline-flex', opacity: 0.7 }}
+                          >
+                            <EditIcon sx={{ fontSize: 15 }} />
+                          </span>
+                        )}
+                      </li>
+                    );
+                  })}
+                  {esAdmin && (
+                    <li className="nav-sub-item" onClick={abrirNuevoModulo}>
+                      <AddCircleOutlineIcon sx={{ fontSize: 17 }} />
+                      <span>Nuevo módulo…</span>
+                    </li>
+                  )}
+                </ul>
+              )}
+              </>
+              )}
+
               {/* ── Anuncios (solo ADMIN) ── */}
               {puedeVerAnuncios && (
                 <li className={`nav-item ${seccion === 'anuncios' ? 'active' : ''}`}
@@ -421,7 +584,7 @@ function AuthedApp() {
         {/* Top bar */}
         <header className="topbar">
           <h1 className="topbar-title">
-            {SECTION_LABELS[seccion] || 'Notaría 17'}
+            {seccion.startsWith('gm:') ? `Control de ${seccion.slice(3)}` : (SECTION_LABELS[seccion] || 'Notaría 17')}
           </h1>
           <div className="topbar-right">
             <span className="topbar-date">{today}</span>
@@ -438,6 +601,42 @@ function AuthedApp() {
           {renderContenido()}
         </main>
       </div>
+
+      {/* ── Nuevo módulo / editar módulo de Gestiones especiales (solo ADMIN) ── */}
+      <Dialog open={nuevoModuloOpen} onClose={() => setNuevoModuloOpen(false)} maxWidth="xs" fullWidth>
+        <DialogTitle>{editandoModuloId ? 'Editar módulo' : 'Nuevo módulo'}</DialogTitle>
+        <DialogContent dividers>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16, paddingTop: 6 }}>
+            <TextField
+              label="Nombre del cliente"
+              size="small"
+              value={nuevoModuloNombre}
+              onChange={(e) => setNuevoModuloNombre(e.target.value)}
+              placeholder="Ej. Casino, Del Río…"
+              autoFocus
+            />
+            <TextField
+              select
+              label="Quién lo puede ver"
+              size="small"
+              value={nuevoModuloVisibilidad}
+              onChange={(e) => setNuevoModuloVisibilidad(e.target.value)}
+            >
+              <MenuItem value="admin">Solo administrador</MenuItem>
+              <MenuItem value="todos">Todo el staff</MenuItem>
+            </TextField>
+            {nuevoModuloError && (
+              <div style={{ fontSize: 13, color: '#b4232c' }}>{nuevoModuloError}</div>
+            )}
+          </div>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setNuevoModuloOpen(false)}>Cancelar</Button>
+          <Button variant="contained" onClick={crearModuloGestion} disabled={nuevoModuloGuardando}>
+            {nuevoModuloGuardando ? 'Guardando…' : (editandoModuloId ? 'Guardar cambios' : 'Crear módulo')}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </div>
   );
 }

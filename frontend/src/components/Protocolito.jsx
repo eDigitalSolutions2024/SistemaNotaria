@@ -247,6 +247,8 @@ const canJustifyRecibos =
   const [drafts, setDrafts] = useState({});
   const [adding, setAdding] = useState(false);
   const [newRow, setNewRow] = useState(emptyRow);
+  const [savingNew, setSavingNew] = useState(false);
+  const savingNewRef = useRef(false);
   const [newSubtipo, setNewSubtipo] = useState('');
   const [selectedCliente, setSelectedCliente] = useState(null);
   const [q, setQ] = useState('');
@@ -816,6 +818,12 @@ const descargarPlantilla = (id) => {
   };
 
   const onSaveNew = async () => {
+    // Candado contra doble clic / doble submit: si ya hay un guardado en
+    // curso, ignora clics adicionales en vez de crear el trámite duplicado.
+    if (savingNewRef.current) return;
+    savingNewRef.current = true;
+    setSavingNew(true);
+    try {
     if (bloqueadoPorSoloLectura()) return;
     const cid = selectedCliente?._id || selectedCliente?.id;
     if (!cid) return setMsg({ type: 'warn', text: 'Selecciona un cliente primero' });
@@ -861,6 +869,10 @@ const descargarPlantilla = (id) => {
     } catch (err2) {
       const t = err2.response?.data?.mensaje || 'Error al crear';
       setMsg({ type: 'error', text: t });
+    }
+    } finally {
+      savingNewRef.current = false;
+      setSavingNew(false);
     }
   };
 
@@ -1441,41 +1453,79 @@ const descargarPlantilla = (id) => {
 
       {/* Panel de agregar */}
       {adding && (
-        <div style={{ display: 'grid', gridTemplateColumns: '140px 1fr 1.2fr 180px 220px auto', gap: 8, marginBottom: 12 }}>
-          <Button variant="outlined" onClick={() => openPickerFor('new')}>
-            SELECCIONAR CLIENTE
-          </Button>
+        <div style={{
+          border: '1px solid #e3e7ee',
+          borderRadius: 14,
+          padding: 20,
+          marginBottom: 16,
+          background: '#fafbfd',
+          boxShadow: '0 1px 3px rgba(16,24,40,0.04)',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
+            <span style={{ fontSize: 20 }}>📝</span>
+            <div style={{ fontWeight: 700, fontSize: 14.5, color: '#1a2233' }}>Nuevo trámite</div>
+          </div>
 
-          <input type="hidden" value={newRow.numeroTramite ? String(newRow.numeroTramite) : ''} readOnly />
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'flex-start' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <span style={{ fontSize: 11, fontWeight: 700, color: '#667085', letterSpacing: 0.3 }}>CLIENTE</span>
+              <Button
+                variant="outlined"
+                onClick={() => openPickerFor('new')}
+                style={{ height: 40, whiteSpace: 'nowrap', fontWeight: 700 }}
+              >
+                {selectedCliente ? 'Cambiar cliente' : 'Seleccionar cliente'}
+              </Button>
+            </div>
 
-          <input type="text" value={newRow.tipoTramite} readOnly disabled placeholder="Tipo de trámite" />
+            <input type="hidden" value={newRow.numeroTramite ? String(newRow.numeroTramite) : ''} readOnly />
 
-          {incluye(newRow.tipoTramite, 'poder') && (
-            <select
-              value={newSubtipo}
-              onChange={(e) => {
-                const v = e.target.value;
-                setNewSubtipo(v);
-                setNewRow((prev) => {
-                  const base = stripSubtipo(prev.tipoTramite || 'Poder');
-                  return { ...prev, tipoTramite: v ? `${base} ${v}` : base };
-                });
-              }}
-            >
-              <option value="">— Tipo de poder —</option>
-              {SUBTIPOS_BY_TIPO.poder.map((s) => (
-                <option key={s} value={s}>{s}</option>
-              ))}
-            </select>
-          )}
+            <TextField
+              label="Tipo de trámite"
+              size="small"
+              value={newRow.tipoTramite || ''}
+              InputProps={{ readOnly: true }}
+              style={{ minWidth: 200 }}
+            />
 
-          <input type="text" value={newRow.cliente} readOnly disabled placeholder="Nombre del cliente" />
-          <input type="text" value={newRow.fecha} readOnly disabled placeholder="Fecha" />
-          <input type="text" value={newRow.abogado} readOnly disabled placeholder="Abogado responsable" />
+            {incluye(newRow.tipoTramite, 'poder') && (
+              <TextField
+                select
+                label="Tipo de poder"
+                size="small"
+                value={newSubtipo}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setNewSubtipo(v);
+                  setNewRow((prev) => {
+                    const base = stripSubtipo(prev.tipoTramite || 'Poder');
+                    return { ...prev, tipoTramite: v ? `${base} ${v}` : base };
+                  });
+                }}
+                style={{ minWidth: 180 }}
+              >
+                <MenuItem value="">— Tipo de poder —</MenuItem>
+                {SUBTIPOS_BY_TIPO.poder.map((s) => (
+                  <MenuItem key={s} value={s}>{s}</MenuItem>
+                ))}
+              </TextField>
+            )}
 
-          <div style={{ whiteSpace: 'nowrap' }}>
-            <button onClick={onSaveNew} disabled={!selectedCliente}>Guardar</button>
-            <button onClick={() => onCancel('new')} style={{ marginLeft: 8 }}>Cancelar</button>
+            <TextField label="Cliente" size="small" value={newRow.cliente || ''} InputProps={{ readOnly: true }} style={{ minWidth: 200 }} />
+            <TextField label="Fecha" size="small" value={newRow.fecha || ''} InputProps={{ readOnly: true }} style={{ minWidth: 140 }} />
+            <TextField label="Abogado responsable" size="small" value={newRow.abogado || ''} InputProps={{ readOnly: true }} style={{ minWidth: 220 }} />
+          </div>
+
+          <div style={{
+            display: 'flex', justifyContent: 'flex-end', gap: 10,
+            marginTop: 20, paddingTop: 16, borderTop: '1px solid #e3e7ee',
+          }}>
+            <Button variant="outlined" onClick={() => onCancel('new')}>
+              Cancelar
+            </Button>
+            <Button variant="contained" onClick={onSaveNew} disabled={!selectedCliente || savingNew}>
+              {savingNew ? 'Guardando…' : 'Guardar'}
+            </Button>
           </div>
         </div>
       )}

@@ -159,17 +159,29 @@ html, body {
 
 .nav-sub-item {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 10px;
   padding: 8px 10px;
   border-radius: 6px;
   cursor: pointer;
   color: #64748b;
   font-size: 13px;
+  line-height: 1.35;
   transition: background 0.15s, color 0.15s;
   list-style: none;
-  white-space: nowrap;
+  white-space: normal;
   user-select: none;
+}
+
+.nav-sub-item svg {
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.nav-sub-item span {
+  flex: 1;
+  min-width: 0;
+  word-break: break-word;
 }
 
 .nav-sub-item:hover {

@@ -11,6 +11,7 @@
   "license": "ISC",
   "description": "",
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.131.0",
     "axios": "^1.13.5",
     "bcrypt": "^6.0.0",
     "bcryptjs": "^3.0.2",
@@ -24,6 +25,7 @@
     "express-session": "^1.19.0",
     "image-size": "^2.0.2",
     "jsonwebtoken": "^9.0.2",
+    "mammoth": "^1.13.0",
     "mongoose": "^8.16.0",
     "multer": "^2.0.2",
     "pdfkit": "^0.17.2",

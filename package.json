@@ -1,5 +1,6 @@
 {
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.131.0",
     "@fullcalendar/daygrid": "^6.1.20",
     "@fullcalendar/interaction": "^6.1.20",
     "@fullcalendar/react": "^6.1.20",
@@ -8,6 +9,7 @@
     "connect-mongo": "^5.1.0",
     "express-session": "^1.18.2",
     "form-data": "^4.0.5",
+    "mammoth": "^1.13.0",
     "react-router-dom": "^6.30.1"
   }
 }

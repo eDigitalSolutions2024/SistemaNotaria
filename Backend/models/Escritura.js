@@ -41,6 +41,30 @@ const EscrituraSchema = new Schema(
       index: true,
     },
 
+    // ===== Inspección IA del documento de Poder (al tomar número) =====
+    // Informativo, no bloquea: el abogado ya trae el Word redactado con el
+    // cliente y lo sube al tomar el número; Claude lo revisa y da un
+    // porcentaje + sugerencias, pero la decisión de proceder es suya.
+    poderInspeccion: {
+      porcentaje: { type: Number, default: null },
+      resumen: { type: String, default: '' },
+      sugerencias: { type: [String], default: [] },
+      comparacionDatos: {
+        type: [{
+          persona: { type: String, default: '' },
+          campo: { type: String, default: '' },
+          esperado: { type: String, default: '' },
+          coincide: { type: Boolean, default: false },
+          nota: { type: String, default: '' },
+          _id: false,
+        }],
+        default: [],
+      },
+      archivoNombre: { type: String, default: '' },
+      archivoPath: { type: String, default: '' },
+      fecha: { type: Date, default: null },
+    },
+
     // ===== CAMPOS operativos / estatus =====
     observaciones: { type: String, default: '' },
     estatus_entrega: {

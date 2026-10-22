@@ -839,6 +839,10 @@ router.get('/export', auth, async (req, res) => {
 
     const filenameBase = `protocolito_${dayjs().format('YYYYMMDD_HHmm')}`;
 
+    // Volumen vigente y trámites que faltan para cambiar — mismo cálculo que
+    // ya usa el contador en vivo de la pantalla (computeVolumenActual).
+    const volInfoReporte = await computeVolumenActual();
+
     // ===================== VINCULAR RECIBOS (SIN protocolitoId) =====================
     const numerosNum = docs.map(d => Number(d.numeroTramite)).filter(Number.isFinite);
     const numerosStr = numerosNum.map(n => String(n));
@@ -1035,6 +1039,26 @@ router.get('/export', auth, async (req, res) => {
         doc.strokeColor('black').lineWidth(1);
 
         yRight = titleBottom + 6;
+
+        // Volumen vigente + trámites que faltan para cambiar de volumen —
+        // recuadro sólido negro con texto blanco a propósito: esta hoja se
+        // imprime en blanco y negro, así que el color no sirve para
+        // resaltar — un bloque negro sí sobrevive cualquier impresora y es
+        // imposible de pasar por alto.
+        const volTxt = `Volumen ${volInfoReporte.volumenActual}  —  Faltan ${volInfoReporte.faltan} trámite${volInfoReporte.faltan === 1 ? '' : 's'} para cambiar de volumen`;
+        const VOL_BOX_FONT = 14;
+        const VOL_BOX_PAD_X = 10;
+        const VOL_BOX_PAD_Y = 7;
+        doc.fontSize(VOL_BOX_FONT).font('Helvetica-Bold');
+        const volTxtH = doc.heightOfString(volTxt, { width: wRight - VOL_BOX_PAD_X * 2 });
+        const volBoxH = volTxtH + VOL_BOX_PAD_Y * 2;
+        doc.rect(xRight, yRight, wRight, volBoxH).fill('#000');
+        doc.fillColor('#fff').text(volTxt, xRight + VOL_BOX_PAD_X, yRight + VOL_BOX_PAD_Y, {
+          width: wRight - VOL_BOX_PAD_X * 2,
+        });
+        doc.fillColor('#000').font('Helvetica');
+        yRight = yRight + volBoxH + 8;
+
         const filtroTxt1 = [
           from ? `Desde: ${dayjs(from).format('DD/MM/YYYY')}` : null,
           to   ? `Hasta: ${dayjs(to).format('DD/MM/YYYY')}`   : null,
@@ -1237,6 +1261,14 @@ router.get('/export', auth, async (req, res) => {
       ]);
       XLSX.utils.book_append_sheet(wb, ws2, 'Resumen');
     }
+
+    // Hoja "Info": volumen vigente + trámites que faltan para cambiar. Va AL
+    // FINAL a propósito — /import lee wb.SheetNames[0], que debe seguir
+    // siendo "Protocolito" para que reimportar un archivo ya exportado no
+    // se rompa.
+    const volTxtXlsx = `Volumen ${volInfoReporte.volumenActual} — Faltan ${volInfoReporte.faltan} trámite${volInfoReporte.faltan === 1 ? '' : 's'} para cambiar de volumen`;
+    const wsInfo = XLSX.utils.aoa_to_sheet([[volTxtXlsx]]);
+    XLSX.utils.book_append_sheet(wb, wsInfo, 'Info');
 
     const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');

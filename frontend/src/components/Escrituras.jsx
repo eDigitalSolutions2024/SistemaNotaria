@@ -162,6 +162,8 @@ const TRAMITES_CON_MONTOS_PATTERNS = [
   /\besscritura\b/,
   /\bcompra\s*venta\b/,
   /\bcompraventa\b/,
+  /\bcompra\b/,
+  /\bventa\b/,
   /\bcv\b/,
   /\bc\s+v\b/,
   /\bproto\b/,
@@ -572,6 +574,8 @@ const canJustifyRecibos =
   const [drafts, setDrafts] = useState({});
   const [adding, setAdding] = useState(false);
   const [newRow, setNewRow] = useState(emptyRow);
+  const [savingNew, setSavingNew] = useState(false);
+  const savingNewRef = useRef(false);
   const [newSubtipo, setNewSubtipo] = useState('');
   const [selectedCliente, setSelectedCliente] = useState(null);
   const [q, setQ] = useState('');
@@ -589,6 +593,15 @@ const canJustifyRecibos =
   // TESTAMENTO (alta)
   const [newHoraInicio, setNewHoraInicio] = useState('');
   const [newHoraFin, setNewHoraFin] = useState('');
+
+  // PODER (alta): documento Word ya redactado + inspección IA — obligatorio
+  // subirlo para trámites de Poder, el puntaje no bloquea.
+  const [poderFile, setPoderFile] = useState(null);
+  const [poderInspeccion, setPoderInspeccion] = useState(null);
+  const [poderInspeccionando, setPoderInspeccionando] = useState(false);
+  const [poderInspeccionError, setPoderInspeccionError] = useState('');
+  const [poderPreviewOpen, setPoderPreviewOpen] = useState(false);
+  const [poderPreviewFullScreen, setPoderPreviewFullScreen] = useState(false);
 
   // Picker clientes
  
@@ -1208,6 +1221,31 @@ async function fetchPresupuestosAll(apiBase) {
 };
 
 
+// Sube el .docx del Poder para que Claude lo revise ANTES de tomar el
+// número — informativo, no bloquea, pero sí es obligatorio subir algo
+// (poderFile) para poder guardar.
+const inspeccionarPoderFile = async (file) => {
+  setPoderFile(file);
+  setPoderInspeccion(null);
+  setPoderInspeccionError('');
+  if (!file) return;
+
+  setPoderInspeccionando(true);
+  try {
+    const fd = new FormData();
+    fd.append('documento', file);
+    const cidInsp = selectedCliente?._id ?? selectedCliente?.id;
+    if (cidInsp != null) fd.append('clienteId', String(cidInsp));
+    if (newRow?.tipoTramite) fd.append('tipoTramite', String(newRow.tipoTramite));
+    const { data } = await axios.post(`${API}/escrituras/poder/inspeccionar`, fd);
+    setPoderInspeccion(data?.data || null);
+  } catch (e) {
+    setPoderInspeccionError(e?.response?.data?.mensaje || 'No se pudo analizar el documento.');
+  } finally {
+    setPoderInspeccionando(false);
+  }
+};
+
 const openPresupuestoPicker = async (target) => {
   setPresupTarget(target);
   setPresupQ('');
@@ -1413,6 +1451,10 @@ const openPresupuestoPicker = async (target) => {
       setNewFolioHasta('');
       setNewHoraInicio('');
       setNewHoraFin('');
+      setPoderFile(null);
+      setPoderInspeccion(null);
+      setPoderInspeccionError('');
+      setPoderPreviewOpen(false);
     }
     setEditingId(null);
     setDrafts(prev => {
@@ -1436,6 +1478,12 @@ const openPresupuestoPicker = async (target) => {
   };
 
   const onSaveNew = async () => {
+  // Candado contra doble clic / doble submit: si ya hay un guardado en
+  // curso, ignora clics adicionales en vez de crear la escritura duplicada.
+  if (savingNewRef.current) return;
+  savingNewRef.current = true;
+  setSavingNew(true);
+  try {
   // 1) Validación central (obligatorios + folios + testamento HH:mm + montos si aplica)
 
     if (bloqueadoPorSoloLectura()) return;
@@ -1529,7 +1577,27 @@ if (isTramiteConMontos(newRow?.tipoTramite) && !newRow?.presupuestoId) {
     : {})
 };
 
-    const { data: resp } = await axios.post(`${API}/escrituras`, postPayload);
+    // Poder: manda multipart con el Word adjunto. Si ya se analizó en la
+    // vista previa (caso normal), manda ese resultado también para que el
+    // backend no vuelva a llamar a la IA una segunda vez — ahorra tiempo y
+    // costo. Si por algún motivo no hay resultado todavía, el backend lo
+    // calcula él mismo como respaldo.
+    const esPoderConArchivo = incluye(finalTipo, 'poder') && poderFile;
+    let bodyToSend = postPayload;
+    if (esPoderConArchivo) {
+      const fd = new FormData();
+      Object.entries(postPayload).forEach(([k, v]) => {
+        if (v === null || v === undefined) return;
+        fd.append(k, v);
+      });
+      fd.append('documento', poderFile);
+      if (poderInspeccion) {
+        fd.append('poderInspeccionJSON', JSON.stringify(poderInspeccion));
+      }
+      bodyToSend = fd;
+    }
+
+    const { data: resp } = await axios.post(`${API}/escrituras`, bodyToSend);
 
     let createdId = resp?.id || resp?._id || resp?.data?._id || null;
     let createdNumero = resp?.numeroControl || resp?.data?.numeroControl || null;
@@ -1611,9 +1679,17 @@ if (isTramiteConMontos(newRow?.tipoTramite) && !newRow?.presupuestoId) {
     setNewFolioHasta('');
     setNewHoraInicio('');
     setNewHoraFin('');
+    setPoderFile(null);
+    setPoderInspeccion(null);
+    setPoderInspeccionError('');
+    setPoderPreviewOpen(false);
   } catch (err2) {
     const t = err2?.response?.data?.mensaje || 'Error al crear';
     setMsg({ type: 'error', text: t });
+  }
+  } finally {
+    savingNewRef.current = false;
+    setSavingNew(false);
   }
 };
 
@@ -2547,57 +2623,87 @@ const onSaveEdit = async (id) => {
 
       {/* Panel de agregar */}
       {adding && (
-        <div style={{ display: 'grid', gridTemplateColumns: '140px 1fr 1.2fr 180px 220px auto', gap: 8, marginBottom: 12 }}>
-          <Button variant="outlined" onClick={() => openPickerFor('new')}>
-            SELECCIONAR CLIENTE
-          </Button>
+        <div style={{
+          border: '1px solid #e3e7ee',
+          borderRadius: 14,
+          padding: 20,
+          marginBottom: 16,
+          background: '#fafbfd',
+          boxShadow: '0 1px 3px rgba(16,24,40,0.04)',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
+            <span style={{ fontSize: 20 }}>📝</span>
+            <div style={{ fontWeight: 700, fontSize: 14.5, color: '#1a2233' }}>Nueva escritura</div>
+          </div>
 
-          <input type="hidden" value={newRow.numeroControl ? String(newRow.numeroControl) : ''} readOnly />
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'flex-start' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <span style={{ fontSize: 11, fontWeight: 700, color: '#667085', letterSpacing: 0.3 }}>CLIENTE</span>
+              <Button
+                variant="outlined"
+                onClick={() => openPickerFor('new')}
+                style={{ height: 40, whiteSpace: 'nowrap', fontWeight: 700 }}
+              >
+                {selectedCliente ? 'Cambiar cliente' : 'Seleccionar cliente'}
+              </Button>
+            </div>
 
-          <input type="text" value={newRow.tipoTramite} readOnly disabled placeholder="Tipo de trámite" />
+            <input type="hidden" value={newRow.numeroControl ? String(newRow.numeroControl) : ''} readOnly />
 
-          {incluye(newRow.tipoTramite, 'poder') && (
-            <select
-              value={newSubtipo}
-              onChange={(e) => {
-                const v = e.target.value;
-                setNewSubtipo(v);
-                setNewRow((prev) => {
-                  const base = stripSubtipo(prev.tipoTramite || 'Poder');
-                  return { ...prev, tipoTramite: v ? `${base} ${v}` : base };
-                });
-              }}
-            >
-              <option value="">— Tipo de poder —</option>
-              {SUBTIPOS_BY_TIPO.poder.map((s) => (
-                <option key={s} value={s}>{s}</option>
-              ))}
-            </select>
-          )}
+            <TextField
+              label="Tipo de trámite"
+              size="small"
+              value={newRow.tipoTramite || ''}
+              InputProps={{ readOnly: true }}
+              style={{ minWidth: 200 }}
+            />
 
-          <input type="text" value={newRow.cliente} readOnly disabled placeholder="Nombre del cliente" />
-          <input type="text" value={newRow.fecha} readOnly disabled placeholder="Fecha" />
-          <input type="text" value={newRow.abogado} readOnly disabled placeholder="Abogado responsable" />
+            {incluye(newRow.tipoTramite, 'poder') && (
+              <TextField
+                select
+                label="Tipo de poder"
+                size="small"
+                value={newSubtipo}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setNewSubtipo(v);
+                  setNewRow((prev) => {
+                    const base = stripSubtipo(prev.tipoTramite || 'Poder');
+                    return { ...prev, tipoTramite: v ? `${base} ${v}` : base };
+                  });
+                }}
+                style={{ minWidth: 180 }}
+              >
+                <MenuItem value="">— Tipo de poder —</MenuItem>
+                {SUBTIPOS_BY_TIPO.poder.map((s) => (
+                  <MenuItem key={s} value={s}>{s}</MenuItem>
+                ))}
+              </TextField>
+            )}
+
+            <TextField label="Cliente" size="small" value={newRow.cliente || ''} InputProps={{ readOnly: true }} style={{ minWidth: 200 }} />
+            <TextField label="Fecha" size="small" value={newRow.fecha || ''} InputProps={{ readOnly: true }} style={{ minWidth: 140 }} />
+            <TextField label="Abogado responsable" size="small" value={newRow.abogado || ''} InputProps={{ readOnly: true }} style={{ minWidth: 220 }} />
+          </div>
 
           {/* Volumen y Folios */}
-          <div style={{ gridColumn: '1 / -1', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            <input
-              type="text"
-              placeholder="Volumen (libro)"
+          <div style={{
+            display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-start',
+            marginTop: 18, paddingTop: 16, borderTop: '1px solid #e3e7ee',
+          }}>
+            <TextField
+              label="Volumen (libro)"
+              size="small"
               value={newVolumen}
               onChange={(e) => setNewVolumen(e.target.value)}
-              readOnly={!volumenEditable}
               disabled={!volumenEditable}
               title={volumenEditable ? 'Escribe el volumen' : 'Seleccionado automáticamente por el sistema'}
-              style={{
-                minWidth: 160,
-                background: volumenEditable ? undefined : '#f3f4f6',
-                cursor: volumenEditable ? 'text' : 'not-allowed'
-              }}
+              style={{ minWidth: 170 }}
             />
-            <input
+            <TextField
               type="number"
-              placeholder="Folio desde"
+              label="Folio desde"
+              size="small"
               value={newFolioDesde}
               onChange={(e) => {
                 const v = e.target.value;
@@ -2606,9 +2712,10 @@ const onSaveEdit = async (id) => {
               }}
               style={{ minWidth: 140 }}
             />
-            <input
+            <TextField
               type="number"
-              placeholder="Folio hasta"
+              label="Folio hasta"
+              size="small"
               value={newFolioHasta}
               onChange={(e) => setNewFolioHasta(e.target.value)}
               style={{ minWidth: 140 }}
@@ -2639,6 +2746,7 @@ if (sugerido != null) {
 
               }}
               disabled={!newVolumen}
+              style={{ height: 40 }}
             >
               Siguiente disponible
             </Button>
@@ -2730,24 +2838,292 @@ if (sugerido != null) {
   </>
 )}
 
+          {/* Poder: documento Word ya redactado, obligatorio subirlo — la IA
+              lo revisa pero no bloquea por el puntaje. */}
+          {incluye(newRow.tipoTramite, 'poder') && (
+            <div
+              style={{
+                gridColumn: '1 / -1',
+                border: '1px solid #e3e7ee',
+                borderRadius: 14,
+                padding: 16,
+                marginTop: 6,
+                background: '#fafbfd',
+                boxShadow: '0 1px 3px rgba(16,24,40,0.04)',
+              }}
+            >
+              <style>{'@keyframes spin { to { transform: rotate(360deg); } }'}</style>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+                <span style={{ fontSize: 20 }}>📄</span>
+                <div style={{ fontWeight: 700, fontSize: 14.5, color: '#1a2233' }}>Documento del Poder (Word)</div>
+                <span style={{ fontSize: 11, color: '#8a6d00', fontWeight: 600, marginLeft: 2 }}>· opcional por el momento</span>
+              </div>
 
-          <div style={{ whiteSpace: 'nowrap' }}>
-  <button
-  onClick={onSaveNew}
-  disabled={
-    !isNewCoreComplete(newRow) ||
-    !isNewFoliosValid(newVolumen, newFolioDesde, newFolioHasta) ||
-    !isNewTestamentoValid(newRow?.tipoTramite, newHoraInicio, newHoraFin) ||
-    !selectedCliente ||
-    (isTramiteConMontos(newRow?.tipoTramite) && !newRow?.presupuestoId) ||
-    (isTramiteConMontos(newRow?.tipoTramite) && !isNewMoneyComplete(newRow))
-  }
->
-  Guardar
-</button>
+              <label
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  padding: '8px 14px',
+                  borderRadius: 8,
+                  background: '#fff',
+                  border: '1px solid #d7deea',
+                  cursor: 'pointer',
+                  fontSize: 13,
+                  fontWeight: 600,
+                  color: '#2b4bff',
+                }}
+              >
+                ⬆ Elegir archivo .docx
+                <input
+                  type="file"
+                  accept=".docx"
+                  onChange={(e) => inspeccionarPoderFile(e.target.files?.[0] || null)}
+                  style={{ display: 'none' }}
+                />
+              </label>
+              {poderFile && (
+                <span style={{ marginLeft: 10, fontSize: 13, color: '#44506b' }}>{poderFile.name}</span>
+              )}
 
-  <button onClick={() => onCancel('new')} style={{ marginLeft: 8 }}>Cancelar</button>
-</div>
+              {poderInspeccionando && (
+                <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: '#666' }}>
+                  <span className="pres-spinner" style={{
+                    width: 14, height: 14, borderRadius: '50%',
+                    border: '2px solid #cfd6e4', borderTopColor: '#2b4bff',
+                    display: 'inline-block', animation: 'spin 0.8s linear infinite',
+                  }} />
+                  Analizando con IA…
+                </div>
+              )}
+
+              {poderInspeccionError && (
+                <div style={{
+                  marginTop: 12, padding: '8px 12px', borderRadius: 8,
+                  background: '#fff4f4', border: '1px solid #f3c6c6',
+                  fontSize: 13, color: '#9a2a2a',
+                }}>
+                  {poderInspeccionError} — puedes continuar de todos modos, la revisión es solo informativa.
+                </div>
+              )}
+
+              {poderInspeccion && (() => {
+                const pct = poderInspeccion.porcentaje;
+                const tono =
+                  pct == null ? { bg: '#eef0f4', fg: '#667085', ring: '#c2c8d4' }
+                    : pct >= 90 ? { bg: '#e9f9ee', fg: '#1a7f37', ring: '#2e7d32' }
+                    : pct >= 70 ? { bg: '#fff6e5', fg: '#9a6400', ring: '#ed6c02' }
+                    : { bg: '#fdeceb', fg: '#b42318', ring: '#c62828' };
+                return (
+                  <div
+                    style={{
+                      marginTop: 14,
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 14,
+                      padding: '12px 14px',
+                      borderRadius: 10,
+                      background: tono.bg,
+                      border: `1px solid ${tono.ring}33`,
+                    }}
+                  >
+                    <div
+                      style={{
+                        flexShrink: 0,
+                        width: 52, height: 52, borderRadius: '50%',
+                        border: `3px solid ${tono.ring}`,
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        fontWeight: 800, fontSize: pct != null ? 15 : 11,
+                        color: tono.fg, background: '#fff',
+                      }}
+                    >
+                      {pct != null ? `${pct}%` : 'N/D'}
+                    </div>
+
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontWeight: 700, fontSize: 13, color: tono.fg }}>
+                        {pct == null ? 'No se pudo calificar' : pct >= 90 ? 'Listo para tomar número' : pct >= 70 ? 'Revisar antes de continuar' : 'Necesita correcciones importantes'}
+                      </div>
+                      {poderInspeccion.resumen && (
+                        <div style={{
+                          marginTop: 2, fontSize: 12.5, color: '#44506b',
+                          overflow: 'hidden', textOverflow: 'ellipsis',
+                          display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
+                        }}>
+                          {poderInspeccion.resumen}
+                        </div>
+                      )}
+                    </div>
+
+                    <Button
+                      variant="outlined"
+                      size="small"
+                      onClick={() => setPoderPreviewOpen(true)}
+                      style={{ flexShrink: 0, whiteSpace: 'nowrap' }}
+                    >
+                      Ver documento y sugerencias
+                    </Button>
+                  </div>
+                );
+              })()}
+            </div>
+          )}
+
+          {/* Modal: vista previa del Word + sugerencias completas de la IA.
+              Pura lectura — nunca modifica el documento real. */}
+          <Dialog
+            open={poderPreviewOpen}
+            onClose={() => setPoderPreviewOpen(false)}
+            maxWidth={poderPreviewFullScreen ? false : 'xl'}
+            fullWidth={!poderPreviewFullScreen}
+            fullScreen={poderPreviewFullScreen}
+            PaperProps={{
+              style: poderPreviewFullScreen ? {} : { height: '92vh' },
+            }}
+          >
+            <DialogTitle style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+              <span>Revisión del Poder{poderFile ? ` — ${poderFile.name}` : ''}</span>
+              <Button
+                variant="outlined"
+                size="small"
+                onClick={() => setPoderPreviewFullScreen((v) => !v)}
+                style={{ flexShrink: 0 }}
+              >
+                {poderPreviewFullScreen ? '⤡ Salir de pantalla completa' : '⤢ Pantalla completa'}
+              </Button>
+            </DialogTitle>
+            <DialogContent dividers style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, padding: 0, overflow: 'hidden' }}>
+              <div style={{ display: 'flex', flex: 1, minHeight: 0, gap: 20, width: '100%', padding: 20, boxSizing: 'border-box' }}>
+                <div style={{ flex: '2 1 600px', minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+                  <div style={{ fontWeight: 700, fontSize: 13, color: '#44506b', marginBottom: 8, flexShrink: 0 }}>
+                    Vista previa del documento
+                  </div>
+                  <div
+                    style={{
+                      flex: 1, minHeight: 0, overflowY: 'auto',
+                      border: '1px solid #e3e7ee', borderRadius: 10,
+                      padding: '24px 28px', background: '#fff',
+                      fontSize: 13.5, lineHeight: 1.6, color: '#1a2233',
+                      fontFamily: 'Georgia, "Times New Roman", serif',
+                    }}
+                    dangerouslySetInnerHTML={{ __html: poderInspeccion?.previewHtml || '<p style="color:#999">Sin vista previa disponible.</p>' }}
+                  />
+                </div>
+
+                <div style={{ flex: '1 1 340px', minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+                  <div style={{ fontWeight: 700, fontSize: 13, color: '#44506b', marginBottom: 8, flexShrink: 0 }}>
+                    Revisión de la IA
+                  </div>
+
+                  <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', paddingRight: 4 }}>
+
+                  {poderInspeccion?.porcentaje != null && (
+                    <div style={{ fontSize: 28, fontWeight: 800, marginBottom: 4 }}>
+                      {poderInspeccion.porcentaje}% <span style={{ fontSize: 13, fontWeight: 600, color: '#667085' }}>listo</span>
+                    </div>
+                  )}
+
+                  {poderInspeccion?.resumen && (
+                    <div style={{ fontSize: 13.5, color: '#333', marginBottom: 14 }}>{poderInspeccion.resumen}</div>
+                  )}
+
+                  {Array.isArray(poderInspeccion?.comparacionDatos) && poderInspeccion.comparacionDatos.length > 0 && (
+                    <div style={{ marginBottom: 16 }}>
+                      <div style={{ fontWeight: 700, fontSize: 12.5, color: '#44506b', marginBottom: 6 }}>
+                        Comparativa con datos del sistema
+                      </div>
+                      <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'grid', gap: 6 }}>
+                        {poderInspeccion.comparacionDatos.map((d, i) => (
+                          <li
+                            key={i}
+                            style={{
+                              display: 'flex', gap: 8, alignItems: 'flex-start',
+                              fontSize: 12.5, padding: '7px 10px',
+                              background: d.coincide ? '#e9f9ee' : '#fdeceb',
+                              border: `1px solid ${d.coincide ? '#bfe6c9' : '#f3c6c6'}`,
+                              borderRadius: 8,
+                            }}
+                          >
+                            <span>{d.coincide ? '✅' : '❌'}</span>
+                            <span>
+                              <strong>{d.campo}</strong>{d.persona ? ` — ${d.persona}` : ''}
+                              {d.esperado ? <>: <span style={{ color: '#667085' }}>{d.esperado}</span></> : null}
+                              {!d.coincide && d.nota && (
+                                <div style={{ marginTop: 2, color: '#9a2a2a' }}>{d.nota}</div>
+                              )}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {Array.isArray(poderInspeccion?.sugerencias) && poderInspeccion.sugerencias.length > 0 ? (
+                    <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'grid', gap: 8 }}>
+                      {poderInspeccion.sugerencias.map((s, i) => (
+                        <li
+                          key={i}
+                          style={{
+                            display: 'flex', gap: 8, alignItems: 'flex-start',
+                            fontSize: 13, padding: '8px 10px',
+                            background: '#fff6e5', border: '1px solid #f3dfa8',
+                            borderRadius: 8,
+                          }}
+                        >
+                          <span>⚠️</span>
+                          <span>{s}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <div style={{ fontSize: 13, color: '#1a7f37', display: 'flex', gap: 8, alignItems: 'center' }}>
+                      ✅ No se encontraron pendientes.
+                    </div>
+                  )}
+
+                  </div>
+
+                  <div style={{ marginTop: 10, fontSize: 11.5, color: '#98a1b3', flexShrink: 0 }}>
+                    Esta revisión es informativa — corrige el documento en Word y vuelve a subirlo para reanalizar.
+                    No modifica el archivo original.
+                  </div>
+                </div>
+              </div>
+            </DialogContent>
+            <DialogActions>
+              <Button onClick={() => setPoderPreviewOpen(false)}>Cerrar</Button>
+            </DialogActions>
+          </Dialog>
+
+          <div style={{
+            display: 'flex', justifyContent: 'flex-end', gap: 10,
+            marginTop: 20, paddingTop: 16, borderTop: '1px solid #e3e7ee',
+          }}>
+            <Button variant="outlined" onClick={() => onCancel('new')}>
+              Cancelar
+            </Button>
+            <Button
+              variant="contained"
+              onClick={onSaveNew}
+              disabled={
+                !isNewCoreComplete(newRow) ||
+                !isNewFoliosValid(newVolumen, newFolioDesde, newFolioHasta) ||
+                !isNewTestamentoValid(newRow?.tipoTramite, newHoraInicio, newHoraFin) ||
+                !selectedCliente ||
+                (isTramiteConMontos(newRow?.tipoTramite) && !newRow?.presupuestoId) ||
+                (isTramiteConMontos(newRow?.tipoTramite) && !isNewMoneyComplete(newRow)) ||
+                // ⚠️ TEMPORAL (14/10/2026, a pedido del notario): se quitó el
+                // bloqueo de "requiere archivo de Poder" aquí, en espejo del
+                // mismo candado desactivado en el backend (PODER_DOC_OBLIGATORIO).
+                // Para reactivarlo: agregar de nuevo
+                // (incluye(newRow.tipoTramite, 'poder') && !poderFile) ||
+                poderInspeccionando ||
+                savingNew
+              }
+            >
+              {savingNew ? 'Guardando…' : 'Guardar'}
+            </Button>
+          </div>
 
         </div>
       )}
@@ -2986,6 +3362,17 @@ if (sugerido != null) {
         />
 
         <Menu anchorEl={tplAnchorEl} open={Boolean(tplAnchorEl)} onClose={closeTplMenu}>
+          {tplRow?.poderInspeccion?.archivoPath && (
+            <MenuItem
+              onClick={() => {
+                window.location.href = `${API}/escrituras/${tplRow._id}/poder-documento`;
+                closeTplMenu();
+              }}
+              style={{ fontWeight: 700 }}
+            >
+              📄 Documento subido (el que se validó al tomar el número)
+            </MenuItem>
+          )}
           {tplOptions.length > 0
             ? tplOptions.map(p => (
                 <MenuItem key={p.id} onClick={() => descargarPlantilla(p.id)}>

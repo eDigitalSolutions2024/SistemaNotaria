@@ -500,7 +500,12 @@ router.post("/", auth, async (req, res) => {
     const total = Number(presupuesto.totalPresupuesto || 0);
     if (total <= 100000) return;
 
-    const notarioPhones = [process.env.NOTARIO_PHONE, process.env.NOTARIO_PHONE_2].filter(Boolean);
+    const notarioPhones = [
+      process.env.NOTARIO_PHONE,
+      process.env.NOTARIO_PHONE_2,
+      process.env.NOTARIO_PHONE_3,
+      process.env.NOTARIO_PHONE_4,
+    ].filter(Boolean);
 
     // Self-fetch (mismo proceso/máquina): usar el puerto real del backend,
     // no una IP/puerto fijo que puede desincronizarse entre entornos.

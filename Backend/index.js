@@ -187,6 +187,8 @@ app.use('/api/plantillas', require('./routes/plantillas'));
 app.use('/api/escrituras', escriturasRoutes);
 app.use('/api/clientes-generales', require('./routes/clientesGenerales'));
 app.use('/api/presupuestos', require('./routes/presupuestos'));
+app.use('/api/cerveceria', require('./routes/cerveceria'));
+app.use('/api/gestion-especial-modulos', require('./routes/gestionEspecialModulos'));
 
 app.use('/api/calendar', calendarRoutes);
 app.use('/auth/microsoft', microsoftRoutes);

@@ -132,6 +132,17 @@ export default function EscrituraEstatus({ escrituraId, onClose }) {
     return roles.includes('ADMIN') || roles.includes('RECEPCION');
   }, [user]);
 
+  // ✅ "Cambiar presupuesto" — solo ADMIN
+  const isAdmin = useMemo(() => {
+    const roles = []
+      .concat(user?.roles || [])
+      .concat(user?.rol || [])
+      .concat(user?.role || [])
+      .filter(Boolean)
+      .map((r) => String(r).toUpperCase());
+    return roles.includes('ADMIN');
+  }, [user]);
+
   const [row, setRow] = useState(null);
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -169,6 +180,93 @@ export default function EscrituraEstatus({ escrituraId, onClose }) {
   // ✅ Documentación faltante
   const [faltanteList, setFaltanteList] = useState([]);
   const [faltanteInput, setFaltanteInput] = useState('');
+
+  // ✅ Cambiar presupuesto (solo ADMIN, misma contraseña maestra que en
+  // Presupuestos) — dos pasos: confirmar contraseña, luego elegir presupuesto.
+  const [cpOpen, setCpOpen] = useState(false);
+  const [cpStep, setCpStep] = useState('password'); // 'password' | 'elegir'
+  const [cpPassword, setCpPassword] = useState('');
+  const [cpPasswordError, setCpPasswordError] = useState('');
+  const [cpLoadingList, setCpLoadingList] = useState(false);
+  const [cpListError, setCpListError] = useState('');
+  const [cpPresupuestos, setCpPresupuestos] = useState([]);
+  const [cpQuery, setCpQuery] = useState('');
+  const [cpSelectedId, setCpSelectedId] = useState('');
+  const [cpMotivo, setCpMotivo] = useState('');
+  const [cpSaving, setCpSaving] = useState(false);
+  const [cpError, setCpError] = useState('');
+
+  const CP_MASTER = 'Not17cdj'; // misma contraseña que "Cargar" en Presupuestos
+
+  const openCambiarPresupuesto = () => {
+    setCpStep('password');
+    setCpPassword('');
+    setCpPasswordError('');
+    setCpSelectedId('');
+    setCpMotivo('');
+    setCpError('');
+    setCpOpen(true);
+  };
+
+  const closeCambiarPresupuesto = () => {
+    if (cpSaving) return;
+    setCpOpen(false);
+  };
+
+  const confirmarPasswordCp = async () => {
+    if (cpPassword !== CP_MASTER) {
+      setCpPasswordError('Contraseña incorrecta');
+      return;
+    }
+    setCpPasswordError('');
+    setCpStep('elegir');
+    setCpLoadingList(true);
+    setCpListError('');
+    try {
+      const { data } = await axios.get(`${API}/escrituras/presupuestos`);
+      setCpPresupuestos(Array.isArray(data) ? data : []);
+    } catch (e) {
+      setCpListError(e?.response?.data?.mensaje || 'No se pudo cargar la lista de presupuestos');
+      setCpPresupuestos([]);
+    } finally {
+      setCpLoadingList(false);
+    }
+  };
+
+  const cpPresupuestosFiltrados = useMemo(() => {
+    const q = cpQuery.trim().toLowerCase();
+    if (!q) return cpPresupuestos;
+    return cpPresupuestos.filter((p) =>
+      String(p.clienteNombre || '').toLowerCase().includes(q) ||
+      String(p._id || '').toLowerCase().includes(q) ||
+      String(p.tipoTramite || '').toLowerCase().includes(q)
+    );
+  }, [cpPresupuestos, cpQuery]);
+
+  const confirmarCambioPresupuesto = async () => {
+    if (!cpSelectedId) {
+      setCpError('Selecciona un presupuesto.');
+      return;
+    }
+    if (!cpMotivo.trim()) {
+      setCpError('Indica el motivo del cambio.');
+      return;
+    }
+    try {
+      setCpSaving(true);
+      setCpError('');
+      const { data } = await axios.patch(`${API}/escrituras/${row._id}/presupuesto`, {
+        presupuestoId: cpSelectedId,
+        motivo: cpMotivo.trim(),
+      });
+      if (data?.data) setRow(data.data);
+      setCpOpen(false);
+    } catch (e) {
+      setCpError(e?.response?.data?.mensaje || 'No se pudo cambiar el presupuesto');
+    } finally {
+      setCpSaving(false);
+    }
+  };
 
   const documentos = row?.documentos || {};
 
@@ -692,6 +790,17 @@ export default function EscrituraEstatus({ escrituraId, onClose }) {
               </Button>
             )}
 
+            {isAdmin && (
+              <Button
+                variant="outlined"
+                size="small"
+                color="warning"
+                onClick={openCambiarPresupuesto}
+              >
+                Cambiar presupuesto
+              </Button>
+            )}
+
             {canAttachRecibos ? (
               <Button variant="outlined" size="small" onClick={openAttachModal}>
                 Adjuntar recibos
@@ -1017,6 +1126,114 @@ export default function EscrituraEstatus({ escrituraId, onClose }) {
           >
             {attaching ? 'Adjuntando…' : `Adjuntar (${selectedIds.length})`}
           </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Modal: Cambiar presupuesto (solo ADMIN) */}
+      <Dialog open={cpOpen} onClose={closeCambiarPresupuesto} maxWidth="sm" fullWidth>
+        <DialogTitle sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 2 }}>
+          <span>Cambiar presupuesto</span>
+          <IconButton onClick={closeCambiarPresupuesto}><CloseIcon /></IconButton>
+        </DialogTitle>
+
+        <DialogContent dividers>
+          {cpStep === 'password' ? (
+            <div>
+              <p style={{ marginTop: 0 }}>
+                Confirma la contraseña para cambiar el presupuesto de la escritura #{row?.numeroControl}.
+              </p>
+              <TextField
+                type="password"
+                label="Contraseña"
+                fullWidth
+                autoFocus
+                value={cpPassword}
+                onChange={(e) => setCpPassword(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') confirmarPasswordCp(); }}
+                error={!!cpPasswordError}
+                helperText={cpPasswordError || ' '}
+              />
+            </div>
+          ) : (
+            <div>
+              <p style={{ marginTop: 0 }}>
+                Presupuesto actual: <b>{row?.presupuestoId ? `#${String(row.presupuestoId).slice(-6).toUpperCase()}` : 'ninguno'}</b>
+              </p>
+
+              <TextField
+                label="Buscar por cliente, tipo de trámite o ID"
+                fullWidth
+                size="small"
+                value={cpQuery}
+                onChange={(e) => setCpQuery(e.target.value)}
+                sx={{ mb: 2 }}
+              />
+
+              {cpLoadingList ? (
+                <span style={{ fontSize: 13, color: '#666' }}>Cargando presupuestos…</span>
+              ) : cpListError ? (
+                <span style={{ fontSize: 13, color: '#c62828' }}>{cpListError}</span>
+              ) : (
+                <div style={{ maxHeight: 260, overflowY: 'auto', border: '1px solid #eee', borderRadius: 8 }}>
+                  {cpPresupuestosFiltrados.length === 0 ? (
+                    <div style={{ padding: 12, fontSize: 13, color: '#666' }}>Sin resultados.</div>
+                  ) : (
+                    cpPresupuestosFiltrados.map((p) => (
+                      <div
+                        key={p._id}
+                        onClick={() => setCpSelectedId(p._id)}
+                        style={{
+                          padding: '8px 12px',
+                          cursor: 'pointer',
+                          borderBottom: '1px solid #f0f0f0',
+                          background: cpSelectedId === p._id ? '#e3f2fd' : 'transparent',
+                        }}
+                      >
+                        <div style={{ fontWeight: 600, fontSize: 13 }}>
+                          #{String(p._id).slice(-6).toUpperCase()} — {p.clienteNombre || 'Sin cliente'}
+                        </div>
+                        <div style={{ fontSize: 12, color: '#666' }}>
+                          {p.tipoTramite || '—'} · {currency(p.totalPresupuesto)}
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
+
+              <TextField
+                label="Motivo del cambio"
+                fullWidth
+                multiline
+                rows={2}
+                sx={{ mt: 2 }}
+                value={cpMotivo}
+                onChange={(e) => setCpMotivo(e.target.value)}
+                placeholder="Ej. Se ligó el presupuesto equivocado al crear la escritura."
+              />
+
+              {cpError && (
+                <div style={{ marginTop: 10, fontSize: 13, color: '#c62828' }}>{cpError}</div>
+              )}
+            </div>
+          )}
+        </DialogContent>
+
+        <DialogActions>
+          <Button onClick={closeCambiarPresupuesto} disabled={cpSaving}>Cancelar</Button>
+          {cpStep === 'password' ? (
+            <Button variant="contained" onClick={confirmarPasswordCp} disabled={!cpPassword}>
+              Confirmar
+            </Button>
+          ) : (
+            <Button
+              variant="contained"
+              onClick={confirmarCambioPresupuesto}
+              disabled={cpSaving || !cpSelectedId || !cpMotivo.trim()}
+            >
+              {cpSaving ? 'Guardando…' : 'Cambiar presupuesto'}
+            </Button>
+          )}
         </DialogActions>
       </Dialog>
 

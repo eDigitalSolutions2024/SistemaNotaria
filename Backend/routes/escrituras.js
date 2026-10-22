@@ -23,7 +23,48 @@ const auth = require('../middleware/auth');
 let Cliente = null;
 try { Cliente = require('../models/Cliente'); } catch { /* opcional */ }
 
+const ClienteGeneral = require('../models/ClienteGeneral');
+
 const pldService = require('../pld/pldService');
+const { inspeccionarPoder } = require('../services/poderInspeccionService');
+
+const PODERES_DIR = path.join(__dirname, '..', 'PoderesAdjuntos');
+function esTramitePoder(tipo) {
+  return /poder/i.test(String(tipo || ''));
+}
+function getSubtipoPoder(tipo) {
+  const t = String(tipo || '').toLowerCase();
+  if (t.includes('irrevocable')) return 'Irrevocable';
+  if (t.includes('revocable')) return 'Revocable';
+  return '';
+}
+
+// Arma el contexto (datos ya capturados del cliente + subtipo) que se le
+// pasa a la IA para comparar contra el documento del Poder. Si no hay
+// clienteId o no hay ClienteGeneral capturados, regresa un contexto "vacío"
+// — la inspección sigue funcionando igual, solo sin esa comparativa.
+async function buildPoderContexto(clienteId, tipoTramite) {
+  const subtipo = getSubtipoPoder(tipoTramite);
+  let personas = [];
+  if (clienteId) {
+    const num = Number(clienteId);
+    if (Number.isFinite(num)) {
+      try {
+        const docs = await ClienteGeneral.find({ clienteId: num }).lean();
+        personas = docs.map(d => ({
+          nombre_completo: d.nombre_completo || '',
+          rol: d.rol || '',
+          curp: d.curp || '',
+          rfc: d.rfc || '',
+          domicilio: d.domicilio || '',
+        }));
+      } catch (e) {
+        console.error('buildPoderContexto ClienteGeneral ERROR:', e.message);
+      }
+    }
+  }
+  return { subtipo, personas };
+}
 
 
 
@@ -299,6 +340,8 @@ const TRAMITES_CON_MONTOS_PATTERNS = [
   /\besscritura\b/,
   /\bcompra\s*venta\b/,
   /\bcompraventa\b/,
+  /\bcompra\b/,
+  /\bventa\b/,
   /\bcv\b/,
   /\bc\s+v\b/,
   /\bproto\b/,
@@ -512,6 +555,31 @@ if (h > MAX_FOLIO_USABLE) {
 const upload = multer({
   dest: path.join(__dirname, '../tmp'),
   limits: { fileSize: 10 * 1024 * 1024 }
+});
+
+// POST /escrituras/poder/inspeccionar
+// Vista previa: el abogado sube el .docx del Poder ANTES de confirmar que
+// toma el número, ve el porcentaje/sugerencias de Claude, y decide si
+// corrige o continúa. No crea ni modifica nada — es de solo análisis.
+router.post('/poder/inspeccionar', auth, upload.single('documento'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ mensaje: 'Sube el documento de Word del poder.' });
+    }
+
+    const buffer = fs.readFileSync(req.file.path);
+    const contexto = await buildPoderContexto(req.body.clienteId, req.body.tipoTramite);
+    const resultado = await inspeccionarPoder(buffer, contexto);
+    res.json({ ok: true, data: resultado });
+  } catch (e) {
+    console.error('INSPECCIONAR PODER ERROR:', e);
+    const mensaje = e.code === 'NO_API_KEY'
+      ? 'La inspección por IA no está configurada todavía (falta la API key en el servidor).'
+      : (e.code === 'SIN_TEXTO' ? e.message : 'No se pudo analizar el documento.');
+    res.status(500).json({ mensaje, detalle: e.message });
+  } finally {
+    if (req.file?.path) { try { fs.unlinkSync(req.file.path); } catch {} }
+  }
 });
 
 const pick = (obj, keys) =>
@@ -1412,7 +1480,7 @@ router.post('/brincar-volumen', auth, async (req, res) => {
 });
 
 // POST /escrituras
-router.post('/', bloquearSiDeshabilitado, async (req, res) => {
+router.post('/', bloquearSiDeshabilitado, upload.single('documento'), async (req, res) => {
   let base = null;
   try {
     // 🔐 Candado: máximo 5 escrituras sin recibo por abogado
@@ -1507,6 +1575,79 @@ router.post('/', bloquearSiDeshabilitado, async (req, res) => {
         });
       }
 
+    }
+
+    // =========================
+    // 2.6) Candado: Poder requiere el Word ya redactado + inspección IA.
+    // Obligatorio subirlo; el PUNTAJE no bloquea (si la IA falla, p.ej. sin
+    // API key configurada todavía, tampoco bloquea — solo queda sin
+    // calificar, para no tumbar la toma de números mientras se configura).
+    //
+    // ⚠️ TEMPORAL (14/10/2026, a pedido del notario): PODER_DOC_OBLIGATORIO
+    // en .env permite desactivar el bloqueo de "sube el Word" sin tocar el
+    // resto del candado — si el abogado SÍ sube el archivo, igual se analiza
+    // y se guarda normal. Para reactivar el bloqueo: PODER_DOC_OBLIGATORIO=true
+    // (o quitar la variable) y reiniciar.
+    // =========================
+    const poderDocObligatorio = String(process.env.PODER_DOC_OBLIGATORIO ?? 'true').toLowerCase() !== 'false';
+    if (esTramitePoder(tipoFinal) && poderDocObligatorio && !req.file) {
+      return res.status(400).json({
+        mensaje: 'Para tomar número de un Poder debes subir el documento de Word ya redactado.',
+      });
+    }
+
+    if (esTramitePoder(tipoFinal) && req.file) {
+      // Si el frontend ya mandó el resultado de la vista previa (caso
+      // normal), lo reusamos en vez de llamar a la IA otra vez — es
+      // informativo, no un dato que necesite re-verificarse, y así no se
+      // duplica el tiempo de espera ni el costo por cada Poder.
+      let resultadoIA = null;
+      if (typeof req.body.poderInspeccionJSON === 'string' && req.body.poderInspeccionJSON.trim()) {
+        try {
+          const parsed = JSON.parse(req.body.poderInspeccionJSON);
+          const porcentajeNum = Number(parsed.porcentaje);
+          resultadoIA = {
+            porcentaje: Number.isFinite(porcentajeNum) ? Math.max(0, Math.min(100, Math.round(porcentajeNum))) : null,
+            resumen: String(parsed.resumen || '').trim(),
+            sugerencias: Array.isArray(parsed.sugerencias)
+              ? parsed.sugerencias.map(s => String(s || '').trim()).filter(Boolean)
+              : [],
+            comparacionDatos: Array.isArray(parsed.comparacionDatos)
+              ? parsed.comparacionDatos.map(d => ({
+                  persona: String(d?.persona || '').trim(),
+                  campo: String(d?.campo || '').trim(),
+                  esperado: String(d?.esperado || '').trim(),
+                  coincide: Boolean(d?.coincide),
+                  nota: String(d?.nota || '').trim(),
+                })).filter(d => d.persona && d.campo)
+              : [],
+          };
+        } catch { resultadoIA = null; }
+      }
+
+      if (!resultadoIA) {
+        // Respaldo: no vino ya analizado (llamada directa a la API, o la
+        // vista previa falló) — se calcula aquí.
+        try {
+          const buffer = fs.readFileSync(req.file.path);
+          const contexto = await buildPoderContexto(clienteId, tipoFinal);
+          resultadoIA = await inspeccionarPoder(buffer, contexto);
+        } catch (e) {
+          console.error('INSPECCION PODER (al crear) ERROR:', e.message);
+          resultadoIA = { porcentaje: null, resumen: 'No se pudo completar la revisión automática.', sugerencias: [], comparacionDatos: [] };
+        }
+      }
+
+      if (!fs.existsSync(PODERES_DIR)) fs.mkdirSync(PODERES_DIR, { recursive: true });
+      const archivoGuardado = `Poder_${base.numeroControl}.docx`;
+      fs.copyFileSync(req.file.path, path.join(PODERES_DIR, archivoGuardado));
+
+      base.poderInspeccion = {
+        ...resultadoIA,
+        archivoNombre: req.file.originalname || archivoGuardado,
+        archivoPath: archivoGuardado,
+        fecha: new Date(),
+      };
     }
 
     // =========================
@@ -1701,7 +1842,40 @@ res.status(201).json(created);
   }
 
   res.status(500).json({ mensaje: 'Error creando escritura', detalle: e.message });
-}
+}  finally {
+    // El .docx del Poder ya quedó copiado a PODERES_DIR si hacía falta —
+    // el temporal de multer no debe quedarse huérfano en ningún caso
+    // (éxito, error, o cualquiera de los `return` de validación de arriba).
+    if (req.file?.path) { try { fs.unlinkSync(req.file.path); } catch {} }
+  }
+});
+
+// GET /escrituras/:id/poder-documento — descarga el .docx que se subió y
+// quedó guardado al tomar el número (siempre el mismo archivo validado,
+// no se regenera).
+router.get('/:id/poder-documento', async (req, res) => {
+  try {
+    const esc = await Escritura.findById(req.params.id).select('numeroControl poderInspeccion').lean();
+    if (!esc) return res.status(404).json({ mensaje: 'Escritura no encontrada' });
+
+    const archivoPath = esc.poderInspeccion?.archivoPath;
+    if (!archivoPath) {
+      return res.status(404).json({ mensaje: 'Esta escritura no tiene un documento de poder adjunto.' });
+    }
+
+    const abs = path.join(PODERES_DIR, archivoPath);
+    if (!fs.existsSync(abs)) {
+      return res.status(404).json({ mensaje: 'El archivo ya no está disponible en el servidor.' });
+    }
+
+    const nombreDescarga = esc.poderInspeccion?.archivoNombre || archivoPath;
+    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(nombreDescarga)}"`);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+    fs.createReadStream(abs).pipe(res);
+  } catch (e) {
+    console.error('DESCARGAR PODER ERROR:', e);
+    res.status(500).json({ mensaje: 'Error al descargar el documento', detalle: e.message });
+  }
 });
 
 // ✅ NUEVO: todos los presupuestos (para selector global)
@@ -2205,6 +2379,121 @@ console.log('PUT merged.fecha:', merged.fecha);
     return res.json(updated);
   } catch (e) {
     return res.status(500).json({ mensaje: 'Error actualizando escritura', detalle: e.message });
+  }
+});
+
+// PATCH /escrituras/:id/presupuesto
+// Solo ADMIN. Cambia el presupuesto vinculado a una escritura YA CREADA.
+// A propósito no exige que el presupuesto sea del mismo cliente que la
+// escritura — el nombre con el que se hizo el presupuesto muchas veces no
+// es el mismo con el que termina el trámite (decisión ya tomada para todo
+// el sistema, no solo al crear). Libera el presupuesto anterior (si había)
+// y bloquea el nuevo contra doble uso, igual que se hace al crear.
+router.patch('/:id/presupuesto', auth, async (req, res) => {
+  try {
+    const roles = getUserRolesFromReq(req);
+    if (!roles.includes('ADMIN')) {
+      return res.status(403).json({ mensaje: 'Solo un administrador puede cambiar el presupuesto de una escritura.' });
+    }
+
+    const { presupuestoId, motivo } = req.body || {};
+    if (!presupuestoId) {
+      return res.status(400).json({ mensaje: 'Selecciona un presupuesto.' });
+    }
+    if (!motivo || !String(motivo).trim()) {
+      return res.status(400).json({ mensaje: 'Indica el motivo del cambio.' });
+    }
+
+    const escritura = await Escritura.findById(req.params.id);
+    if (!escritura) return res.status(404).json({ mensaje: 'Escritura no encontrada' });
+
+    const nuevoPresupuesto = await Presupuesto.findById(presupuestoId).lean();
+    if (!nuevoPresupuesto) {
+      return res.status(400).json({ mensaje: 'El presupuesto seleccionado no existe.' });
+    }
+
+    const presupuestoIdActual = escritura.presupuestoId ? String(escritura.presupuestoId) : null;
+    const esElMismo = presupuestoIdActual === String(presupuestoId);
+
+    if (!esElMismo) {
+      // el nuevo presupuesto no debe estar tomado por OTRA escritura
+      if (nuevoPresupuesto.usadoEnEscritura && String(nuevoPresupuesto.escrituraId || '') !== String(escritura._id)) {
+        return res.status(400).json({ mensaje: 'Ese presupuesto ya está usado en otra escritura.' });
+      }
+
+      // libera el anterior (si había uno distinto)
+      if (presupuestoIdActual) {
+        await Presupuesto.updateOne(
+          { _id: presupuestoIdActual },
+          { $set: { usadoEnEscritura: false, escrituraId: null, fechaUsoEscritura: null } }
+        );
+      }
+
+      // bloquea el nuevo contra doble uso
+      await Presupuesto.updateOne(
+        { _id: presupuestoId },
+        { $set: { usadoEnEscritura: true, escrituraId: escritura._id, fechaUsoEscritura: new Date() } }
+      );
+    }
+
+    // recalcula montos desde el nuevo presupuesto (mismas llaves que al crear)
+    const cargos = nuevoPresupuesto.cargos || {};
+    const honor = nuevoPresupuesto.honorariosCalc || {};
+    const impuestosKeys = [
+      'isr', 'isrAdquisicion',
+      'traslacionDominio', 'traslacionDominio2', 'traslacionDominioRecargos',
+      'ivaLocalComerc', 'actosJuridicos',
+      'impuestoCedular', 'impuestoPredial',
+    ];
+    const gastosKeys = [
+      'registroPublico', 'registroPubVtaHip', 'registroPubPoderes', 'registroPubOtros', 'registroPublicoRecargos',
+      'solicPermiso', 'avisoPermiso', 'costoAvaluo', 'gastosGestiones',
+      'tramiteForaneo', 'otrosConceptos',
+      'certificados1', 'certificados2', 'certificados3',
+    ];
+
+    const nuevoValorAvaluo = numOrNull(
+      nuevoPresupuesto.valorAvaluo ?? nuevoPresupuesto.valor_avaluo ?? nuevoPresupuesto.avaluo ?? nuevoPresupuesto.valorOperacion ?? 0
+    );
+    const nuevoTotalHonorarios = numOrNull(
+      nuevoPresupuesto.totalHonorarios ?? nuevoPresupuesto.total_honorarios ?? honor.totalHonorarios ?? honor.total_honorarios ?? 0
+    );
+    const nuevoTotalImpuestos = numOrNull(sumKeys(cargos, impuestosKeys));
+    const nuevoTotalGastosExtra = numOrNull(sumKeys(cargos, gastosKeys));
+
+    // nota de auditoría — reusa el mismo campo de "Notas" que ya ves en el modal
+    let comentarios = [];
+    try {
+      const parsed = JSON.parse(escritura.comentariosEstatus || '[]');
+      if (Array.isArray(parsed)) comentarios = parsed;
+    } catch { /* comentariosEstatus viejo en texto plano, se ignora aquí */ }
+
+    comentarios.unshift({
+      id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      text: `Presupuesto cambiado${presupuestoIdActual ? ` (antes #${presupuestoIdActual.slice(-6).toUpperCase()})` : ''} → #${String(presupuestoId).slice(-6).toUpperCase()}. Motivo: ${motivo.trim()}`,
+      createdAt: new Date().toISOString(),
+      by: req.user?.nombre || 'Administrador',
+    });
+
+    await Escritura.updateOne(
+      { _id: escritura._id },
+      {
+        $set: {
+          presupuestoId,
+          totalImpuestos: nuevoTotalImpuestos,
+          valorAvaluo: nuevoValorAvaluo,
+          totalGastosExtra: nuevoTotalGastosExtra,
+          totalHonorarios: nuevoTotalHonorarios,
+          comentariosEstatus: JSON.stringify(comentarios),
+        },
+      }
+    );
+
+    const updated = await Escritura.findById(escritura._id).lean();
+    res.json({ ok: true, data: updated });
+  } catch (e) {
+    console.error('CAMBIAR PRESUPUESTO DE ESCRITURA ERROR:', e);
+    res.status(500).json({ mensaje: 'Error al cambiar el presupuesto', detalle: e.message });
   }
 });
 

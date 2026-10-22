@@ -2,6 +2,7 @@
 import React, { useState } from 'react';
 import axios from 'axios';
 import { useAuth } from '../auth/AuthContext';
+import LoginBackground from './LoginBackground';
 
 const logo = '/logo.png';
 const API  = process.env.REACT_APP_API_URL || 'http://localhost:8010';
@@ -45,6 +46,7 @@ export default function Login() {
 
   return (
     <div style={styles.wrap}>
+      <LoginBackground />
       <form onSubmit={onSubmit} style={styles.card}>
 
         {/* Logo */}
@@ -123,6 +125,8 @@ export default function Login() {
 
 const styles = {
   wrap: {
+    position: 'relative',
+    overflow: 'hidden',
     minHeight: '100vh',
     display: 'flex',
     alignItems: 'center',
@@ -131,6 +135,8 @@ const styles = {
     padding: 16,
   },
   card: {
+    position: 'relative',
+    zIndex: 1,
     width: 420,
     maxWidth: '92vw',
     background: '#fff',
