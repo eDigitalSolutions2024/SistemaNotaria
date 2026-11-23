@@ -1,5 +1,5 @@
 // frontend/src/pages/MainPage.jsx
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import axios from 'axios';
 import { Dialog, DialogTitle, DialogContent, DialogActions, TextField, Button, MenuItem } from '@mui/material';
 import './MainPage.css';
@@ -32,6 +32,7 @@ import DomainIcon         from '@mui/icons-material/Domain';
 import StorefrontIcon     from '@mui/icons-material/Storefront';
 import AddCircleOutlineIcon from '@mui/icons-material/AddCircleOutline';
 import EditIcon           from '@mui/icons-material/Edit';
+import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings';
 
 import FormAbogado        from '../components/FormAbogado';
 import RegistrarCliente   from '../pages/Home';
@@ -48,7 +49,11 @@ import CustodiaBitacora   from '../components/custodia/CustodiaBitacora';
 import CustodiaPendientesBanner from '../components/custodia/CustodiaPendientesBanner';
 import AnunciosAdmin      from '../components/anuncios/AnunciosAdmin';
 import AnunciosDisplay    from '../components/anuncios/AnunciosDisplay';
+import ManualFlotante     from '../components/ManualFlotante';
+import ActualizacionVersion from '../components/ActualizacionVersion';
+import VistaAdminSwitcher from '../components/VistaAdminSwitcher';
 import ControlCerveceria  from '../components/ControlCerveceria';
+import PanelAdministrador from '../components/admin/PanelAdministrador';
 
 import { useAuth } from '../auth/AuthContext';
 import Login from '../components/Login';
@@ -70,6 +75,7 @@ const SECTION_LABELS = {
   'ExpedientesPLD':      'Expedientes PLD',
   'custodia':            'Custodia de Documentos',
   'anuncios':            'Anuncios',
+  'admin-panel':         'Panel de administrador',
 };
 
 // Ícono por nombre de módulo de Gestiones especiales — los dos conocidos
@@ -88,6 +94,7 @@ export default function MainPage() {
 function AuthedApp() {
   const { user, logout } = useAuth();
   const role = user?.role || '';
+  const manualRef = useRef(null);
   // Permiso del submenú "Expedientes PLD" — inicialmente solo Administrador,
   // mismo criterio ya usado para "Registrar Abogado" más abajo. El módulo
   // PLD en sí (ExpedientePLD, sus tabs) sigue teniendo su propio control de
@@ -102,6 +109,9 @@ function AuthedApp() {
   // en cambio se monta para todos los roles, más abajo.
   const puedeVerAnuncios = role === 'ADMIN' || role === 'admin';
   const esAdmin = role === 'ADMIN' || role === 'admin';
+  // Recibos: los abogados no pueden generar recibos (candado ya existente
+  // en el backend) — así que tampoco les mostramos el menú.
+  const puedeVerRecibos = esAdmin || role === 'RECEPCION' || role === 'recepcion';
 
   // Gestiones especiales: catálogo dinámico de clientes (Cervecería,
   // Controladora, y los que un ADMIN dé de alta después desde la app). El
@@ -272,6 +282,8 @@ function AuthedApp() {
         return puedeVerExpedientesPLD ? <PLDSeccion /> : <RegistrarCliente />;
       case 'anuncios':
         return puedeVerAnuncios ? <AnunciosAdmin /> : <RegistrarCliente />;
+      case 'admin-panel':
+        return esAdmin ? <PanelAdministrador /> : <RegistrarCliente />;
       default:            return <RegistrarCliente />;
     }
   };
@@ -291,6 +303,19 @@ function AuthedApp() {
     <div className="main-layout">
       {/* Anuncios manuales en vivo: modal urgente / toast, para cualquier rol */}
       <AnunciosDisplay />
+
+      {/* Detecta versión nueva del sistema y permite forzar la recarga */}
+      <ActualizacionVersion />
+
+      {/* Botón flotante del manual de usuario, visible en todo el sistema.
+          manualRef deja que el ítem "Manual de usuario" del sidebar abra el
+          mismo modal, sin duplicar la lógica de carga. */}
+      <ManualFlotante ref={manualRef} />
+
+      {/* Botón flotante exclusivo de ADMIN para probar otras vistas de rol.
+          Nunca se oculta por cambiar de vista: su visibilidad depende de la
+          cuenta REAL (esAdminReal dentro del componente), no de `role`. */}
+      <VistaAdminSwitcher />
 
       {/* ── SIDEBAR ── */}
       <aside className={`sidebar ${sidebarOpen ? 'expanded' : 'collapsed'}`}>
@@ -381,41 +406,45 @@ function AuthedApp() {
                 </ul>
               )}
 
-              {/* ── Recibos (submenu) ── */}
-              <li
-                className={`nav-item ${recibosActive ? 'active' : ''}`}
-                title="Recibos"
-                onClick={() => {
-                  if (!sidebarOpen) { setSidebarOpen(true); return; }
-                  setMostrarSubmenuRecibos((v) => !v);
-                  setMostrarSubmenu(false);
-                  setMostrarSubmenuEscrituras(false);
-                  setMostrarSubmenuGestiones(false);
-                }}
-              >
-                <ReceiptLongIcon sx={isz} />
-                {sidebarOpen && (
-                  <>
-                    <span style={{ flex: 1 }}>Recibos</span>
-                    {mostrarSubmenuRecibos
-                      ? <ExpandLessIcon sx={{ fontSize: 16 }} />
-                      : <ExpandMoreIcon sx={{ fontSize: 16 }} />}
-                  </>
-                )}
-              </li>
-              {sidebarOpen && mostrarSubmenuRecibos && (
-                <ul className="nav-submenu">
-                  <li className={`nav-sub-item ${seccion === 'recibo' ? 'active' : ''}`}
-                      onClick={() => go('recibo')}>
-                    <AddCardIcon sx={{ fontSize: 17 }} />
-                    <span>Generar recibo</span>
+              {/* ── Recibos (submenu) — solo ADMIN/RECEPCION, los abogados no pueden generar recibos ── */}
+              {puedeVerRecibos && (
+                <>
+                  <li
+                    className={`nav-item ${recibosActive ? 'active' : ''}`}
+                    title="Recibos"
+                    onClick={() => {
+                      if (!sidebarOpen) { setSidebarOpen(true); return; }
+                      setMostrarSubmenuRecibos((v) => !v);
+                      setMostrarSubmenu(false);
+                      setMostrarSubmenuEscrituras(false);
+                      setMostrarSubmenuGestiones(false);
+                    }}
+                  >
+                    <ReceiptLongIcon sx={isz} />
+                    {sidebarOpen && (
+                      <>
+                        <span style={{ flex: 1 }}>Recibos</span>
+                        {mostrarSubmenuRecibos
+                          ? <ExpandLessIcon sx={{ fontSize: 16 }} />
+                          : <ExpandMoreIcon sx={{ fontSize: 16 }} />}
+                      </>
+                    )}
                   </li>
-                  <li className={`nav-sub-item ${seccion === 'recibos-consultar' ? 'active' : ''}`}
-                      onClick={() => go('recibos-consultar')}>
-                    <FolderOpenIcon sx={{ fontSize: 17 }} />
-                    <span>Consultar recibos</span>
-                  </li>
-                </ul>
+                  {sidebarOpen && mostrarSubmenuRecibos && (
+                    <ul className="nav-submenu">
+                      <li className={`nav-sub-item ${seccion === 'recibo' ? 'active' : ''}`}
+                          onClick={() => go('recibo')}>
+                        <AddCardIcon sx={{ fontSize: 17 }} />
+                        <span>Generar recibo</span>
+                      </li>
+                      <li className={`nav-sub-item ${seccion === 'recibos-consultar' ? 'active' : ''}`}
+                          onClick={() => go('recibos-consultar')}>
+                        <FolderOpenIcon sx={{ fontSize: 17 }} />
+                        <span>Consultar recibos</span>
+                      </li>
+                    </ul>
+                  )}
+                </>
               )}
 
               {/* ── Protocolito ── */}
@@ -551,8 +580,24 @@ function AuthedApp() {
                   {sidebarOpen && <span>Anuncios</span>}
                 </li>
               )}
+
+              {/* ── Panel de administrador (solo ADMIN) ── */}
+              {esAdmin && (
+                <li className={`nav-item ${seccion === 'admin-panel' ? 'active' : ''}`}
+                    title="Panel de administrador" onClick={() => go('admin-panel')}>
+                  <AdminPanelSettingsIcon sx={isz} />
+                  {sidebarOpen && <span>Panel de administrador</span>}
+                </li>
+              )}
             </>
           )}
+
+          {/* ── Manual de usuario (todos los roles) ── */}
+          <li className="nav-item" title="Manual de usuario"
+              onClick={() => manualRef.current?.abrir()}>
+            <MenuBookIcon sx={isz} />
+            {sidebarOpen && <span>Manual de usuario</span>}
+          </li>
         </ul>
 
         {/* Footer */}

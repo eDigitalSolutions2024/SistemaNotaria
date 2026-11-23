@@ -12,6 +12,7 @@ import {
   Snackbar, Alert, AlertTitle,
 } from '@mui/material';
 import { useAuth } from '../../auth/AuthContext';
+import AnuncioImagenes from './AnuncioImagenes';
 
 const API = process.env.REACT_APP_API_URL || 'http://localhost:8010/api';
 // Socket.io usa la parte de la URL después del host como NAMESPACE, no como
@@ -59,6 +60,7 @@ export default function AnunciosDisplay() {
   const [colaUrgente, setColaUrgente] = useState([]);
   const [colaNormal, setColaNormal] = useState([]);
   const [enviando, setEnviando] = useState(false);
+  const [detalleAbierto, setDetalleAbierto] = useState(false);
   const [errorVisto, setErrorVisto] = useState('');
   const [sesionExpirada, setSesionExpirada] = useState(false);
   const vistosRef = useRef(new Set()); // evita re-encolar lo que ya se marcó en esta sesión
@@ -146,17 +148,26 @@ export default function AnunciosDisplay() {
   useEffect(() => {
     setErrorVisto('');
     setSesionExpirada(false);
+    setDetalleAbierto(false);
   }, [urgente?._id, normal?._id]);
 
   return (
     <>
       {urgente && (
-        <Dialog open disableEscapeKeyDown onClose={() => {}} maxWidth="sm" fullWidth>
+        <Dialog
+          open
+          disableEscapeKeyDown
+          onClose={() => {}}
+          maxWidth={urgente.imagenes?.length ? 'lg' : 'sm'}
+          fullWidth
+          PaperProps={urgente.imagenes?.length ? { sx: { width: 'min(1100px, 94vw)' } } : undefined}
+        >
           <DialogTitle sx={{ fontWeight: 700, color: '#b91c1c' }}>
             ⚠️ {urgente.titulo}
           </DialogTitle>
           <DialogContent>
             <p style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{urgente.mensaje}</p>
+            <AnuncioImagenes anuncio={urgente} altura={Math.round(window.innerHeight * 0.62)} llenar />
             {errorVisto && <p style={{ color: '#b91c1c', fontSize: '0.85rem', marginTop: 12 }}>{errorVisto}</p>}
           </DialogContent>
           <DialogActions sx={{ px: 3, pb: 2 }}>
@@ -185,7 +196,7 @@ export default function AnunciosDisplay() {
         <Snackbar
           open
           anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
-          sx={{ maxWidth: 420 }}
+          sx={{ maxWidth: normal.imagenes?.length ? 560 : 420 }}
         >
           <Alert
             severity="info"
@@ -197,13 +208,65 @@ export default function AnunciosDisplay() {
             }
             sx={{ alignItems: 'center' }}
           >
-            <AlertTitle sx={{ mb: 0.5 }}>{normal.titulo}</AlertTitle>
-            <span style={{ whiteSpace: 'pre-wrap' }}>{normal.mensaje}</span>
+            <div
+              role="button"
+              tabIndex={0}
+              title="Clic para ver el anuncio completo"
+              onClick={() => setDetalleAbierto(true)}
+              onKeyDown={(e) => { if (e.key === 'Enter') setDetalleAbierto(true); }}
+              style={{ cursor: 'pointer' }}
+            >
+              <AlertTitle sx={{ mb: 0.5 }}>{normal.titulo}</AlertTitle>
+              <span
+                style={{
+                  whiteSpace: 'pre-wrap',
+                  display: '-webkit-box',
+                  WebkitLineClamp: 3,
+                  WebkitBoxOrient: 'vertical',
+                  overflow: 'hidden',
+                }}
+              >
+                {normal.mensaje}
+              </span>
+              <AnuncioImagenes anuncio={normal} altura={180} llenar ampliar={false} />
+              <div style={{ marginTop: 6, fontSize: '0.75rem', opacity: 0.85 }}>
+                Clic para ver completo
+              </div>
+            </div>
             {errorVisto && (
               <div style={{ marginTop: 6, fontSize: '0.8rem', opacity: 0.9 }}>{errorVisto}</div>
             )}
           </Alert>
         </Snackbar>
+      )}
+
+      {normal && (
+        <Dialog
+          open={detalleAbierto}
+          onClose={() => setDetalleAbierto(false)}
+          maxWidth="lg"
+          fullWidth
+          PaperProps={{ sx: { width: 'min(1100px, 94vw)' } }}
+        >
+          <DialogTitle sx={{ fontWeight: 700 }}>{normal.titulo}</DialogTitle>
+          <DialogContent>
+            <p style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{normal.mensaje}</p>
+            <AnuncioImagenes anuncio={normal} altura={Math.round(window.innerHeight * 0.62)} llenar />
+            {errorVisto && <p style={{ color: '#b91c1c', fontSize: '0.85rem', marginTop: 12 }}>{errorVisto}</p>}
+          </DialogContent>
+          <DialogActions sx={{ px: 3, pb: 2 }}>
+            <Button color="inherit" onClick={() => setDetalleAbierto(false)}>
+              Cerrar
+            </Button>
+            <Button
+              variant="contained"
+              disabled={enviando}
+              onClick={async () => { await marcarVisto(normal); setDetalleAbierto(false); }}
+            >
+              Entendido
+            </Button>
+          </DialogActions>
+        </Dialog>
       )}
     </>
   );

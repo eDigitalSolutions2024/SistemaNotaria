@@ -10,6 +10,7 @@ const Escritura = require('../models/Escritura');
 const Presupuesto = require('../models/Presupuesto');
 
 const { buildReciboPDF } = require('../utils/pdfRecibo');
+const { registrar } = require('../utils/bitacora');
 const XLSX = require('xlsx');
 
 // Si la Escritura tiene presupuesto ligado, el total del trámite lo manda
@@ -28,6 +29,26 @@ async function montoPresupuestoDeEscritura(numeroControl) {
   if (!presupuesto) return null;
 
   return Number(presupuesto.totalPresupuesto || 0);
+}
+
+// 🔒 Candado de sociedades: el TOTAL del trámite no puede ser menor al
+// honorario mínimo de la tabla de precios (los impuestos se suman encima, por
+// eso el total real siempre es ≥ al mínimo). Los abonos siguen siendo libres.
+// El tipo de sociedad lo agrega Escrituras al final del tipo de trámite
+// ("SOCIEDAD SA DE CV"). Espejo en frontend/ReciboNotaria17.jsx.
+const MINIMO_TOTAL_SOCIEDAD = {
+  'SA DE CV': 15000,
+  'SRL DE CV': 15000,
+  'SA': 15000,
+  'AC': 12000,
+};
+function minimoSociedad(tipoTramite) {
+  const s = String(tipoTramite || '');
+  if (!/sociedad/i.test(s)) return null;
+  const m = s.trim().match(/\s+(SA DE CV|SRL DE CV|SA|AC)$/i);
+  if (!m) return null;
+  const tipo = m[1].toUpperCase();
+  return { tipo, minimo: MINIMO_TOTAL_SOCIEDAD[tipo] };
 }
 
 // Un recibo puede "pertenecer" a un #Trámite (Escritura o Protocolito) de
@@ -419,7 +440,7 @@ router.post('/', async (req, res) => {
       // llamar a la API directo y ponerle otro abogado al recibo.
       const tramiteDoc =
         tipoTramite === 'Escritura'
-          ? await Escritura.findOne({ numeroControl: controlNum }).select('abogado').lean()
+          ? await Escritura.findOne({ numeroControl: controlNum }).select('abogado tipoTramite').lean()
           : await Protocolito.findOne({ numeroTramite: controlNum }).select('abogado').lean();
 
       if (!tramiteDoc) {
@@ -438,6 +459,15 @@ router.post('/', async (req, res) => {
         const montoPresupuesto = await montoPresupuestoDeEscritura(controlNum);
         if (montoPresupuesto != null) {
           totalTramite = montoPresupuesto;
+        }
+
+        // 🔒 Sociedades: total mínimo según tipo de sociedad.
+        const regla = minimoSociedad(tramiteDoc.tipoTramite);
+        if (regla && totalTramite < regla.minimo) {
+          return res.status(400).json({
+            ok: false,
+            msg: `El total del trámite de una sociedad ${regla.tipo} no puede ser menor a $${regla.minimo.toLocaleString('en-US', { minimumFractionDigits: 2 })} (más impuestos).`,
+          });
         }
       }
 
@@ -462,6 +492,26 @@ router.post('/', async (req, res) => {
       }
       abono = 0;
       restante = Math.max(0, totalTramite - totalPagado);
+    }
+
+    // 🔒 Candado: en la notaría no existen trámites por menos de $100, así
+    // que no se permiten recibos de $1 a menos de $100. Excepción: el o los
+    // abogados con el permiso especial `recibosMontoBajo` (gestionable desde
+    // el Panel de administrador — antes era un nombre fijo en el código).
+    const MONTO_MINIMO_RECIBO = 100;
+    if (totalPagado > 0 && totalPagado < MONTO_MINIMO_RECIBO) {
+      const abogadoDoc = abogadoNombre
+        ? await Abogado.findOne({ nombre: new RegExp(`^${abogadoNombre}$`, 'i') })
+            .select('permisosEspeciales')
+            .lean()
+        : null;
+      const tienePermiso = abogadoDoc?.permisosEspeciales?.recibosMontoBajo === true;
+      if (!tienePermiso) {
+        return res.status(400).json({
+          ok: false,
+          msg: `No se pueden generar recibos menores a $${MONTO_MINIMO_RECIBO}.00 para este abogado.`,
+        });
+      }
     }
 
     const payload = {
@@ -499,6 +549,13 @@ router.post('/', async (req, res) => {
         );
       }
     }
+
+    await registrar(req, {
+      accion: 'CREAR_RECIBO',
+      entidad: 'Recibo',
+      entidadId: doc._id,
+      detalle: `Recibo a "${recibiDe}" por $${totalPagado.toFixed(2)} (${tipoTramite}${controlNum != null ? ' #' + controlNum : ''})`,
+    });
 
     return res.json({
       ok: true,
@@ -647,7 +704,7 @@ router.get('/abogados', async (_req, res) => {
       role: { $in: ['ABOGADO', 'ASISTENTE'] },
       // disponible: true,
     })
-      .select('_id nombre role disponible orden ubicacion')
+      .select('_id nombre role disponible orden ubicacion permisosEspeciales')
       .sort({ nombre: 1, orden: 1 })
       .lean();
 
@@ -657,6 +714,7 @@ router.get('/abogados', async (_req, res) => {
       role: a.role,
       disponible: a.disponible,
       ubicacion: a.ubicacion ?? 'sin sala',
+      permisosEspeciales: a.permisosEspeciales || {},
     }));
 
     res.json({ ok: true, data });
@@ -726,6 +784,13 @@ router.patch('/:id/cancel', async (req, res) => {
         }
       }
     }
+
+    await registrar(req, {
+      accion: 'CANCELAR_RECIBO',
+      entidad: 'Recibo',
+      entidadId: doc._id,
+      detalle: `Recibo a "${before.recibiDe}" cancelado: ${motivo.trim()}`,
+    });
 
     res.json({ ok: true, data: doc });
   } catch (e) {

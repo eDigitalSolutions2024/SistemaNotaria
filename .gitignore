@@ -113,3 +113,13 @@ docker/*.log
 *.orig
 *.patch
 *.rej
+
+# Capturas adjuntas de anuncios
+Backend/AnunciosAdjuntos/
+
+# Versión generada en cada build (ver frontend/scripts/genVersion.js)
+frontend/public/version.json
+
+# Documentos de clientes (datos sensibles)
+Backend/CerveceriaAdjuntos/
+Backend/PoderesAdjuntos/

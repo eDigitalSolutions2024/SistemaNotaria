@@ -13,6 +13,7 @@ const Abogado = require('../models/Abogado');
 const PDFDocument = require('pdfkit');
 const { validateRealClientName } = require('../utils/clientNameValidation');
 const auth = require('../middleware/auth');
+const { registrar } = require('../utils/bitacora');
 
 function getRole(req) {
   return String(req.user?.role || req.user?.rol || '').toUpperCase();
@@ -493,6 +494,13 @@ router.post("/", auth, async (req, res) => {
 
     await presupuesto.save();
 
+    await registrar(req, {
+      accion: 'CREAR_PRESUPUESTO',
+      entidad: 'Presupuesto',
+      entidadId: presupuesto._id,
+      detalle: `Presupuesto para "${nombreCliente}" (${presupuesto.tipoTramite || '—'}) por ${money(presupuesto.totalPresupuesto)}`,
+    });
+
     // ✅ responde rápido al frontend
     res.status(201).json(presupuesto);
 
@@ -733,6 +741,13 @@ router.put('/:id', auth, async (req, res) => {
       solicitanteNombre: solicitante.nombre || '',
     });
 
+    await registrar(req, {
+      accion: 'EDITAR_PRESUPUESTO',
+      entidad: 'Presupuesto',
+      entidadId: presupuestoActualizado._id,
+      detalle: `Presupuesto editado (motivo: ${String(motivo).trim()}) — solicitado por "${solicitante.nombre}"`,
+    });
+
     res.json(presupuestoActualizado);
   } catch (err) {
     console.error('Error al actualizar presupuesto:', err);
@@ -826,6 +841,14 @@ router.delete('/:id', auth, async (req, res) => {
     });
 
     await Presupuesto.findByIdAndDelete(req.params.id);
+
+    await registrar(req, {
+      accion: 'ELIMINAR_PRESUPUESTO',
+      entidad: 'Presupuesto',
+      entidadId: presupuesto._id,
+      detalle: `Presupuesto eliminado (motivo: ${String(motivo).trim()}) — solicitado por "${solicitante.nombre}"`,
+    });
+
     res.json({ message: 'Presupuesto eliminado correctamente' });
   } catch (err) {
     console.error('Error al eliminar presupuesto:', err);

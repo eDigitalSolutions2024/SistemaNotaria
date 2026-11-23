@@ -9,6 +9,8 @@ import {
 } from '@mui/material';
 
 import { useAuth } from '../auth/AuthContext';
+import { renderAsync as renderDocxAsync } from 'docx-preview';
+import { resaltarHallazgos, irAHallazgo } from '../utils/resaltarHallazgos';
 import CustodiaControl from './custodia/CustodiaControl';
 
 import '../css/styles.css';
@@ -251,6 +253,51 @@ const canJustifyRecibos =
   const savingNewRef = useRef(false);
   const [newSubtipo, setNewSubtipo] = useState('');
   const [selectedCliente, setSelectedCliente] = useState(null);
+
+  // PODER (alta): documento Word ya redactado + inspección IA — mismo
+  // mecanismo que en Escrituras.
+  const [poderFile, setPoderFile] = useState(null);
+  const [poderInspeccion, setPoderInspeccion] = useState(null);
+  const [poderInspeccionando, setPoderInspeccionando] = useState(false);
+  const [poderInspeccionError, setPoderInspeccionError] = useState('');
+  const [poderHallazgosOk, setPoderHallazgosOk] = useState([]); // por hallazgo: ¿se localizó y subrayó en la vista previa?
+  const [poderPreviewOpen, setPoderPreviewOpen] = useState(false);
+  const [poderPreviewFullScreen, setPoderPreviewFullScreen] = useState(false);
+  const [poderDocxError, setPoderDocxError] = useState('');
+  const poderDocxContainerRef = useRef(null);
+
+  // Renderiza el .docx tal cual se ve en Word (fuente, sangrías, justificado,
+  // listas con letras/números reales) en vez de la conversión genérica a
+  // HTML. Se dispara desde TransitionProps.onEntered del Dialog (no desde un
+  // useEffect por apertura) porque MUI monta el contenido del Dialog en un
+  // portal con una transición de por medio — un efecto disparado por el
+  // simple cambio de "open" puede correr antes de que el <div> de destino
+  // esté realmente pintado, y entonces no hay dónde insertar los nodos.
+  const renderPoderDocxPreview = () => {
+    if (!poderFile || !poderDocxContainerRef.current) {
+      console.warn('docx-preview: nada que mostrar todavía', { hayArchivo: !!poderFile, hayContenedor: !!poderDocxContainerRef.current });
+      return;
+    }
+    setPoderDocxError('');
+    poderDocxContainerRef.current.innerHTML = '';
+    renderDocxAsync(poderFile, poderDocxContainerRef.current, undefined, {
+      className: 'docx-preview',
+      inWrapper: true,
+      ignoreWidth: false,
+      ignoreHeight: true,
+    }).then(() => {
+      console.log('docx-preview: render OK, nodos:', poderDocxContainerRef.current?.childNodes.length);
+      try {
+        setPoderHallazgosOk(resaltarHallazgos(poderDocxContainerRef.current, poderInspeccion?.hallazgos));
+      } catch (e) {
+        console.error('resaltarHallazgos ERROR:', e);
+      }
+    }).catch((e) => {
+      setPoderDocxError('No se pudo mostrar la vista previa del documento.');
+      console.error('docx-preview ERROR:', e);
+    });
+  };
+
   const [q, setQ] = useState('');
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState(null);
@@ -795,6 +842,9 @@ const descargarPlantilla = (id) => {
       setSelectedCliente(null);
       setAdding(false);
       setNewSubtipo('');
+      setPoderFile(null);
+      setPoderInspeccion(null);
+      setPoderInspeccionError('');
     }
     setEditingId(null);
     setDrafts(prev => {
@@ -815,6 +865,30 @@ const descargarPlantilla = (id) => {
     }
     if (isNaN(Number(numeroTramite))) return 'El número de trámite debe ser numérico';
     return null;
+  };
+
+  // Sube el .docx del Poder para que Claude lo revise antes de guardar —
+  // informativo, no bloquea. Mismo flujo que en Escrituras.
+  const inspeccionarPoderFile = async (file) => {
+    setPoderFile(file);
+    setPoderInspeccion(null);
+    setPoderInspeccionError('');
+    if (!file) return;
+
+    setPoderInspeccionando(true);
+    try {
+      const fd = new FormData();
+      fd.append('documento', file);
+      const cidInsp = selectedCliente?._id ?? selectedCliente?.id;
+      if (cidInsp != null) fd.append('clienteId', String(cidInsp));
+      if (newRow?.tipoTramite) fd.append('tipoTramite', String(newRow.tipoTramite));
+      const { data } = await axios.post(`${API}/protocolito/poder/inspeccionar`, fd);
+      setPoderInspeccion(data?.data || null);
+    } catch (e) {
+      setPoderInspeccionError(e?.response?.data?.mensaje || 'No se pudo analizar el documento.');
+    } finally {
+      setPoderInspeccionando(false);
+    }
   };
 
   const onSaveNew = async () => {
@@ -855,9 +929,33 @@ const descargarPlantilla = (id) => {
           tipoTramite: finalTipo,
           cliente: String(newRow.cliente || ''),
           fecha: newRow.fecha,
+          clienteId: String(cid),
+          // Marca este PUT como el que finaliza el alta recién creada (vs.
+          // una edición posterior desde el panel de edición) — así el
+          // backend solo exige/analiza el documento de Poder aquí.
+          altaInicial: 'true',
           //abogado: String(newRow.abogado || ''),
         };
-        await axios.put(`${API}/protocolito/${createdId}`, payloadPut);
+
+        // Poder: manda multipart con el Word adjunto. Si ya se analizó en
+        // la vista previa, manda ese resultado también para que el backend
+        // no vuelva a llamar a la IA una segunda vez.
+        const esPoderConArchivo = incluye(finalTipo, 'poder') && poderFile;
+        let bodyToSend = payloadPut;
+        if (esPoderConArchivo) {
+          const fd = new FormData();
+          Object.entries(payloadPut).forEach(([k, v]) => {
+            if (v === null || v === undefined) return;
+            fd.append(k, v);
+          });
+          fd.append('documento', poderFile);
+          if (poderInspeccion) {
+            fd.append('poderInspeccionJSON', JSON.stringify(poderInspeccion));
+          }
+          bodyToSend = fd;
+        }
+
+        await axios.put(`${API}/protocolito/${createdId}`, bodyToSend);
       }
 
       await fetchData();
@@ -865,6 +963,9 @@ const descargarPlantilla = (id) => {
       setSelectedCliente(null);
       setAdding(false);
       setNewSubtipo('');
+      setPoderFile(null);
+      setPoderInspeccion(null);
+      setPoderInspeccionError('');
       setMsg({ type: 'ok', text: `Trámite ${createdNumero ?? ''} creado` });
     } catch (err2) {
       const t = err2.response?.data?.mensaje || 'Error al crear';
@@ -1516,6 +1617,337 @@ const descargarPlantilla = (id) => {
             <TextField label="Abogado responsable" size="small" value={newRow.abogado || ''} InputProps={{ readOnly: true }} style={{ minWidth: 220 }} />
           </div>
 
+          {/* Poder: documento Word ya redactado — la IA lo revisa pero no
+              bloquea por el puntaje. Mismo mecanismo que en Escrituras. */}
+          {incluye(newRow.tipoTramite, 'poder') && (
+            <div
+              style={{
+                border: '1px solid #e3e7ee',
+                borderRadius: 14,
+                padding: 16,
+                marginTop: 16,
+                background: '#fafbfd',
+                boxShadow: '0 1px 3px rgba(16,24,40,0.04)',
+              }}
+            >
+              <style>{'@keyframes spin { to { transform: rotate(360deg); } }'}</style>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+                <span style={{ fontSize: 20 }}>📄</span>
+                <div style={{ fontWeight: 700, fontSize: 14.5, color: '#1a2233' }}>Documento del Poder (Word)</div>
+              </div>
+
+              <label
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  padding: '8px 14px',
+                  borderRadius: 8,
+                  background: '#fff',
+                  border: '1px solid #d7deea',
+                  cursor: 'pointer',
+                  fontSize: 13,
+                  fontWeight: 600,
+                  color: '#2b4bff',
+                }}
+              >
+                ⬆ Elegir archivo .docx
+                <input
+                  type="file"
+                  accept=".docx"
+                  onChange={(e) => inspeccionarPoderFile(e.target.files?.[0] || null)}
+                  style={{ display: 'none' }}
+                />
+              </label>
+              {poderFile && (
+                <span style={{ marginLeft: 10, fontSize: 13, color: '#44506b' }}>{poderFile.name}</span>
+              )}
+
+              {poderInspeccionando && (
+                <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: '#666' }}>
+                  <span style={{
+                    width: 14, height: 14, borderRadius: '50%',
+                    border: '2px solid #cfd6e4', borderTopColor: '#2b4bff',
+                    display: 'inline-block', animation: 'spin 0.8s linear infinite',
+                  }} />
+                  Analizando con IA…
+                </div>
+              )}
+
+              {poderInspeccionError && (
+                <div style={{
+                  marginTop: 12, padding: '8px 12px', borderRadius: 8,
+                  background: '#fff4f4', border: '1px solid #f3c6c6',
+                  fontSize: 13, color: '#9a2a2a',
+                }}>
+                  {poderInspeccionError} — puedes continuar de todos modos, la revisión es solo informativa.
+                </div>
+              )}
+
+              {poderInspeccion && (() => {
+                const pct = poderInspeccion.porcentaje;
+                const tono =
+                  pct == null ? { bg: '#eef0f4', fg: '#667085', ring: '#c2c8d4' }
+                    : pct >= 90 ? { bg: '#e9f9ee', fg: '#1a7f37', ring: '#2e7d32' }
+                    : pct >= 70 ? { bg: '#fff6e5', fg: '#9a6400', ring: '#ed6c02' }
+                    : { bg: '#fdeceb', fg: '#b42318', ring: '#c62828' };
+                return (
+                  <div
+                    style={{
+                      marginTop: 14,
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 14,
+                      padding: '12px 14px',
+                      borderRadius: 10,
+                      background: tono.bg,
+                      border: `1px solid ${tono.ring}33`,
+                    }}
+                  >
+                    <div
+                      style={{
+                        flexShrink: 0,
+                        width: 52, height: 52, borderRadius: '50%',
+                        border: `3px solid ${tono.ring}`,
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        fontWeight: 800, fontSize: pct != null ? 15 : 11,
+                        color: tono.fg, background: '#fff',
+                      }}
+                    >
+                      {pct != null ? `${pct}%` : 'N/D'}
+                    </div>
+
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontWeight: 700, fontSize: 13, color: tono.fg }}>
+                        {pct == null ? 'No se pudo calificar' : pct >= 90 ? 'Listo para guardar' : pct >= 70 ? 'Revisar antes de continuar' : 'Necesita correcciones importantes'}
+                      </div>
+                      {poderInspeccion.resumen && (
+                        <div style={{
+                          marginTop: 2, fontSize: 12.5, color: '#44506b',
+                          overflow: 'hidden', textOverflow: 'ellipsis',
+                          display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
+                        }}>
+                          {poderInspeccion.resumen}
+                        </div>
+                      )}
+                    </div>
+
+                    <Button
+                      variant="outlined"
+                      size="small"
+                      onClick={() => setPoderPreviewOpen(true)}
+                      style={{ flexShrink: 0, whiteSpace: 'nowrap' }}
+                    >
+                      Ver documento y sugerencias
+                    </Button>
+                  </div>
+                );
+              })()}
+            </div>
+          )}
+
+          {/* Modal: vista previa del Word + sugerencias completas de la IA.
+              Pura lectura — nunca modifica el documento real. */}
+          <Dialog
+            open={poderPreviewOpen}
+            onClose={() => setPoderPreviewOpen(false)}
+            maxWidth={poderPreviewFullScreen ? false : 'xl'}
+            fullWidth={!poderPreviewFullScreen}
+            fullScreen={poderPreviewFullScreen}
+            TransitionProps={{ onEntered: renderPoderDocxPreview }}
+            PaperProps={{
+              style: poderPreviewFullScreen ? {} : { height: '92vh' },
+            }}
+          >
+            <DialogTitle style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+              <span>Revisión del Poder{poderFile ? ` — ${poderFile.name}` : ''}</span>
+              <Button
+                variant="outlined"
+                size="small"
+                onClick={() => setPoderPreviewFullScreen((v) => !v)}
+                style={{ flexShrink: 0 }}
+              >
+                {poderPreviewFullScreen ? '⤡ Salir de pantalla completa' : '⤢ Pantalla completa'}
+              </Button>
+            </DialogTitle>
+            <DialogContent dividers style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, padding: 0, overflow: 'hidden' }}>
+              <div style={{ display: 'flex', flex: 1, minHeight: 0, gap: 20, width: '100%', padding: 20, boxSizing: 'border-box' }}>
+                <div style={{ flex: '2 1 600px', minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+                  <div style={{ fontWeight: 700, fontSize: 13, color: '#44506b', marginBottom: 8, flexShrink: 0 }}>
+                    Vista previa del documento
+                  </div>
+                  <div
+                    style={{
+                      flex: 1, minHeight: 0, overflowY: 'auto',
+                      border: '1px solid #e3e7ee', borderRadius: 10,
+                      background: '#f1f3f6',
+                    }}
+                  >
+                    {poderDocxError && (
+                      <div style={{ padding: 16, color: '#9a2a2a', fontSize: 13 }}>{poderDocxError}</div>
+                    )}
+                    <div ref={poderDocxContainerRef} />
+                  </div>
+                </div>
+
+                <div style={{ flex: '1 1 340px', minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+                  <div style={{ fontWeight: 700, fontSize: 13, color: '#44506b', marginBottom: 8, flexShrink: 0 }}>
+                    Revisión de la IA
+                  </div>
+
+                  <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', paddingRight: 4 }}>
+
+                  {poderInspeccion?.porcentaje != null && (
+                    <div style={{ fontSize: 28, fontWeight: 800, marginBottom: 4 }}>
+                      {poderInspeccion.porcentaje}% <span style={{ fontSize: 13, fontWeight: 600, color: '#667085' }}>listo</span>
+                    </div>
+                  )}
+                  {poderInspeccion?.desglose && poderInspeccion.desglose.descuento > 0 && (
+                    <div style={{ fontSize: 11.5, color: '#667085', marginBottom: 8 }}>
+                      100 − {poderInspeccion.desglose.descuento} puntos:{' '}
+                      {[
+                        ['critico', 'crítico', 'críticos'],
+                        ['importante', 'importante', 'importantes'],
+                        ['menor', 'menor', 'menores'],
+                      ].filter(([k]) => poderInspeccion.desglose[k] > 0).map(([k, s, p]) => (
+                        `${poderInspeccion.desglose[k]} ${poderInspeccion.desglose[k] === 1 ? s : p} (×${poderInspeccion.desglose.pesos[k]})`
+                      )).join(' · ')}
+                    </div>
+                  )}
+
+                  {poderInspeccion?.resumen && (
+                    <div style={{ fontSize: 13.5, color: '#333', marginBottom: 14 }}>{poderInspeccion.resumen}</div>
+                  )}
+
+                  {Array.isArray(poderInspeccion?.comparacionDatos) && poderInspeccion.comparacionDatos.length > 0 && (
+                    <div style={{ marginBottom: 16 }}>
+                      <div style={{ fontWeight: 700, fontSize: 12.5, color: '#44506b', marginBottom: 6 }}>
+                        Comparativa con datos del sistema
+                      </div>
+                      <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'grid', gap: 6 }}>
+                        {poderInspeccion.comparacionDatos.map((d, i) => (
+                          <li
+                            key={i}
+                            style={{
+                              display: 'flex', gap: 8, alignItems: 'flex-start',
+                              fontSize: 12.5, padding: '7px 10px',
+                              background: d.coincide ? '#e9f9ee' : '#fdeceb',
+                              border: `1px solid ${d.coincide ? '#bfe6c9' : '#f3c6c6'}`,
+                              borderRadius: 8,
+                            }}
+                          >
+                            <span>{d.coincide ? '✅' : '❌'}</span>
+                            <span>
+                              <strong>{d.campo}</strong>{d.persona ? ` — ${d.persona}` : ''}
+                              {d.esperado ? <>: <span style={{ color: '#667085' }}>{d.esperado}</span></> : null}
+                              {!d.coincide && d.nota && (
+                                <div style={{ marginTop: 2, color: '#9a2a2a' }}>{d.nota}</div>
+                              )}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {Array.isArray(poderInspeccion?.hallazgos) && poderInspeccion.hallazgos.length > 0 ? (
+                    <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'grid', gap: 8 }}>
+                      {poderInspeccion.hallazgos.map((h, i) => {
+                        const localizado = poderHallazgosOk[i];
+                        return (
+                          <li
+                            key={i}
+                            onClick={() => localizado && irAHallazgo(poderDocxContainerRef.current, i)}
+                            title={localizado ? 'Clic para ir a esta parte del documento' : undefined}
+                            style={{
+                              display: 'flex', gap: 8, alignItems: 'flex-start',
+                              fontSize: 13, padding: '8px 10px',
+                              background: '#fff6e5', border: '1px solid #f3dfa8',
+                              borderRadius: 8, cursor: localizado ? 'pointer' : 'default',
+                            }}
+                          >
+                            <span>⚠️</span>
+                            <span>
+                              <div style={{ fontSize: 11.5, fontWeight: 700, color: '#9a6400', marginBottom: 2 }}>
+                                <span style={{
+                                  display: 'inline-block', marginRight: 6, padding: '1px 6px', borderRadius: 6, color: '#fff',
+                                  background: h.gravedad === 'critico' ? '#c62828' : h.gravedad === 'menor' ? '#8a94a6' : '#ed6c02',
+                                }}>
+                                  {h.gravedad === 'critico' ? 'CRÍTICO' : h.gravedad === 'menor' ? 'MENOR' : 'IMPORTANTE'}
+                                </span>
+                                {h.ubicacion && <>📍 {h.ubicacion}</>}
+                              </div>
+                              <div>{h.problema}</div>
+                              {h.cita && (
+                                <div style={{ marginTop: 4, fontSize: 12, color: '#667085', fontStyle: 'italic' }}>
+                                  <mark style={{ background: '#ffe14d', padding: '0 2px', borderRadius: 2 }}>“{h.cita}”</mark>
+                                  {localizado === false && ' — no se pudo ubicar en la vista previa'}
+                                </div>
+                              )}
+                              {h.correccion && (
+                                <div
+                                  onClick={(e) => e.stopPropagation()}
+                                  style={{ marginTop: 6, padding: '6px 8px', background: '#e9f9ee', border: '1px solid #bfe6c9', borderRadius: 6 }}
+                                >
+                                  <div style={{ fontSize: 11.5, fontWeight: 700, color: '#1a7f37', marginBottom: 2, display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                                    <span>{h.cita ? '✏️ Reemplazar por:' : '➕ Agregar:'}</span>
+                                    <span
+                                      role="button"
+                                      style={{ cursor: 'pointer', textDecoration: 'underline' }}
+                                      onClick={() => { try { navigator.clipboard.writeText(h.correccion); } catch (_) { /* sin permiso de portapapeles */ } }}
+                                    >
+                                      Copiar
+                                    </span>
+                                  </div>
+                                  <div style={{ fontSize: 12.5, whiteSpace: 'pre-wrap', userSelect: 'text' }}>{h.correccion}</div>
+                                </div>
+                              )}
+                            </span>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  ) : Array.isArray(poderInspeccion?.sugerencias) && poderInspeccion.sugerencias.length > 0 ? (
+                    <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'grid', gap: 8 }}>
+                      {poderInspeccion.sugerencias.map((s, i) => (
+                        <li
+                          key={i}
+                          style={{
+                            display: 'flex', gap: 8, alignItems: 'flex-start',
+                            fontSize: 13, padding: '8px 10px',
+                            background: '#fff6e5', border: '1px solid #f3dfa8',
+                            borderRadius: 8,
+                          }}
+                        >
+                          <span>⚠️</span>
+                          <span>{s}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (typeof poderInspeccion?.porcentaje === 'number' && poderInspeccion.porcentaje < 90) ? (
+                    <div style={{ fontSize: 13, color: '#9a6a00', display: 'flex', gap: 8, alignItems: 'center' }}>
+                      ⚠️ La IA detectó problemas pero no los detalló. Revisa el resumen de arriba.
+                    </div>
+                  ) : (
+                    <div style={{ fontSize: 13, color: '#1a7f37', display: 'flex', gap: 8, alignItems: 'center' }}>
+                      ✅ No se encontraron pendientes.
+                    </div>
+                  )}
+
+                  </div>
+
+                  <div style={{ marginTop: 10, fontSize: 11.5, color: '#98a1b3', flexShrink: 0 }}>
+                    Esta revisión es informativa — corrige el documento en Word y vuelve a subirlo para reanalizar.
+                    No modifica el archivo original.
+                  </div>
+                </div>
+              </div>
+            </DialogContent>
+            <DialogActions>
+              <Button onClick={() => setPoderPreviewOpen(false)}>Cerrar</Button>
+            </DialogActions>
+          </Dialog>
+
           <div style={{
             display: 'flex', justifyContent: 'flex-end', gap: 10,
             marginTop: 20, paddingTop: 16, borderTop: '1px solid #e3e7ee',
@@ -1634,6 +2066,17 @@ const descargarPlantilla = (id) => {
         />
 
         <Menu anchorEl={tplAnchorEl} open={Boolean(tplAnchorEl)} onClose={closeTplMenu}>
+          {tplRow?.poderInspeccion?.archivoPath && (
+            <MenuItem
+              onClick={() => {
+                window.open(`${API}/Protocolito/${tplRow._id}/poder-documento`, '_blank');
+                closeTplMenu();
+              }}
+              style={{ fontWeight: 700 }}
+            >
+              📄 Documento subido (el que se validó al guardar)
+            </MenuItem>
+          )}
           {tplOptions.length > 0
             ? tplOptions.map(p => (
                 <MenuItem key={p.key} onClick={() => descargarPlantilla(p.id)}>

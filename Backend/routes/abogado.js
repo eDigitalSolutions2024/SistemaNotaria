@@ -3,12 +3,23 @@ const router = express.Router();
 const Abogado = require('../models/Abogado');
 const Cliente = require('../models/Cliente');
 const Sala = require('../models/Sala');
+const auth = require('../middleware/auth');
+const { registrar } = require('../utils/bitacora');
 
 const ROLES_VALIDOS = ['ADMIN', 'ABOGADO', 'ASISTENTE', 'PROTOCOLITO', 'RECEPCION'];
+const PERMISOS_VALIDOS = ['recibosMontoBajo', 'escriturasVistaTotal', 'cancelarFolios'];
+
+function esAdmin(req) {
+  const role = String(req.user?.role || req.user?.rol || '').toUpperCase();
+  return role === 'ADMIN';
+}
 
 // Ruta para registrar abogado
-router.post('/', async (req, res) => {
+router.post('/', auth, async (req, res) => {
   try {
+    if (!esAdmin(req)) {
+      return res.status(403).json({ mensaje: 'Solo un administrador puede registrar usuarios' });
+    }
     const { nombre, orden, role, abogadoJefe } = req.body;
 
     const existente = await Abogado.findOne({ nombre: new RegExp(`^${nombre}$`, 'i') });
@@ -73,6 +84,13 @@ router.post('/', async (req, res) => {
 
     await nuevo.save(); // Esto guarda la ubicación correctamente (y cualquier cambio extra)
 
+    await registrar(req, {
+      accion: 'CREAR_USUARIO',
+      entidad: 'Abogado',
+      entidadId: nuevo._id,
+      detalle: `Usuario creado: "${nuevo.nombre}" (${nuevo.role})`,
+    });
+
     res.json({ mensaje, abogado: nuevo });
 
   } catch (error) {
@@ -81,7 +99,7 @@ router.post('/', async (req, res) => {
   }
 });
 
-router.put('/liberar/:clienteId', async (req, res) => {
+router.put('/liberar/:clienteId', auth, async (req, res) => {
   try {
     console.log('Cliente ID recibido:', req.params.clienteId);
     console.log('Datos recibidos:', req.body);
@@ -184,7 +202,7 @@ router.put('/liberar/:clienteId', async (req, res) => {
 });
 
 // Obtener todos los abogados
-router.get('/', async (req, res) => {
+router.get('/', auth, async (req, res) => {
   try {
     const abogados = await Abogado.find().sort({ orden: 1 });
     res.json(abogados);
@@ -195,8 +213,11 @@ router.get('/', async (req, res) => {
 
 // === EDITAR DATOS DEL ABOGADO ===
 // PUT /abogados/:id
-router.put('/:id', async (req, res) => {
+router.put('/:id', auth, async (req, res) => {
   try {
+    if (!esAdmin(req)) {
+      return res.status(403).json({ mensaje: 'Solo un administrador puede editar usuarios' });
+    }
     const id = req.params.id; // tu _id es numérico (p.ej. 1001), pero mongoose acepta string numérico
     const { nombre, orden, disponible, ubicacion, role, abogadoJefe } = req.body;
 
@@ -255,6 +276,14 @@ router.put('/:id', async (req, res) => {
     }
 
     await abogado.save();
+
+    await registrar(req, {
+      accion: 'EDITAR_USUARIO',
+      entidad: 'Abogado',
+      entidadId: abogado._id,
+      detalle: `Usuario editado: "${abogado.nombre}" (${abogado.role})`,
+    });
+
     return res.json({ mensaje: 'Abogado actualizado', abogado });
   } catch (err) {
     console.error('UPDATE ABOGADO ERROR:', err);
@@ -264,8 +293,11 @@ router.put('/:id', async (req, res) => {
 
 // === ACTUALIZAR CONTRASEÑA ===
 // PUT /abogados/:id/password
-router.put('/:id/password', async (req, res) => {
+router.put('/:id/password', auth, async (req, res) => {
   try {
+    if (!esAdmin(req)) {
+      return res.status(403).json({ mensaje: 'Solo un administrador puede cambiar contraseñas' });
+    }
     const id = req.params.id;
     const { password } = req.body;
 
@@ -279,10 +311,60 @@ router.put('/:id/password', async (req, res) => {
     await abogado.setPassword(password);
     await abogado.save();
 
+    await registrar(req, {
+      accion: 'CAMBIAR_PASSWORD',
+      entidad: 'Abogado',
+      entidadId: abogado._id,
+      detalle: `Contraseña cambiada para "${abogado.nombre}"`,
+    });
+
     return res.json({ mensaje: 'Contraseña actualizada' });
   } catch (err) {
     console.error('UPDATE PASSWORD ERROR:', err);
     return res.status(500).json({ mensaje: 'Error al actualizar contraseña', error: err.message });
+  }
+});
+
+// === CANDADOS / PERMISOS ESPECIALES ===
+// PATCH /abogados/:id/permisos
+// body: { recibosMontoBajo?: boolean, escriturasVistaTotal?: boolean }
+router.patch('/:id/permisos', auth, async (req, res) => {
+  try {
+    if (!esAdmin(req)) {
+      return res.status(403).json({ mensaje: 'Solo un administrador puede gestionar permisos especiales' });
+    }
+
+    const abogado = await Abogado.findById(req.params.id);
+    if (!abogado) return res.status(404).json({ mensaje: 'Abogado no encontrado' });
+
+    if (!abogado.permisosEspeciales) abogado.permisosEspeciales = {};
+
+    const cambios = [];
+    for (const clave of PERMISOS_VALIDOS) {
+      if (typeof req.body?.[clave] === 'boolean') {
+        abogado.permisosEspeciales[clave] = req.body[clave];
+        cambios.push(`${clave}=${req.body[clave]}`);
+      }
+    }
+
+    if (!cambios.length) {
+      return res.status(400).json({ mensaje: 'Ningún permiso válido para actualizar' });
+    }
+
+    abogado.markModified('permisosEspeciales');
+    await abogado.save();
+
+    await registrar(req, {
+      accion: 'EDITAR_PERMISOS',
+      entidad: 'Abogado',
+      entidadId: abogado._id,
+      detalle: `Permisos de "${abogado.nombre}": ${cambios.join(', ')}`,
+    });
+
+    return res.json({ mensaje: 'Permisos actualizados', abogado });
+  } catch (err) {
+    console.error('UPDATE PERMISOS ERROR:', err);
+    return res.status(500).json({ mensaje: 'Error al actualizar permisos', error: err.message });
   }
 });
 

@@ -210,3 +210,27 @@
   font-size: 0.82rem;
   color: #3b4256;
 }
+
+/* ---- Capturas adjuntas ---- */
+.anuncios-drop {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1.5px dashed #c3ccd9;
+  border-radius: 8px;
+  transition: background .15s, border-color .15s;
+}
+.anuncios-drop.is-over { background: #eef4ff; border-color: #3b82f6; }
+.anuncios-drop-hint { font-size: 12.5px; color: #6b7686; }
+.anuncios-thumbs { display: flex; flex-wrap: wrap; gap: 8px; width: 100%; margin-top: 4px; }
+.anuncios-thumb { position: relative; }
+.anuncios-thumb img {
+  height: 84px; border-radius: 6px; border: 1px solid #d5dbe5; display: block; background: #fff;
+}
+.anuncios-thumb button {
+  position: absolute; top: -7px; right: -7px;
+  width: 20px; height: 20px; padding: 0; border: 0; border-radius: 50%;
+  background: #b91c1c; color: #fff; font-size: 14px; line-height: 20px; cursor: pointer;
+}

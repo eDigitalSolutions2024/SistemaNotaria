@@ -17,7 +17,15 @@ const ProtocolitoConfig = require('../models/ProtocolitoConfig');
 const Anuncio = require('../models/Anuncio');
 
 const auth = require('../middleware/auth');
+const { registrar } = require('../utils/bitacora');
 const { buildVariables, generarDocx, PLANTILLAS_DIR, resolveFilePath } = require('../services/plantillaService');
+const { inspeccionarPoder, esTramitePoder, buildPoderContexto } = require('../services/poderInspeccionService');
+
+// Documento Word del Poder ya redactado, subido al guardar el trámite (igual
+// que en Escrituras) — carpeta propia para no chocar nombres de archivo con
+// PoderesAdjuntos de Escrituras (los consecutivos de cada módulo son
+// independientes y pueden coincidir).
+const PODERES_DIR_PROTOCOLITO = path.join(__dirname, '..', 'PoderesAdjuntosProtocolito');
 
 // Catálogo de plantillas Word disponibles
 const MANIFIESTO_PLANTILLAS = [
@@ -35,6 +43,12 @@ const MANIFIESTO_PLANTILLAS = [
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024 },
+});
+
+// === Upload del documento de Poder (.docx) — mismo límite que Escrituras ===
+const uploadPoder = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 },
 });
 
 
@@ -489,6 +503,27 @@ router.get('/', async (req, res) => {
 });
 
 
+// POST /protocolito/poder/inspeccionar
+// Vista previa: el abogado sube el .docx del Poder y ve el porcentaje/
+// sugerencias de Claude antes de guardar. No crea ni modifica nada — mismo
+// endpoint que /escrituras/poder/inspeccionar, aquí para Protocolito.
+router.post('/poder/inspeccionar', auth, uploadPoder.single('documento'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ mensaje: 'Sube el documento de Word del poder.' });
+    }
+    const contexto = await buildPoderContexto(req.body.clienteId, req.body.tipoTramite);
+    const resultado = await inspeccionarPoder(req.file.buffer, contexto);
+    res.json({ ok: true, data: resultado });
+  } catch (e) {
+    console.error('INSPECCIONAR PODER (protocolito) ERROR:', e);
+    const mensaje = e.code === 'NO_API_KEY'
+      ? 'La inspección por IA no está configurada todavía (falta la API key en el servidor).'
+      : (e.code === 'SIN_TEXTO' ? e.message : 'No se pudo analizar el documento.');
+    res.status(500).json({ mensaje, detalle: e.message });
+  }
+});
+
 /* ============================ POST / ============================ */
 // Crear desde clienteId (o payload directo) con número autogenerado
 router.post('/', auth, bloquearSiDeshabilitado, async (req, res) => {
@@ -621,6 +656,13 @@ router.post('/', auth, bloquearSiDeshabilitado, async (req, res) => {
         io?.emit('protocolito:volumen', volInfo);
         await dispararAlertasVolumen(volInfo, io);
 
+        await registrar(req, {
+          accion: 'CREAR_PROTOCOLITO',
+          entidad: 'Protocolito',
+          entidadId: created.numeroTramite,
+          detalle: `Protocolito #${created.numeroTramite} — ${created.tipoTramite || '—'} — ${created.cliente || '—'}`,
+        });
+
         return res.status(201).json(created);
       } catch (err) {
         if (err && err.code === 11000) {
@@ -644,9 +686,9 @@ router.post('/', auth, bloquearSiDeshabilitado, async (req, res) => {
 
 /* ============================ PUT /:id ============================ */
 // routes/protocolitos.js  (en el handler PUT /:id)
-router.put('/:id', bloquearSiDeshabilitado, async (req, res) => {
+router.put('/:id', auth, bloquearSiDeshabilitado, uploadPoder.single('documento'), async (req, res) => {
   try {
-    const { numeroTramite, tipoTramite, cliente, fecha, abogado, observaciones } = req.body;
+    const { numeroTramite, tipoTramite, cliente, fecha, abogado, observaciones, clienteId } = req.body;
 
     const fechaOk = fecha ? (parseYMDLocal(fecha) || parseFechaLoose(fecha) || new Date(fecha)) : undefined;
 
@@ -662,6 +704,79 @@ router.put('/:id', bloquearSiDeshabilitado, async (req, res) => {
       ...(typeof observaciones === 'string' ? { observaciones: observaciones.trim() } : {}),
     };
 
+    // =========================
+    // Candado: Poder requiere el Word ya redactado + inspección IA — igual
+    // que en Escrituras. Solo se exige/analiza cuando este PUT es el paso
+    // que finaliza un trámite recién creado (altaInicial, mandado solo por
+    // el flujo de "Nuevo trámite") y todavía no tiene un documento adjunto
+    // — así una edición posterior de un Poder viejo (desde el panel de
+    // edición) nunca se bloquea por esto, igual que en Escrituras.
+    const esAltaInicial = String(req.body.altaInicial || '') === 'true';
+    const tipoFinalParaCandado = tipoTramite ? String(tipoTramite).trim() : null;
+    if (esAltaInicial && tipoFinalParaCandado && esTramitePoder(tipoFinalParaCandado)) {
+      const existente = await Protocolito.findById(req.params.id).select('poderInspeccion numeroTramite').lean();
+      const yaTieneArchivo = !!existente?.poderInspeccion?.archivoPath;
+
+      if (!yaTieneArchivo) {
+        const poderDocObligatorio = String(process.env.PODER_DOC_OBLIGATORIO ?? 'true').toLowerCase() !== 'false';
+        if (poderDocObligatorio && !req.file) {
+          return res.status(400).json({
+            mensaje: 'Para guardar un Poder debes subir el documento de Word ya redactado.',
+          });
+        }
+
+        if (req.file) {
+          // Si el frontend ya mandó el resultado de la vista previa, lo
+          // reusamos en vez de llamar a la IA otra vez.
+          let resultadoIA = null;
+          if (typeof req.body.poderInspeccionJSON === 'string' && req.body.poderInspeccionJSON.trim()) {
+            try {
+              const parsed = JSON.parse(req.body.poderInspeccionJSON);
+              const porcentajeNum = Number(parsed.porcentaje);
+              resultadoIA = {
+                porcentaje: Number.isFinite(porcentajeNum) ? Math.max(0, Math.min(100, Math.round(porcentajeNum))) : null,
+                resumen: String(parsed.resumen || '').trim(),
+                sugerencias: Array.isArray(parsed.sugerencias)
+                  ? parsed.sugerencias.map(s => String(s || '').trim()).filter(Boolean)
+                  : [],
+                comparacionDatos: Array.isArray(parsed.comparacionDatos)
+                  ? parsed.comparacionDatos.map(d => ({
+                      persona: String(d?.persona || '').trim(),
+                      campo: String(d?.campo || '').trim(),
+                      esperado: String(d?.esperado || '').trim(),
+                      coincide: Boolean(d?.coincide),
+                      nota: String(d?.nota || '').trim(),
+                    })).filter(d => d.persona && d.campo)
+                  : [],
+              };
+            } catch { resultadoIA = null; }
+          }
+
+          if (!resultadoIA) {
+            try {
+              const contexto = await buildPoderContexto(clienteId, tipoFinalParaCandado);
+              resultadoIA = await inspeccionarPoder(req.file.buffer, contexto);
+            } catch (e) {
+              console.error('INSPECCION PODER (protocolito, al guardar) ERROR:', e.message);
+              resultadoIA = { porcentaje: null, resumen: 'No se pudo completar la revisión automática.', sugerencias: [], comparacionDatos: [] };
+            }
+          }
+
+          if (!fs.existsSync(PODERES_DIR_PROTOCOLITO)) fs.mkdirSync(PODERES_DIR_PROTOCOLITO, { recursive: true });
+          const numeroParaArchivo = numeroTramite ?? existente?.numeroTramite ?? req.params.id;
+          const archivoGuardado = `Poder_${numeroParaArchivo}.docx`;
+          fs.writeFileSync(path.join(PODERES_DIR_PROTOCOLITO, archivoGuardado), req.file.buffer);
+
+          update.poderInspeccion = {
+            ...resultadoIA,
+            archivoNombre: req.file.originalname || archivoGuardado,
+            archivoPath: archivoGuardado,
+            fecha: new Date(),
+          };
+        }
+      }
+    }
+
     const updated = await Protocolito.findByIdAndUpdate(
       req.params.id,
       update,
@@ -669,6 +784,14 @@ router.put('/:id', bloquearSiDeshabilitado, async (req, res) => {
     );
 
     if (!updated) return res.status(404).json({ mensaje: 'No encontrado' });
+
+    await registrar(req, {
+      accion: 'EDITAR_PROTOCOLITO',
+      entidad: 'Protocolito',
+      entidadId: updated.numeroTramite,
+      detalle: `Protocolito #${updated.numeroTramite} editado — ${updated.tipoTramite || '—'} — ${updated.cliente || '—'}`,
+    });
+
     res.json(updated);
   } catch (err) {
     if (err.code === 11000) {
@@ -679,12 +802,47 @@ router.put('/:id', bloquearSiDeshabilitado, async (req, res) => {
   }
 });
 
+// GET /protocolito/:id/poder-documento — descarga el .docx que se subió y
+// quedó guardado al validar el Poder (siempre el mismo archivo validado).
+router.get('/:id/poder-documento', auth, async (req, res) => {
+  try {
+    const t = await Protocolito.findById(req.params.id).select('numeroTramite poderInspeccion').lean();
+    if (!t) return res.status(404).json({ mensaje: 'Trámite no encontrado' });
+
+    const archivoPath = t.poderInspeccion?.archivoPath;
+    if (!archivoPath) {
+      return res.status(404).json({ mensaje: 'Este trámite no tiene un documento de poder adjunto.' });
+    }
+
+    const abs = path.join(PODERES_DIR_PROTOCOLITO, archivoPath);
+    if (!fs.existsSync(abs)) {
+      return res.status(404).json({ mensaje: 'El archivo ya no está disponible en el servidor.' });
+    }
+
+    const nombreDescarga = t.poderInspeccion?.archivoNombre || archivoPath;
+    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(nombreDescarga)}"`);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+    fs.createReadStream(abs).pipe(res);
+  } catch (e) {
+    console.error('DESCARGAR PODER (protocolito) ERROR:', e);
+    res.status(500).json({ mensaje: 'Error al descargar el documento', detalle: e.message });
+  }
+});
+
 
 /* ============================ DELETE /:id ============================ */
-router.delete('/:id', bloquearSiDeshabilitado, async (req, res) => {
+router.delete('/:id', auth, bloquearSiDeshabilitado, async (req, res) => {
   try {
     const deleted = await Protocolito.findByIdAndDelete(req.params.id);
     if (!deleted) return res.status(404).json({ mensaje: 'No encontrado' });
+
+    await registrar(req, {
+      accion: 'ELIMINAR_PROTOCOLITO',
+      entidad: 'Protocolito',
+      entidadId: deleted.numeroTramite,
+      detalle: `Protocolito #${deleted.numeroTramite} eliminado — ${deleted.tipoTramite || '—'} — ${deleted.cliente || '—'}`,
+    });
+
     res.json({ ok: true });
   } catch (err) {
     console.error('DELETE ERROR:', err);
@@ -1403,7 +1561,7 @@ router.post('/:id/entregar', bloquearSiDeshabilitado, async (req, res) => {
 
 
 // POST /protocolito/:id/justificante
-router.post('/:id/justificante', /*authMiddleware,*/ bloquearSiDeshabilitado, async (req, res) => {
+router.post('/:id/justificante', auth, bloquearSiDeshabilitado, async (req, res) => {
   try {
     const { id } = req.params;
     const { motivo } = req.body;

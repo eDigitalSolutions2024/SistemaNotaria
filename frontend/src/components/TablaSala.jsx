@@ -14,16 +14,22 @@ const TablaSalas = () => {
   }, []);
 
   const fetchSalas = async () => {
-    const res = await axios.get(`${API_URL}/salas`);
-    setSalas(res.data);
+    try {
+      const res = await axios.get(`${API_URL}/salas`);
+      setSalas(res.data);
+    } catch (error) {
+      console.error('Error al cargar salas:', error);
+    }
   };
 
   const fetchAbogados = async () => {
-    const res = await axios.get(`${API_URL}/abogados`);
-    console.log('ABOGADOS DEL BACKEND:', res.data);
-    // Solo mostrar abogados que están asignados a un cliente pero que NO tienen sala aún
-    
-    setAbogados(res.data);
+    try {
+      const res = await axios.get(`${API_URL}/abogados`);
+      // Solo mostrar abogados que están asignados a un cliente pero que NO tienen sala aún
+      setAbogados(res.data);
+    } catch (error) {
+      console.error('Error al cargar abogados:', error);
+    }
   };
 
   const asignarSala = async (salaId) => {

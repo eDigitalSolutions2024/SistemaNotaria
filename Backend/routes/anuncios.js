@@ -4,10 +4,57 @@
 // usuario deja prueba de que lo vio al dar clic en el botón de cierre.
 const express = require('express');
 const router = express.Router();
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
+const multer = require('multer');
 
 const Anuncio = require('../models/Anuncio');
 const Abogado = require('../models/Abogado');
 const { ROLES } = Abogado;
+
+// ---- Capturas de pantalla adjuntas ---------------------------------------
+const DIR_ADJUNTOS = path.join(__dirname, '..', 'AnunciosAdjuntos');
+const MAX_IMAGENES = 4;
+const MAX_BYTES = 5 * 1024 * 1024; // 5 MB por imagen
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_BYTES, files: MAX_IMAGENES },
+});
+
+// Detecta el tipo real por los primeros bytes (no confía en el nombre ni en
+// el mimetype que manda el navegador). SVG se excluye a propósito (puede
+// llevar scripts).
+function detectarImagen(buf) {
+  if (!buf || buf.length < 12) return null;
+  if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) return { mime: 'image/png', ext: 'png' };
+  if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return { mime: 'image/jpeg', ext: 'jpg' };
+  if (buf.slice(0, 4).toString('ascii') === 'GIF8') return { mime: 'image/gif', ext: 'gif' };
+  if (buf.slice(0, 4).toString('ascii') === 'RIFF' && buf.slice(8, 12).toString('ascii') === 'WEBP') return { mime: 'image/webp', ext: 'webp' };
+  return null;
+}
+
+// Acepta multipart (arrays como JSON string) o JSON normal.
+function leerLista(v) {
+  if (Array.isArray(v)) return v;
+  if (typeof v === 'string' && v.trim()) {
+    try { const j = JSON.parse(v); return Array.isArray(j) ? j : []; } catch { return []; }
+  }
+  return [];
+}
+
+function subirImagenes(req, res, next) {
+  upload.array('imagenes', MAX_IMAGENES)(req, res, (err) => {
+    if (!err) return next();
+    const msg = err.code === 'LIMIT_FILE_SIZE'
+      ? 'Cada imagen debe pesar máximo 5 MB'
+      : err.code === 'LIMIT_FILE_COUNT' || err.code === 'LIMIT_UNEXPECTED_FILE'
+        ? `Máximo ${MAX_IMAGENES} imágenes por anuncio`
+        : 'No se pudieron procesar las imágenes';
+    res.status(400).json({ ok: false, msg });
+  });
+}
 
 function getUser(req) {
   const u = req.user || {};
@@ -29,7 +76,8 @@ function soloAdmin(req, res, next) {
 /* POST /api/anuncios                                                      */
 /* ADMIN crea un anuncio manual y se transmite de inmediato a todos.        */
 /* ---------------------------------------------------------------------- */
-router.post('/', soloAdmin, async (req, res) => {
+router.post('/', soloAdmin, subirImagenes, async (req, res) => {
+  const guardados = [];
   try {
     const user = getUser(req);
     const titulo = String(req.body?.titulo || '').trim();
@@ -45,12 +93,8 @@ router.post('/', soloAdmin, async (req, res) => {
     let destinatarioRoles = [];
 
     if (alcance === 'SEGMENTO') {
-      const idsPedidos = Array.isArray(req.body?.destinatarioIds)
-        ? [...new Set(req.body.destinatarioIds.map(Number).filter(Number.isFinite))]
-        : [];
-      destinatarioRoles = Array.isArray(req.body?.destinatarioRoles)
-        ? [...new Set(req.body.destinatarioRoles.map((r) => String(r).toUpperCase()).filter((r) => ROLES.includes(r)))]
-        : [];
+      const idsPedidos = [...new Set(leerLista(req.body?.destinatarioIds).map(Number).filter(Number.isFinite))];
+      destinatarioRoles = [...new Set(leerLista(req.body?.destinatarioRoles).map((r) => String(r).toUpperCase()).filter((r) => ROLES.includes(r)))];
 
       if (!idsPedidos.length && !destinatarioRoles.length) {
         return res.status(400).json({
@@ -65,8 +109,27 @@ router.post('/', soloAdmin, async (req, res) => {
       }
     }
 
+    // Valida y guarda las capturas (solo después de pasar las demás validaciones)
+    const validas = [];
+    for (const f of req.files || []) {
+      const tipo = detectarImagen(f.buffer);
+      if (!tipo) {
+        return res.status(400).json({ ok: false, msg: `"${f.originalname}" no es una imagen válida (PNG, JPG, GIF o WEBP)` });
+      }
+      validas.push({ f, tipo });
+    }
+    const imagenesDoc = [];
+    if (validas.length) fs.mkdirSync(DIR_ADJUNTOS, { recursive: true });
+    for (const { f, tipo } of validas) {
+      const archivo = `${crypto.randomBytes(16).toString('hex')}.${tipo.ext}`;
+      fs.writeFileSync(path.join(DIR_ADJUNTOS, archivo), f.buffer);
+      guardados.push(archivo);
+      imagenesDoc.push({ archivo, mime: tipo.mime, nombre: String(f.originalname || '').slice(0, 120), size: f.size });
+    }
+
     const anuncio = await Anuncio.create({
       tipo: 'MANUAL',
+      imagenes: imagenesDoc,
       titulo,
       mensaje,
       urgencia,
@@ -82,6 +145,7 @@ router.post('/', soloAdmin, async (req, res) => {
 
     res.status(201).json({ ok: true, data: anuncio });
   } catch (e) {
+    guardados.forEach((a) => fs.promises.unlink(path.join(DIR_ADJUNTOS, a)).catch(() => {}));
     console.error('ANUNCIOS CREAR ERROR:', e);
     res.status(500).json({ ok: false, msg: 'Error creando el anuncio' });
   }
@@ -156,7 +220,39 @@ router.get('/', soloAdmin, async (req, res) => {
 });
 
 /* ---------------------------------------------------------------------- */
-/* POST /api/anuncios/:id/visto                                            */
+/* GET /api/anuncios/:id/imagenes/:n                                       */
+/* Sirve una captura adjunta. Requiere sesión; si el anuncio es segmentado  */
+/* solo la ve un destinatario (o ADMIN).                                   */
+/* ---------------------------------------------------------------------- */
+router.get('/:id/imagenes/:n', async (req, res) => {
+  try {
+    const user = getUser(req);
+    const anuncio = await Anuncio.findById(req.params.id).lean();
+    const img = anuncio?.imagenes?.[Number(req.params.n)];
+    if (!img) return res.status(404).json({ ok: false, msg: 'Imagen no encontrada' });
+
+    if (anuncio.alcance === 'SEGMENTO' && user.role !== 'ADMIN') {
+      const permitido =
+        (anuncio.destinatarios || []).some((d) => Number(d.usuarioId) === user.id) ||
+        (anuncio.destinatarioRoles || []).includes(user.role);
+      if (!permitido) return res.status(403).json({ ok: false, msg: 'Sin acceso a esta imagen' });
+    }
+
+    const ruta = path.join(DIR_ADJUNTOS, path.basename(img.archivo));
+    if (!fs.existsSync(ruta)) return res.status(404).json({ ok: false, msg: 'Archivo no disponible' });
+
+    res.setHeader('Content-Type', img.mime);
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Cache-Control', 'private, max-age=86400');
+    fs.createReadStream(ruta).pipe(res);
+  } catch (e) {
+    console.error('ANUNCIOS IMAGEN ERROR:', e);
+    res.status(500).json({ ok: false, msg: 'Error obteniendo la imagen' });
+  }
+});
+
+/* ---------------------------------------------------------------------- */
+/* POST /api/anuncios/:id/visto                                           */
 /* El usuario deja constancia de que vio el anuncio (clic en "Entendido"/   */
 /* cerrar). Idempotente: si ya estaba marcado, no duplica.                 */
 /* ---------------------------------------------------------------------- */

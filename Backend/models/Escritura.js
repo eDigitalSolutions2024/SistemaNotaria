@@ -106,6 +106,17 @@ const EscrituraSchema = new Schema(
     // date: fecha envío NTD
     fechaEnvioNTD: { type: Date, default: null },
 
+    // ===== Folios cancelados =====
+    // Marca puramente informativa: el número se tomó pero los folios quedaron
+    // inutilizables. NO libera folios ni cambia ningún cálculo de volumen; solo
+    // pinta el renglón en rojo y guarda quién/cuándo/por qué.
+    foliosCancelados: {
+      cancelado: { type: Boolean, default: false, index: true },
+      justificacion: { type: String, default: '' },
+      por: { type: String, default: '' },
+      fecha: { type: Date, default: null },
+    },
+
     // ===== Trazabilidad =====
     createdBy: { type: String },
     updatedBy: { type: String },

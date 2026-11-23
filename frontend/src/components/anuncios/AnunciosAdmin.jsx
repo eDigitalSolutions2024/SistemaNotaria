@@ -1,8 +1,9 @@
 // frontend/src/components/anuncios/AnunciosAdmin.jsx
 // Panel de ADMIN: redactar y enviar un anuncio manual a todos los usuarios
 // (en vivo vía Socket.io) y consultar el historial con quién ya lo vio.
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import axios from 'axios';
+import ImageOutlinedIcon from '@mui/icons-material/ImageOutlined';
 import {
   TextField, Button, MenuItem, Select, FormControl,
   Chip, CircularProgress, ToggleButtonGroup, ToggleButton, Checkbox, ListItemText, OutlinedInput,
@@ -12,6 +13,8 @@ import { fmtFechaHora, ROLES } from './anunciosConstants';
 import './anuncios.css';
 
 const API = process.env.REACT_APP_API_URL || 'http://localhost:8010/api';
+const MAX_IMAGENES = 4;
+const MAX_MB = 5;
 
 export default function AnunciosAdmin() {
   const { token } = useAuth();
@@ -26,6 +29,49 @@ export default function AnunciosAdmin() {
   const [abogados, setAbogados] = useState([]);
   const [enviando, setEnviando] = useState(false);
   const [error, setError] = useState('');
+  const [imagenes, setImagenes] = useState([]); // [{ file, url }]
+  const [arrastrando, setArrastrando] = useState(false);
+  const inputFileRef = useRef(null);
+
+  const agregarImagenes = useCallback((files) => {
+    const lista = Array.from(files || []).filter((f) => /^image\/(png|jpe?g|gif|webp)$/.test(f.type));
+    if (!lista.length) {
+      setError('Solo se aceptan imágenes PNG, JPG, GIF o WEBP.');
+      return;
+    }
+    setError('');
+    setImagenes((prev) => {
+      const nuevas = [];
+      for (const f of lista) {
+        if (prev.length + nuevas.length >= MAX_IMAGENES) {
+          setError(`Máximo ${MAX_IMAGENES} imágenes por anuncio.`);
+          break;
+        }
+        if (f.size > MAX_MB * 1024 * 1024) {
+          setError(`Cada imagen debe pesar máximo ${MAX_MB} MB.`);
+          continue;
+        }
+        nuevas.push({ file: f, url: URL.createObjectURL(f) });
+      }
+      return [...prev, ...nuevas];
+    });
+  }, []);
+
+  const quitarImagen = (idx) => {
+    setImagenes((prev) => {
+      URL.revokeObjectURL(prev[idx]?.url);
+      return prev.filter((_, i) => i !== idx);
+    });
+  };
+
+  // Ctrl+V con una captura en el portapapeles (Win+Shift+S, PrtScn, etc.)
+  const onPegar = (e) => {
+    const files = Array.from(e.clipboardData?.files || []).filter((f) => f.type.startsWith('image/'));
+    if (files.length) {
+      e.preventDefault();
+      agregarImagenes(files);
+    }
+  };
 
   const [historial, setHistorial] = useState([]);
   const [cargando, setCargando] = useState(false);
@@ -66,14 +112,17 @@ export default function AnunciosAdmin() {
     }
     setEnviando(true);
     try {
-      await axios.post(`${API}/anuncios`, {
-        titulo,
-        mensaje,
-        urgencia,
-        alcance,
-        destinatarioRoles: alcance === 'SEGMENTO' ? rolesElegidos : [],
-        destinatarioIds: alcance === 'SEGMENTO' ? usuariosElegidos : [],
-      }, authCfg);
+      const fd = new FormData();
+      fd.append('titulo', titulo);
+      fd.append('mensaje', mensaje);
+      fd.append('urgencia', urgencia);
+      fd.append('alcance', alcance);
+      fd.append('destinatarioRoles', JSON.stringify(alcance === 'SEGMENTO' ? rolesElegidos : []));
+      fd.append('destinatarioIds', JSON.stringify(alcance === 'SEGMENTO' ? usuariosElegidos : []));
+      imagenes.forEach((im) => fd.append('imagenes', im.file, im.file.name || 'captura.png'));
+      await axios.post(`${API}/anuncios`, fd, authCfg);
+      imagenes.forEach((im) => URL.revokeObjectURL(im.url));
+      setImagenes([]);
       setTitulo('');
       setMensaje('');
       setUrgencia('NORMAL');
@@ -101,7 +150,7 @@ export default function AnunciosAdmin() {
     <div className="anuncios-admin">
       <h2>Anuncios</h2>
 
-      <form className="anuncios-form" onSubmit={enviar}>
+      <form className="anuncios-form" onSubmit={enviar} onPaste={onPegar}>
         <div className="anuncios-form-grid">
           <div className="anuncios-form-fields">
             <TextField
@@ -120,6 +169,44 @@ export default function AnunciosAdmin() {
               minRows={6}
               size="small"
             />
+
+            <div
+              className={`anuncios-drop${arrastrando ? ' is-over' : ''}`}
+              onDragOver={(e) => { e.preventDefault(); setArrastrando(true); }}
+              onDragLeave={() => setArrastrando(false)}
+              onDrop={(e) => { e.preventDefault(); setArrastrando(false); agregarImagenes(e.dataTransfer.files); }}
+            >
+              <input
+                ref={inputFileRef}
+                type="file"
+                accept="image/png,image/jpeg,image/gif,image/webp"
+                multiple
+                hidden
+                onChange={(e) => { agregarImagenes(e.target.files); e.target.value = ''; }}
+              />
+              <Button
+                size="small"
+                variant="outlined"
+                startIcon={<ImageOutlinedIcon />}
+                onClick={() => inputFileRef.current?.click()}
+                disabled={imagenes.length >= MAX_IMAGENES}
+              >
+                Adjuntar captura
+              </Button>
+              <span className="anuncios-drop-hint">
+                o pega con Ctrl+V / arrastra aquí (máx. {MAX_IMAGENES}, {MAX_MB} MB c/u)
+              </span>
+              {imagenes.length > 0 && (
+                <div className="anuncios-thumbs">
+                  {imagenes.map((im, i) => (
+                    <div className="anuncios-thumb" key={im.url}>
+                      <img src={im.url} alt={`Captura ${i + 1}`} />
+                      <button type="button" title="Quitar" onClick={() => quitarImagen(i)}>×</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
 
           <div className="anuncios-form-options">
@@ -251,7 +338,12 @@ export default function AnunciosAdmin() {
                 <React.Fragment key={a._id}>
                   <tr>
                     <td>{fmtFechaHora(a.createdAt)}</td>
-                    <td>{a.titulo}</td>
+                    <td>
+                      {a.titulo}
+                      {(a.imagenes || []).length > 0 && (
+                        <span title={`${a.imagenes.length} captura(s) adjunta(s)`}> 📎{a.imagenes.length}</span>
+                      )}
+                    </td>
                     <td>
                       <Chip
                         size="small"

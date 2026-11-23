@@ -140,6 +140,9 @@ mongoose
       console.error('❌ Catálogos PLD NO cargados — generación de XML PLD deshabilitada:');
       resultado.errores.forEach((e) => console.error('   -', e));
     }
+
+    // Sincronización periódica (incremental) del calendario con Outlook
+    require('./services/outlookService').startScheduler();
   })
   .catch((err) => console.error('❌ Error al conectar MongoDB:', err));
 
@@ -195,6 +198,9 @@ app.use('/auth/microsoft', microsoftRoutes);
 app.use('/api/pld', auth, require('./routes/pld'));
 app.use('/api/custodia', auth, require('./routes/custodia'));
 app.use('/api/anuncios', auth, require('./routes/anuncios'));
+app.use('/api/bitacora', auth, require('./routes/bitacora'));
+app.use('/api/manual', auth, require('./routes/manual'));
+app.use('/api/sistema', auth, require('./routes/sistema'));
 
 
 app.get('/', (_req, res) =>
