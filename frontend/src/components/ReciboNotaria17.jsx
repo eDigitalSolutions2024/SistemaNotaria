@@ -8,6 +8,40 @@ import { useAuth } from "../auth/AuthContext";
 const API = process.env.REACT_APP_API_URL || "http://localhost:4000";
 const SAVE_URL = `${API}/recibos`;
 
+// 🔒 Sociedades: el total del trámite no puede bajar del honorario mínimo de
+// la tabla de precios (los impuestos se suman encima). Espejo del candado del
+// backend (routes/recibos.js). El tipo lo agrega Escrituras: "SOCIEDAD SA DE CV".
+const MINIMO_TOTAL_SOCIEDAD = { "SA DE CV": 15000, "SRL DE CV": 15000, SA: 15000, AC: 12000 };
+const reglaSociedad = (tipoTramite) => {
+  const s = String(tipoTramite || "");
+  if (!/sociedad/i.test(s)) return null;
+  const m = s.trim().match(/\s+(SA DE CV|SRL DE CV|SA|AC)$/i);
+  if (!m) return null;
+  const tipo = m[1].toUpperCase();
+  return { tipo, minimo: MINIMO_TOTAL_SOCIEDAD[tipo] };
+};
+
+// Tabla de precios de referencia (honorarios, sin impuestos)
+const TABLA_SOCIEDADES = [
+  { seccion: "I. Sociedades mercantiles", aplica: ["SA DE CV", "SRL DE CV", "SA"], filas: [
+    ["Constitución de sociedad", 15000],
+    ["Protocolización de acta", 12000],
+    ["Elaboración acta de asamblea ordinaria", 5000],
+    ["Elaboración acta de asamblea extraordinaria", 7000],
+    ["Elaboración de acta de asamblea (ref. estatutaria)", 10000],
+    ["Títulos de acciones c/u", 2000],
+    ["Asiento registro de accionistas c/u", 800],
+    ["Asiento variaciones de capital c/u", 800],
+    ["Otorgamiento de poder adicional", 2500],
+    ["Libros de actas c/u", 3000],
+  ] },
+  { seccion: "II. Asociaciones civiles", aplica: ["AC"], filas: [
+    ["Constitución de asociaciones", 12000],
+    ["Protocolización de acta", 9000],
+    ["Elaboración de acta de asamblea ordinaria", 3000],
+  ] },
+];
+
 export default function ReciboNotaria17({ row }) {
 
 
@@ -457,23 +491,50 @@ export default function ReciboNotaria17({ row }) {
   // Restante
   const restante = Math.max(0, toNum(f.totalTramite) - (pagadoAcum + pagoActual));
 
+  // 🔒 Candado: en la notaría no existen trámites por menos de $100, así que
+  // no se permiten recibos de $1 a menos de $100. Excepción: abogados con el
+  // permiso especial "recibosMontoBajo" (gestionable desde el Panel de
+  // administrador — espejo del candado en el backend).
+  const MONTO_MINIMO_RECIBO = 100;
+  const abogadoSeleccionado = catalogAbogados.find(
+    (a) => String(a.id) === String(abogadoId) || a.nombre === f.abogado
+  );
+  const tienePermisoMontoBajo =
+    abogadoSeleccionado?.permisosEspeciales?.recibosMontoBajo === true;
+  const montoBajoNoPermitido =
+    pagoActual > 0 && pagoActual < MONTO_MINIMO_RECIBO && !tienePermisoMontoBajo;
+
+  // 🔒 Sociedades: total mínimo según el tipo de la escritura seleccionada
+  const escSel = isEscritura
+    ? escrituras.find((x) => String(x.numeroControl) === String(f.control))
+    : null;
+  const sociedad = reglaSociedad(escSel?.tipoTramite);
+
   // Validaciones
   const errors = {};
   if (!f.fecha) errors.fecha = "Requerido";
   if (!f.recibiDe.trim()) errors.recibiDe = "Requerido";
-  if (!f.totalTramite || isNaN(toNum(f.totalTramite))) errors.totalTramite = "Inválido";
+  if (!f.totalTramite || isNaN(toNum(f.totalTramite))) {
+    errors.totalTramite = "Inválido";
+  } else if (sociedad && toNum(f.totalTramite) < sociedad.minimo) {
+    errors.totalTramite = `Mínimo para ${sociedad.tipo}: $${sociedad.minimo.toLocaleString("es-MX", { minimumFractionDigits: 2 })} (más impuestos)`;
+  }
 
   if (usaAbono) {
     if (!f.abono || isNaN(toNum(f.abono))) {
       errors.abono = "Inválido";
     } else if (toNum(f.abono) > maxAbono) {
       errors.abono = `No puedes abonar más de $${maxAbono.toFixed(2)}`;
+    } else if (montoBajoNoPermitido) {
+      errors.abono = `No se permiten recibos menores a $${MONTO_MINIMO_RECIBO}.00 para este abogado`;
     }
   } else {
     if (!f.totalPagado || isNaN(toNum(f.totalPagado))) {
       errors.totalPagado = "Inválido";
     } else if (toNum(f.totalPagado) > toNum(f.totalTramite)) {
       errors.totalPagado = "No puedes pagar más que el total del trámite";
+    } else if (montoBajoNoPermitido) {
+      errors.totalPagado = `No se permiten recibos menores a $${MONTO_MINIMO_RECIBO}.00 para este abogado`;
     }
   }
 
@@ -831,6 +892,41 @@ export default function ReciboNotaria17({ row }) {
                     </>
                   );
                 })()}
+              </div>
+            )}
+
+            {sociedad && (
+              <div
+                className="span-2"
+                style={{
+                  border: "1px solid #c7d2fe", background: "#f5f7ff", borderRadius: 8,
+                  padding: 12, fontSize: 13,
+                }}
+              >
+                <div style={{ fontWeight: 700, marginBottom: 6 }}>
+                  Sociedad {sociedad.tipo} · el total del trámite debe ser mínimo{" "}
+                  ${sociedad.minimo.toLocaleString("es-MX", { minimumFractionDigits: 2 })}{" "}
+                  <span style={{ fontWeight: 400 }}>(más impuestos)</span>
+                </div>
+                {TABLA_SOCIEDADES.filter((s) => s.aplica.includes(sociedad.tipo)).map((s) => (
+                  <table key={s.seccion} style={{ width: "100%", borderCollapse: "collapse" }}>
+                    <thead>
+                      <tr>
+                        <th colSpan={2} style={{ textAlign: "left", paddingBottom: 4 }}>{s.seccion}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {s.filas.map(([concepto, monto]) => (
+                        <tr key={concepto}>
+                          <td style={{ padding: "2px 0" }}>{concepto}</td>
+                          <td style={{ textAlign: "right" }}>
+                            ${monto.toLocaleString("es-MX", { minimumFractionDigits: 2 })}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                ))}
               </div>
             )}
 

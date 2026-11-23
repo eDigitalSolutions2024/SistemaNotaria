@@ -6,6 +6,7 @@
 // modos (candado de negocio definido así a propósito).
 const mammoth = require('mammoth');
 const Anthropic = require('@anthropic-ai/sdk');
+const ClienteGeneral = require('../models/ClienteGeneral');
 
 const MODEL = process.env.ANTHROPIC_MODEL || 'claude-haiku-5-5';
 
@@ -52,12 +53,35 @@ Tu trabajo es detectar huecos, inconsistencias o errores comunes en poderes nota
 - Inconsistencias de nombres/fechas dentro del mismo documento.
 - Errores ortográficos o de redacción graves (no estilo, solo lo que afecte claridad o validez).
 - Placeholders sin llenar (ej. "{{NOMBRE}}", "XXXX", espacios en blanco evidentes, "[dato pendiente]").
+- Concordancia de número (singular/plural) y género al referirse a los comparecientes: cuenta cuántos
+  poderdantes y cuántos apoderados hay en el documento y revisa que el texto use singular o plural de
+  forma consistente con esa cantidad (ej. si solo hay un poderdante, debe decir "el compareciente"/"la
+  compareciente", "el señor"/"la señora", NO "los comparecientes"/"los señores"; si hay varios, debe usar
+  plural de forma consistente). Revisa también que el género sea el correcto para cada persona según como
+  el propio documento la nombra (ej. "la compareciente" para una mujer, no "el compareciente"). Señala
+  como hallazgo cualquier mezcla de singular/plural para la misma persona o género incorrecto, citando la
+  frase exacta donde ocurre.
 
 Si te doy una lista de "Datos registrados en el sistema", compara cada dato contra el texto del documento y repórtalo en "comparacionDatos": para cada persona/campo di si aparece en el documento y si coincide exactamente (nombre completo, CURP, RFC, domicilio) — los nombres pueden variar ligeramente en orden o mayúsculas, pero CURP y RFC deben coincidir carácter por carácter. Si no te doy esa lista, deja "comparacionDatos" vacío.
 
 NO inventes números de artículo ni cites leyes específicas — no tienes acceso al texto legal real, solo señala el hallazgo de redacción/consistencia. NO evalúes formato de Word (tipografía, márgenes) ni des opinión legal sobre si el poder "conviene" al cliente — solo completitud y consistencia del contenido para protocolizarse.
 
-Llama SIEMPRE a la herramienta "reportar_inspeccion_poder" con tu resultado. Si el documento se ve completo y consistente, "sugerencias" puede ir vacío y "porcentaje" debe ser alto (90-100).`;
+REGLA IMPORTANTE sobre "resumen" y "hallazgos": el "resumen" es solo 1-2 frases generales. CADA problema que menciones en el resumen DEBE aparecer también como un ítem individual en "hallazgos". Nunca dejes "hallazgos" vacío si el resumen menciona algún problema. NO calcules ni reportes porcentaje: el sistema lo calcula solo a partir de la gravedad de tus hallazgos.
+
+Cada hallazgo lleva:
+- "problema": qué está mal y cómo corregirlo, en una frase concreta.
+- "ubicacion": dónde está en el documento, en lenguaje que el abogado pueda ubicar a simple vista (ej. "Encabezado", "Comparecencia, primer párrafo", "Cláusula VIII – Actividad Vulnerable", "Cierre, Cláusula X"). Si el problema es algo que NO aparece en el documento (cláusula faltante), dilo así: "No aparece en el documento (debería ir en …)".
+- "cita": copia LITERAL y EXACTA, carácter por carácter, de 4 a 15 palabras del documento donde ocurre el problema (se usa para subrayarla automáticamente en la vista previa, así que no la parafrasees, no cambies mayúsculas ni puntuación, no unas fragmentos distantes). Si el problema es algo que falta y no hay texto que citar, deja "cita" vacía. Un hallazgo por cada lugar distinto donde ocurre el problema (si "el compareciente" aparece mal en tres frases, son tres hallazgos).
+
+- "correccion": el texto EXACTO que debería quedar en el documento, listo para copiar y pegar en Word. Si hay "cita", escribe cómo debe quedar esa misma frase ya corregida (mismo estilo y redacción del documento, solo con el arreglo aplicado; si necesita más contexto que la cita, reescribe la frase completa). Si el problema es algo que falta, redacta la cláusula o texto completo a insertar y en "ubicacion" indica dónde. NO inventes datos que no estén en el documento ni en los "Datos registrados en el sistema" (nombres, CURP, RFC, domicilios, fechas, causas concretas): usa un marcador entre corchetes como [CAUSA DE LA IRREVOCABILIDAD] o [CURP DEL OTORGANTE] para que el abogado lo complete. NO cites números de artículo ni leyes específicas. Si no hay forma razonable de dar el texto (ej. solo hay que verificar algo), deja "correccion" vacía.
+- "gravedad": clasifica con estos criterios, de forma consistente:
+  · "critico": afecta la validez o la identificación — poder irrevocable sin causa o sin cláusula de irrevocabilidad; poder revocable redactado como irrevocable; datos de identificación del otorgante o apoderado faltantes; otorgante o apoderado designado de forma contradictoria; facultades esenciales ausentes o contradictorias; placeholders sin llenar en datos clave; cita legal que contradice el texto.
+  · "importante": no invalida pero debe corregirse — error de concordancia de género o número; cláusula estándar faltante; inconsistencias de nombres o fechas; facultades ambiguas.
+  · "menor": ortografía o redacción que no afecta el sentido.
+
+Los datos del sistema que no coincidan con el documento (CURP, RFC, nombre, domicilio) repórtalos SOLO en "comparacionDatos" con coincide=false, NO los repitas en "hallazgos" (el sistema ya los descuenta por su cuenta).
+
+Llama SIEMPRE a la herramienta "reportar_inspeccion_poder" con tu resultado. Si el documento se ve completo y consistente, "hallazgos" va vacío.`;
 
 // Tool-use en vez de pedirle el JSON como texto libre: la API valida y
 // estructura la respuesta contra este schema, así que no depende de que el
@@ -70,20 +94,24 @@ const TOOLS = [
     input_schema: {
       type: 'object',
       properties: {
-        porcentaje: {
-          type: 'integer',
-          minimum: 0,
-          maximum: 100,
-          description: 'Qué tan listo está el documento para tomar número de escritura',
-        },
         resumen: {
           type: 'string',
           description: '1-2 frases con el hallazgo más importante, o confirmando que se ve completo',
         },
-        sugerencias: {
+        hallazgos: {
           type: 'array',
-          items: { type: 'string' },
-          description: 'Mejoras concretas encontradas; arreglo vacío si no hay ninguna',
+          description: 'Un ítem por cada problema encontrado, con su ubicación y cita literal; arreglo vacío si no hay ninguno',
+          items: {
+            type: 'object',
+            properties: {
+              problema: { type: 'string', description: 'Qué está mal y cómo corregirlo' },
+              ubicacion: { type: 'string', description: 'Dónde está en el documento (sección, cláusula o párrafo)' },
+              cita: { type: 'string', description: 'Fragmento LITERAL de 4-15 palabras copiado exacto del documento; vacío si el problema es algo que falta' },
+              correccion: { type: 'string', description: 'Texto exacto sugerido para reemplazar la cita (o para insertar si falta algo), listo para pegar en Word; marcadores [ASÍ] para datos que no se tengan; vacío si no aplica' },
+              gravedad: { type: 'string', enum: ['critico', 'importante', 'menor'], description: 'critico | importante | menor (ver criterios del prompt)' },
+            },
+            required: ['problema', 'ubicacion', 'cita', 'correccion', 'gravedad'],
+          },
         },
         comparacionDatos: {
           type: 'array',
@@ -101,28 +129,66 @@ const TOOLS = [
           },
         },
       },
-      required: ['porcentaje', 'resumen', 'sugerencias'],
+      required: ['resumen', 'hallazgos'],
     },
   },
 ];
 
-function normalizarResultado(input) {
-  const porcentaje = Number(input?.porcentaje);
+// Puntos que resta cada hallazgo según su gravedad. El porcentaje lo calcula
+// el servidor con esta fórmula fija (la IA ya NO decide el número), así que el
+// mismo documento con los mismos hallazgos siempre da el mismo porcentaje.
+const PESOS = { critico: 20, importante: 8, menor: 2 };
+const GRAVEDADES = Object.keys(PESOS);
+
+// Dato del sistema que no coincide con el documento: CURP/RFC son críticos
+// (identifican a la persona); nombre/domicilio, importantes.
+function gravedadDeDato(campo) {
+  return /curp|rfc/i.test(campo) ? 'critico' : 'importante';
+}
+
+function calcularPorcentaje(hallazgos, comparacionDatos) {
+  const desglose = { critico: 0, importante: 0, menor: 0 };
+  hallazgos.forEach(h => { desglose[h.gravedad] += 1; });
+  comparacionDatos.filter(d => !d.coincide).forEach(d => { desglose[gravedadDeDato(d.campo)] += 1; });
+  const descuento = GRAVEDADES.reduce((s, g) => s + desglose[g] * PESOS[g], 0);
   return {
-    porcentaje: Number.isFinite(porcentaje) ? Math.max(0, Math.min(100, Math.round(porcentaje))) : null,
-    resumen: String(input?.resumen || '').trim(),
-    sugerencias: Array.isArray(input?.sugerencias)
-      ? input.sugerencias.map(s => String(s || '').trim()).filter(Boolean)
-      : [],
-    comparacionDatos: Array.isArray(input?.comparacionDatos)
-      ? input.comparacionDatos.map(d => ({
-          persona: String(d?.persona || '').trim(),
-          campo: String(d?.campo || '').trim(),
-          esperado: String(d?.esperado || '').trim(),
-          coincide: Boolean(d?.coincide),
-          nota: String(d?.nota || '').trim(),
-        })).filter(d => d.persona && d.campo)
-      : [],
+    porcentaje: Math.max(0, 100 - descuento),
+    desglose: { ...desglose, descuento, pesos: PESOS },
+  };
+}
+
+function normalizarResultado(input) {
+  const resumen = String(input?.resumen || '').trim();
+  const hallazgos = Array.isArray(input?.hallazgos)
+    ? input.hallazgos.map(h => ({
+        problema: String(h?.problema || '').trim(),
+        ubicacion: String(h?.ubicacion || '').trim(),
+        cita: String(h?.cita || '').trim(),
+        correccion: String(h?.correccion || '').trim(),
+        gravedad: GRAVEDADES.includes(h?.gravedad) ? h.gravedad : 'importante',
+      })).filter(h => h.problema)
+    : [];
+  const comparacionDatos = Array.isArray(input?.comparacionDatos)
+    ? input.comparacionDatos.map(d => ({
+        persona: String(d?.persona || '').trim(),
+        campo: String(d?.campo || '').trim(),
+        esperado: String(d?.esperado || '').trim(),
+        coincide: Boolean(d?.coincide),
+        nota: String(d?.nota || '').trim(),
+      })).filter(d => d.persona && d.campo)
+    : [];
+  // "sugerencias" (texto plano) se deriva de los hallazgos: es lo que se
+  // guarda en Escritura/Protocolito (arreglo de strings) y lo que usa el
+  // frontend si no hay hallazgos estructurados.
+  const sugerencias = hallazgos.map(h => (h.ubicacion ? `[${h.ubicacion}] ${h.problema}` : h.problema));
+  const { porcentaje, desglose } = calcularPorcentaje(hallazgos, comparacionDatos);
+  return {
+    porcentaje,
+    desglose,
+    resumen,
+    sugerencias,
+    hallazgos,
+    comparacionDatos,
   };
 }
 
@@ -174,7 +240,7 @@ async function inspeccionarPoder(buffer, contexto) {
   const anthropic = getClient();
   const msg = await anthropic.messages.create({
     model: MODEL,
-    max_tokens: 1500,
+    max_tokens: 8000,
     system: SYSTEM_PROMPT,
     tools: TOOLS,
     tool_choice: { type: 'tool', name: 'reportar_inspeccion_poder' },
@@ -192,7 +258,7 @@ async function inspeccionarPoder(buffer, contexto) {
     // No debería pasar con tool_choice forzado, pero por si acaso no
     // tumbamos el flujo — el candado es informativo, así que degradamos a
     // "no se pudo calificar" en vez de bloquear tomar el número.
-    resultado = { porcentaje: null, resumen: 'No se pudo interpretar la respuesta de la IA.', sugerencias: [], comparacionDatos: [] };
+    resultado = { porcentaje: null, resumen: 'No se pudo interpretar la respuesta de la IA.', sugerencias: [], hallazgos: [], comparacionDatos: [], desglose: null };
   }
 
   const previewHtml = await convertirAPreviewHtml(buffer);
@@ -200,4 +266,46 @@ async function inspeccionarPoder(buffer, contexto) {
   return { ...resultado, textoLargo, previewHtml };
 }
 
-module.exports = { inspeccionarPoder, extraerTexto };
+// ===== Helpers compartidos por cualquier módulo que tome Poderes =====
+// (Escrituras y Protocolito, hoy; ambos los usan EXACTAMENTE igual — vive
+// aquí para que no haya dos copias que se puedan desalinear.)
+
+function esTramitePoder(tipo) {
+  return /poder/i.test(String(tipo || ''));
+}
+
+function getSubtipoPoder(tipo) {
+  const t = String(tipo || '').toLowerCase();
+  if (t.includes('irrevocable')) return 'Irrevocable';
+  if (t.includes('revocable')) return 'Revocable';
+  return '';
+}
+
+// Arma el contexto (datos ya capturados del cliente + subtipo) que se le
+// pasa a la IA para comparar contra el documento del Poder. Si no hay
+// clienteId o no hay ClienteGeneral capturados, regresa un contexto "vacío"
+// — la inspección sigue funcionando igual, solo sin esa comparativa.
+async function buildPoderContexto(clienteId, tipoTramite) {
+  const subtipo = getSubtipoPoder(tipoTramite);
+  let personas = [];
+  if (clienteId) {
+    const num = Number(clienteId);
+    if (Number.isFinite(num)) {
+      try {
+        const docs = await ClienteGeneral.find({ clienteId: num }).lean();
+        personas = docs.map(d => ({
+          nombre_completo: d.nombre_completo || '',
+          rol: d.rol || '',
+          curp: d.curp || '',
+          rfc: d.rfc || '',
+          domicilio: d.domicilio || '',
+        }));
+      } catch (e) {
+        console.error('buildPoderContexto ClienteGeneral ERROR:', e.message);
+      }
+    }
+  }
+  return { subtipo, personas };
+}
+
+module.exports = { inspeccionarPoder, extraerTexto, esTramitePoder, getSubtipoPoder, buildPoderContexto };

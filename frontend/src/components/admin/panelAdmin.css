@@ -1,0 +1,119 @@
+/* frontend/src/components/admin/panelAdmin.css */
+.panel-admin {
+  max-width: 1300px;
+  margin: 0 auto;
+}
+.panel-admin h2 {
+  color: #1a202c;
+  font-size: 28px;
+  font-weight: 600;
+  margin: 0 0 20px;
+  text-align: center;
+  border-bottom: 3px solid #3b82f6;
+  padding-bottom: 12px;
+}
+.panel-admin-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.panel-admin-tabs button {
+  padding: 8px 16px;
+  border-radius: 999px;
+  border: 1px solid #e3e7f1;
+  background: #fff;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 0.88rem;
+}
+.panel-admin-tabs button.active {
+  background: #2f68ff;
+  border-color: #2f68ff;
+  color: #fff;
+}
+.panel-admin-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.panel-admin-toolbar select,
+.panel-admin-toolbar input {
+  padding: 8px 10px;
+  border: 1px solid #e3e7f1;
+  border-radius: 8px;
+  font-size: 0.9rem;
+}
+.panel-admin-table-wrap {
+  overflow-x: auto;
+  border: 1px solid #e3e7f1;
+  border-radius: 12px;
+}
+.panel-admin-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+.panel-admin-table th {
+  text-align: left;
+  background: #f7f8fc;
+  color: #6b7390;
+  font-weight: 700;
+  font-size: 0.8rem;
+  padding: 10px 12px;
+  border-bottom: 1px solid #e3e7f1;
+  white-space: nowrap;
+}
+.panel-admin-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid #eef0f7;
+  vertical-align: top;
+}
+.panel-admin-table tr:last-child td { border-bottom: none; }
+.panel-admin-empty {
+  padding: 24px;
+  text-align: center;
+  color: #6b7390;
+}
+.panel-admin-role-badge {
+  display: inline-block;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 0.74rem;
+  font-weight: 700;
+  background: #eef1f5;
+  color: #475569;
+  white-space: nowrap;
+}
+.panel-admin-role-badge.admin { background: #fde2e2; color: #b91c1c; }
+.panel-admin-role-badge.recepcion { background: #e6ecff; color: #1d4ed8; }
+.panel-admin-switch {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.82rem;
+  color: #475569;
+  cursor: pointer;
+  margin-bottom: 4px;
+  white-space: nowrap;
+}
+.panel-admin-switch input { cursor: pointer; }
+.panel-admin-pager {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-top: 12px;
+}
+.panel-admin-pager button {
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: 1px solid #e3e7f1;
+  background: #fff;
+  cursor: pointer;
+}
+.panel-admin-pager button:disabled { opacity: 0.5; cursor: default; }
+.panel-admin-ip {
+  font-family: 'SFMono-Regular', Consolas, monospace;
+  font-size: 0.82rem;
+  color: #6b7390;
+}

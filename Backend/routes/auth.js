@@ -3,6 +3,7 @@ const express = require('express');
 const router = express.Router();
 const jwt = require('jsonwebtoken');
 const Abogado = require('../models/Abogado');
+const { registrar } = require('../utils/bitacora');
 
 // POST /api/auth/login
 router.post('/login', async (req, res) => {
@@ -25,6 +26,13 @@ router.post('/login', async (req, res) => {
     }
 
     if (!abogado) {
+      await registrar(req, {
+        accion: 'LOGIN_FALLIDO',
+        entidad: 'Abogado',
+        detalle: `Usuario no encontrado: "${user}"`,
+        usuarioIdOverride: null,
+        usuarioNombreOverride: String(user),
+      });
       return res.status(404).json({ mensaje: 'Usuario no encontrado' });
     }
 
@@ -43,14 +51,38 @@ if (abogado) console.log('[LOGIN] candidato:', {
   numero: abogado.numero,
 });
     const ok = await abogado.validatePassword(password);
-    if (!ok) return res.status(401).json({ mensaje: 'Credenciales inválidas' });
+    if (!ok) {
+      await registrar(req, {
+        accion: 'LOGIN_FALLIDO',
+        entidad: 'Abogado',
+        entidadId: abogado._id,
+        detalle: `Contraseña incorrecta para "${abogado.nombre}"`,
+        usuarioIdOverride: abogado._id,
+        usuarioNombreOverride: abogado.nombre,
+      });
+      return res.status(401).json({ mensaje: 'Credenciales inválidas' });
+    }
 
-    const payload = { id: abogado._id, role: abogado.role, nombre: abogado.nombre };
+    const payload = {
+      id: abogado._id,
+      role: abogado.role,
+      nombre: abogado.nombre,
+      permisosEspeciales: abogado.permisosEspeciales || {},
+    };
     const token = jwt.sign(
       payload,
       process.env.JWT_SECRET || 'dev_secret',
       { expiresIn: process.env.JWT_EXPIRES || '1h' }
     );
+
+    await registrar(req, {
+      accion: 'LOGIN_OK',
+      entidad: 'Abogado',
+      entidadId: abogado._id,
+      detalle: `Inicio de sesión de "${abogado.nombre}"`,
+      usuarioIdOverride: abogado._id,
+      usuarioNombreOverride: abogado.nombre,
+    });
 
     return res.json({ token, user: payload });
   } catch (err) {
@@ -63,7 +95,7 @@ const requireAuth = require('../middleware/auth');
 router.get('/me', requireAuth, async (req, res) => {
   const a = await Abogado.findById(req.user.id).lean();
   if (!a) return res.status(404).json({ mensaje: 'Usuario no encontrado' });
-  res.json({ id: a._id, nombre: a.nombre, role: a.role });
+  res.json({ id: a._id, nombre: a.nombre, role: a.role, permisosEspeciales: a.permisosEspeciales || {} });
 });
 
 module.exports = router;

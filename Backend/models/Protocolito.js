@@ -49,6 +49,28 @@ const protocolitoSchema = new mongoose.Schema({
   },
 
 
+  // ===== Inspección IA del documento de Poder (al guardar el trámite) =====
+  // Mismo mecanismo que Escritura.poderInspeccion — informativo, no bloquea.
+  poderInspeccion: {
+    porcentaje: { type: Number, default: null },
+    resumen: { type: String, default: '' },
+    sugerencias: { type: [String], default: [] },
+    comparacionDatos: {
+      type: [{
+        persona: { type: String, default: '' },
+        campo: { type: String, default: '' },
+        esperado: { type: String, default: '' },
+        coincide: { type: Boolean, default: false },
+        nota: { type: String, default: '' },
+        _id: false,
+      }],
+      default: [],
+    },
+    archivoNombre: { type: String, default: '' },
+    archivoPath: { type: String, default: '' },
+    fecha: { type: Date, default: null },
+  },
+
   observaciones: { type: String, trim: true, default: '' },
   estatus_entrega: { type: String, default: 'Pendiente' },
   fecha_entrega: { type: Date },

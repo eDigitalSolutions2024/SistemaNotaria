@@ -6,11 +6,17 @@ import TablaSalas from '../components/TablaSala';
 
 import '../css/Home.css';
 import { io } from 'socket.io-client';
+import { useAuth } from '../auth/AuthContext';
 
 // Conexión socket al backend
 const socket = io(process.env.REACT_APP_API_URL);
 
 function Home() {
+  // La tabla "Abogados registrados" solo la ve el ADMIN (respeta la vista
+  // simulada del administrador, porque `role` es el rol efectivo).
+  const { role } = useAuth();
+  const esAdmin = String(role || '').toUpperCase() === 'ADMIN';
+
   const clientesRef = useRef(null);
   const salasRef = useRef(null);
   const abogadosRef = useRef(null);
@@ -71,10 +77,12 @@ function Home() {
       <div className="tabla-clientes">
         <TablaClientes ref={clientesRef} />
       </div>
-      {/* Tabla de abogados */}
-      <div className="tabla-abogados">
-        <TablaAbogados ref={abogadosRef} />
-      </div>
+      {/* Tabla de abogados (solo ADMIN) */}
+      {esAdmin && (
+        <div className="tabla-abogados">
+          <TablaAbogados ref={abogadosRef} />
+        </div>
+      )}
     </div>
   );
 }

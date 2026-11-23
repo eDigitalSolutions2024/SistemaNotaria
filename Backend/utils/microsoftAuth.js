@@ -11,9 +11,14 @@ const {
 
 const BASE = `https://login.microsoftonline.com/${MS_TENANT}/oauth2/v2.0`;
 
-const SCOPE = "openid profile offline_access User.Read Calendars.ReadWrite";
+// Calendars.ReadWrite.Shared: leer calendarios compartidos/delegados.
+// MailboxSettings.Read: colores de categorías de Outlook.
+const SCOPE =
+  "openid profile offline_access User.Read Calendars.ReadWrite Calendars.ReadWrite.Shared MailboxSettings.Read";
 
-exports.getAuthUrl = () => {
+// `state` = token firmado que emite el backend (ver routes/calendar.js); el
+// callback lo valida para aceptar solo conexiones iniciadas por un ADMIN.
+exports.getAuthUrl = (state) => {
   const params = new URLSearchParams({
     client_id: MS_CLIENT_ID,
     response_type: "code",
@@ -21,6 +26,7 @@ exports.getAuthUrl = () => {
     response_mode: "query",
     scope: SCOPE,
     prompt: "select_account",
+    ...(state ? { state } : {}),
   });
 
   return `${BASE}/authorize?${params.toString()}`;
@@ -55,7 +61,8 @@ exports.refreshAccessToken = async (refreshToken) => {
     client_secret: MS_CLIENT_SECRET,
     grant_type: "refresh_token",
     refresh_token: refreshToken,
-    scope: SCOPE,
+    // Sin "scope": se renuevan los permisos ya concedidos. Pedir un scope
+    // nuevo sin consentimiento rompería las sesiones existentes.
   });
 
   const res = await axios.post(`${BASE}/token`, data, {

@@ -7,10 +7,13 @@ const AbogadosTable = () => {
   const [abogados, setAbogados] = useState([]);
 
   useEffect(() => {
-  fetch(`${API_URL}/abogados`).then(res => res.json())
-    .then(data => setAbogados(data))
-    .catch(error => console.error('Error al cargar abogados:', error));
-}, []);
+    const token = localStorage.getItem('token');
+    fetch(`${API_URL}/abogados`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    }).then(res => res.json())
+      .then(data => setAbogados(Array.isArray(data) ? data : []))
+      .catch(error => console.error('Error al cargar abogados:', error));
+  }, []);
 
   const columnas = [
     { name: 'ID', selector: row => row._id, sortable: true },

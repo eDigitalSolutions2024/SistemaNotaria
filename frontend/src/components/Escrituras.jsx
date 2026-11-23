@@ -9,6 +9,8 @@ import {
 } from '@mui/material';
 
 import { useAuth } from '../auth/AuthContext';
+import { renderAsync as renderDocxAsync } from 'docx-preview';
+import { resaltarHallazgos, irAHallazgo } from '../utils/resaltarHallazgos';
 import '../css/styles.css';
 import '../css/Escrituras.css';
 import EscrituraEstatus from './EscriturasEstatus';
@@ -176,7 +178,10 @@ const TRAMITES_CON_MONTOS_PATTERNS = [
 
 // 💰 Solo estos tipos de trámite llevan montos (impuestos, avalúo, etc.)
 const isTramiteConMontos = (tipo) => {
-  const t = norm(tipo)
+  // Las sociedades nunca llevan presupuesto/montos. Se quita el sufijo del
+  // tipo de sociedad ("SA DE CV", "SRL DE CV") porque su "CV" chocaba con el
+  // patrón /\bcv\b/ de compraventa.
+  const t = norm(esSociedad(tipo) ? stripTipoSociedad(tipo) : tipo)
     .replace(/[./-]+/g, ' ')   // C/V, COMPRA-VENTA, etc.
     .replace(/\s+/g, ' ')
     .trim();
@@ -328,6 +333,17 @@ const stripSubtipo = (tipo) =>
     .replace(/\b(ir)?revocable\b/gi, '')
     .replace(/\s+/g, ' ')
     .trim();
+
+// --- Tipo de sociedad (se agrega al final del tipo de trámite "SOCIEDAD") ---
+// Se usa después para el candado de monto mínimo de recibos de sociedades.
+const TIPOS_SOCIEDAD = ['SA DE CV', 'SRL DE CV', 'SA', 'AC'];
+const RX_TIPO_SOCIEDAD = /\s+(SA DE CV|SRL DE CV|SA|AC)$/i;
+const getTipoSociedad = (tipo) => {
+  const m = String(tipo || '').trim().match(RX_TIPO_SOCIEDAD);
+  return m ? m[1].toUpperCase() : '';
+};
+const stripTipoSociedad = (tipo) => String(tipo || '').replace(RX_TIPO_SOCIEDAD, '').trim();
+const esSociedad = (tipo) => norm(tipo).includes('sociedad');
 
 function applyClienteToEscritura(cliente, prev) {
   const numero =
@@ -525,16 +541,23 @@ export default function Escrituras({ onOpenRecibo }) {
   const roles = getUserRoles(user);
 
   const isAdmin = roles.includes('ADMIN');
-  const isSpecialViewer = String(currentUserId) === '1008';
+  // 🔒 Antes era un _id fijo (1008); ahora es un permiso gestionable desde
+  // el Panel de administrador (Abogado.permisosEspeciales.escriturasVistaTotal).
+  const isSpecialViewer = user?.permisosEspeciales?.escriturasVistaTotal === true;
+  // Cancelar folios: solo ADMIN, o quien tenga el permiso especial
+  // `cancelarFolios` (Panel de administrador).
+  const canCancelFolios = isAdmin || user?.permisosEspeciales?.cancelarFolios === true;
 
   // 🔹 Permisos
   const canExport =
     isSpecialViewer ||
     roles.some((r) => ['ADMIN', 'PROTOCOLITO', 'RECEPCION'].includes(r));
 
-  const canDeliver =
-    !isSpecialViewer &&
-    roles.some((r) => ['ADMIN', 'RECEPCION'].includes(r));
+  // Entregar es un derecho que viene del rol (ADMIN/RECEPCION), no del
+  // candado "Ver todas las Escrituras" — ese candado solo amplía qué ve
+  // alguien que de otro modo no vería todo (ej. un ABOGADO puntual); nunca
+  // debe quitarle "Entregar" a quien ya lo tiene por su rol.
+  const canDeliver = roles.some((r) => ['ADMIN', 'RECEPCION'].includes(r));
 
   const canSeeAll =
     isSpecialViewer ||
@@ -600,8 +623,43 @@ const canJustifyRecibos =
   const [poderInspeccion, setPoderInspeccion] = useState(null);
   const [poderInspeccionando, setPoderInspeccionando] = useState(false);
   const [poderInspeccionError, setPoderInspeccionError] = useState('');
+  const [poderHallazgosOk, setPoderHallazgosOk] = useState([]); // por hallazgo: ¿se localizó y subrayó en la vista previa?
   const [poderPreviewOpen, setPoderPreviewOpen] = useState(false);
   const [poderPreviewFullScreen, setPoderPreviewFullScreen] = useState(false);
+  const [poderDocxError, setPoderDocxError] = useState('');
+  const poderDocxContainerRef = useRef(null);
+
+  // Renderiza el .docx tal cual se ve en Word (fuente, sangrías, justificado,
+  // listas con letras/números reales) en vez de la conversión genérica a
+  // HTML. Se dispara desde TransitionProps.onEntered del Dialog (no desde un
+  // useEffect por apertura) porque MUI monta el contenido del Dialog en un
+  // portal con una transición de por medio — un efecto disparado por el
+  // simple cambio de "open" puede correr antes de que el <div> de destino
+  // esté realmente pintado, y entonces no hay dónde insertar los nodos.
+  const renderPoderDocxPreview = () => {
+    if (!poderFile || !poderDocxContainerRef.current) {
+      console.warn('docx-preview: nada que mostrar todavía', { hayArchivo: !!poderFile, hayContenedor: !!poderDocxContainerRef.current });
+      return;
+    }
+    setPoderDocxError('');
+    poderDocxContainerRef.current.innerHTML = '';
+    renderDocxAsync(poderFile, poderDocxContainerRef.current, undefined, {
+      className: 'docx-preview',
+      inWrapper: true,
+      ignoreWidth: false,
+      ignoreHeight: true,
+    }).then(() => {
+      console.log('docx-preview: render OK, nodos:', poderDocxContainerRef.current?.childNodes.length);
+      try {
+        setPoderHallazgosOk(resaltarHallazgos(poderDocxContainerRef.current, poderInspeccion?.hallazgos));
+      } catch (e) {
+        console.error('resaltarHallazgos ERROR:', e);
+      }
+    }).catch((e) => {
+      setPoderDocxError('No se pudo mostrar la vista previa del documento.');
+      console.error('docx-preview ERROR:', e);
+    });
+  };
 
   // Picker clientes
  
@@ -656,6 +714,11 @@ const [pldMap, setPldMap] = useState({});
   const [attachSelectedId, setAttachSelectedId] = useState(null);
   const [justifyOpen, setJustifyOpen] = useState(false);
   const [justifyText, setJustifyText] = useState('');
+
+  // Cancelar folios (marca visual en rojo + justificación obligatoria)
+  const [cancelFoliosRow, setCancelFoliosRow] = useState(null);
+  const [cancelFoliosText, setCancelFoliosText] = useState('');
+  const [cancelFoliosSaving, setCancelFoliosSaving] = useState(false);
 
     // --- Modal: selección de presupuesto ---
   const [presupOpen, setPresupOpen] = useState(false);
@@ -882,8 +945,11 @@ function getNewFormErrors({ newRow, newVolumen, newFolioDesde, newFolioHasta, ne
   const mySinReciboCount = React.useMemo(() => {
     const me = norm(currentUserName);
     if (!me) return 0;
+    // Folios cancelados = ya no necesita recibo: no cuenta para el candado.
     return rows.filter((r) =>
-      norm(r?.abogado).includes(me) && !hasReciboLocal(r)
+      norm(r?.abogado).includes(me) &&
+      !hasReciboLocal(r) &&
+      !r?.foliosCancelados?.cancelado
     ).length;
   }, [rows, currentUserName]);
 
@@ -2190,7 +2256,7 @@ const onSaveEdit = async (id) => {
   const actionsColumn = {
     field: 'acciones',
     headerName: 'Acciones',
-    width: 360, minWidth: 300,
+    width: 480, minWidth: 400,
     sortable: false,
     filterable: false,
     renderCell: (params) => {
@@ -2216,7 +2282,20 @@ const onSaveEdit = async (id) => {
               </button>
             </>
           )}
-          {canSeeReciboBtn && (
+          {canSeeReciboBtn && r?.foliosCancelados?.cancelado && r?.estatus_recibo !== 'CON_RECIBO' && (
+            // Folios cancelados y sin recibo: ya no necesita recibo, se muestra
+            // como justificado en lugar del botón "No tiene recibo".
+            <span
+              style={{
+                padding: '6px 10px', fontSize: 13, background: '#e6f4ea', border: '1px solid #b7dfc5',
+                borderRadius: 6, lineHeight: 1.2, alignSelf: 'center', cursor: 'help',
+              }}
+              title={`Justificado por cancelación de folios\nMotivo: ${r.foliosCancelados.justificacion || '—'}`}
+            >
+              Justificado (folios cancelados)
+            </span>
+          )}
+          {canSeeReciboBtn && !(r?.foliosCancelados?.cancelado && r?.estatus_recibo !== 'CON_RECIBO') && (
             <ReciboIndicator
               row={r}
               openReciboPdf={openReciboPdf}
@@ -2226,6 +2305,35 @@ const onSaveEdit = async (id) => {
             />
           )}
 
+
+          {r?.foliosCancelados?.cancelado ? (
+            <span
+              style={{
+                padding: '6px 10px', fontSize: 12, fontWeight: 700, borderRadius: 4,
+                background: '#c62828', color: '#fff', alignSelf: 'center', cursor: 'help',
+              }}
+              title={`Folios cancelados por ${r.foliosCancelados.por || '—'} el ${
+                r.foliosCancelados.fecha ? new Date(r.foliosCancelados.fecha).toLocaleString('es-MX') : '—'
+              }\nMotivo: ${r.foliosCancelados.justificacion || '—'}`}
+            >
+              Folios cancelados
+            </span>
+          ) : (
+            canCancelFolios && (
+              <button
+                className="btn btn-danger"
+                style={{ padding: '6px 10px', fontSize: 13 }}
+                onClick={() => {
+                  if (bloqueadoPorSoloLectura()) return;
+                  setCancelFoliosText('');
+                  setCancelFoliosRow(r);
+                }}
+                title="Marcar los folios de esta escritura como cancelados (inutilizables)"
+              >
+                Cancelar folios
+              </button>
+            )
+          )}
 
           {canDeliver && (
             <button
@@ -2681,6 +2789,29 @@ const onSaveEdit = async (id) => {
               </TextField>
             )}
 
+            {esSociedad(newRow.tipoTramite) && (
+              <TextField
+                select
+                required
+                label="Tipo de sociedad"
+                size="small"
+                value={getTipoSociedad(newRow.tipoTramite)}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setNewRow((prev) => {
+                    const base = stripTipoSociedad(prev.tipoTramite || 'SOCIEDAD');
+                    return { ...prev, tipoTramite: v ? `${base} ${v}` : base };
+                  });
+                }}
+                style={{ minWidth: 180 }}
+              >
+                <MenuItem value="">— Tipo de sociedad —</MenuItem>
+                {TIPOS_SOCIEDAD.map((s) => (
+                  <MenuItem key={s} value={s}>{s}</MenuItem>
+                ))}
+              </TextField>
+            )}
+
             <TextField label="Cliente" size="small" value={newRow.cliente || ''} InputProps={{ readOnly: true }} style={{ minWidth: 200 }} />
             <TextField label="Fecha" size="small" value={newRow.fecha || ''} InputProps={{ readOnly: true }} style={{ minWidth: 140 }} />
             <TextField label="Abogado responsable" size="small" value={newRow.abogado || ''} InputProps={{ readOnly: true }} style={{ minWidth: 220 }} />
@@ -2977,6 +3108,7 @@ if (sugerido != null) {
             maxWidth={poderPreviewFullScreen ? false : 'xl'}
             fullWidth={!poderPreviewFullScreen}
             fullScreen={poderPreviewFullScreen}
+            TransitionProps={{ onEntered: renderPoderDocxPreview }}
             PaperProps={{
               style: poderPreviewFullScreen ? {} : { height: '92vh' },
             }}
@@ -3002,12 +3134,14 @@ if (sugerido != null) {
                     style={{
                       flex: 1, minHeight: 0, overflowY: 'auto',
                       border: '1px solid #e3e7ee', borderRadius: 10,
-                      padding: '24px 28px', background: '#fff',
-                      fontSize: 13.5, lineHeight: 1.6, color: '#1a2233',
-                      fontFamily: 'Georgia, "Times New Roman", serif',
+                      background: '#f1f3f6',
                     }}
-                    dangerouslySetInnerHTML={{ __html: poderInspeccion?.previewHtml || '<p style="color:#999">Sin vista previa disponible.</p>' }}
-                  />
+                  >
+                    {poderDocxError && (
+                      <div style={{ padding: 16, color: '#9a2a2a', fontSize: 13 }}>{poderDocxError}</div>
+                    )}
+                    <div ref={poderDocxContainerRef} />
+                  </div>
                 </div>
 
                 <div style={{ flex: '1 1 340px', minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
@@ -3020,6 +3154,18 @@ if (sugerido != null) {
                   {poderInspeccion?.porcentaje != null && (
                     <div style={{ fontSize: 28, fontWeight: 800, marginBottom: 4 }}>
                       {poderInspeccion.porcentaje}% <span style={{ fontSize: 13, fontWeight: 600, color: '#667085' }}>listo</span>
+                    </div>
+                  )}
+                  {poderInspeccion?.desglose && poderInspeccion.desglose.descuento > 0 && (
+                    <div style={{ fontSize: 11.5, color: '#667085', marginBottom: 8 }}>
+                      100 − {poderInspeccion.desglose.descuento} puntos:{' '}
+                      {[
+                        ['critico', 'crítico', 'críticos'],
+                        ['importante', 'importante', 'importantes'],
+                        ['menor', 'menor', 'menores'],
+                      ].filter(([k]) => poderInspeccion.desglose[k] > 0).map(([k, s, p]) => (
+                        `${poderInspeccion.desglose[k]} ${poderInspeccion.desglose[k] === 1 ? s : p} (×${poderInspeccion.desglose.pesos[k]})`
+                      )).join(' · ')}
                     </div>
                   )}
 
@@ -3058,7 +3204,64 @@ if (sugerido != null) {
                     </div>
                   )}
 
-                  {Array.isArray(poderInspeccion?.sugerencias) && poderInspeccion.sugerencias.length > 0 ? (
+                  {Array.isArray(poderInspeccion?.hallazgos) && poderInspeccion.hallazgos.length > 0 ? (
+                    <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'grid', gap: 8 }}>
+                      {poderInspeccion.hallazgos.map((h, i) => {
+                        const localizado = poderHallazgosOk[i];
+                        return (
+                          <li
+                            key={i}
+                            onClick={() => localizado && irAHallazgo(poderDocxContainerRef.current, i)}
+                            title={localizado ? 'Clic para ir a esta parte del documento' : undefined}
+                            style={{
+                              display: 'flex', gap: 8, alignItems: 'flex-start',
+                              fontSize: 13, padding: '8px 10px',
+                              background: '#fff6e5', border: '1px solid #f3dfa8',
+                              borderRadius: 8, cursor: localizado ? 'pointer' : 'default',
+                            }}
+                          >
+                            <span>⚠️</span>
+                            <span>
+                              <div style={{ fontSize: 11.5, fontWeight: 700, color: '#9a6400', marginBottom: 2 }}>
+                                <span style={{
+                                  display: 'inline-block', marginRight: 6, padding: '1px 6px', borderRadius: 6, color: '#fff',
+                                  background: h.gravedad === 'critico' ? '#c62828' : h.gravedad === 'menor' ? '#8a94a6' : '#ed6c02',
+                                }}>
+                                  {h.gravedad === 'critico' ? 'CRÍTICO' : h.gravedad === 'menor' ? 'MENOR' : 'IMPORTANTE'}
+                                </span>
+                                {h.ubicacion && <>📍 {h.ubicacion}</>}
+                              </div>
+                              <div>{h.problema}</div>
+                              {h.cita && (
+                                <div style={{ marginTop: 4, fontSize: 12, color: '#667085', fontStyle: 'italic' }}>
+                                  <mark style={{ background: '#ffe14d', padding: '0 2px', borderRadius: 2 }}>“{h.cita}”</mark>
+                                  {localizado === false && ' — no se pudo ubicar en la vista previa'}
+                                </div>
+                              )}
+                              {h.correccion && (
+                                <div
+                                  onClick={(e) => e.stopPropagation()}
+                                  style={{ marginTop: 6, padding: '6px 8px', background: '#e9f9ee', border: '1px solid #bfe6c9', borderRadius: 6 }}
+                                >
+                                  <div style={{ fontSize: 11.5, fontWeight: 700, color: '#1a7f37', marginBottom: 2, display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                                    <span>{h.cita ? '✏️ Reemplazar por:' : '➕ Agregar:'}</span>
+                                    <span
+                                      role="button"
+                                      style={{ cursor: 'pointer', textDecoration: 'underline' }}
+                                      onClick={() => { try { navigator.clipboard.writeText(h.correccion); } catch (_) { /* sin permiso de portapapeles */ } }}
+                                    >
+                                      Copiar
+                                    </span>
+                                  </div>
+                                  <div style={{ fontSize: 12.5, whiteSpace: 'pre-wrap', userSelect: 'text' }}>{h.correccion}</div>
+                                </div>
+                              )}
+                            </span>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  ) : Array.isArray(poderInspeccion?.sugerencias) && poderInspeccion.sugerencias.length > 0 ? (
                     <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'grid', gap: 8 }}>
                       {poderInspeccion.sugerencias.map((s, i) => (
                         <li
@@ -3075,6 +3278,10 @@ if (sugerido != null) {
                         </li>
                       ))}
                     </ul>
+                  ) : (typeof poderInspeccion?.porcentaje === 'number' && poderInspeccion.porcentaje < 90) ? (
+                    <div style={{ fontSize: 13, color: '#9a6a00', display: 'flex', gap: 8, alignItems: 'center' }}>
+                      ⚠️ La IA detectó problemas pero no los detalló. Revisa el resumen de arriba.
+                    </div>
                   ) : (
                     <div style={{ fontSize: 13, color: '#1a7f37', display: 'flex', gap: 8, alignItems: 'center' }}>
                       ✅ No se encontraron pendientes.
@@ -3110,6 +3317,7 @@ if (sugerido != null) {
                 !isNewFoliosValid(newVolumen, newFolioDesde, newFolioHasta) ||
                 !isNewTestamentoValid(newRow?.tipoTramite, newHoraInicio, newHoraFin) ||
                 !selectedCliente ||
+                (esSociedad(newRow?.tipoTramite) && !getTipoSociedad(newRow?.tipoTramite)) ||
                 (isTramiteConMontos(newRow?.tipoTramite) && !newRow?.presupuestoId) ||
                 (isTramiteConMontos(newRow?.tipoTramite) && !isNewMoneyComplete(newRow)) ||
                 // ⚠️ TEMPORAL (14/10/2026, a pedido del notario): se quitó el
@@ -3158,6 +3366,25 @@ if (sugerido != null) {
             >
               <option value="">— Tipo de poder —</option>
               {SUBTIPOS_BY_TIPO.poder.map((s) => (
+                <option key={s} value={s}>{s}</option>
+              ))}
+            </select>
+          )}
+
+          {esSociedad(drafts[editingId]?.tipoTramite) && (
+            <select
+              value={getTipoSociedad(drafts[editingId]?.tipoTramite)}
+              onChange={(e) => {
+                const v = e.target.value;
+                setDrafts((prev) => {
+                  const cur = prev[editingId] || {};
+                  const base = stripTipoSociedad(cur.tipoTramite || 'SOCIEDAD');
+                  return { ...prev, [editingId]: { ...cur, tipoTramite: v ? `${base} ${v}` : base } };
+                });
+              }}
+            >
+              <option value="">— Tipo de sociedad —</option>
+              {TIPOS_SOCIEDAD.map((s) => (
                 <option key={s} value={s}>{s}</option>
               ))}
             </select>
@@ -3328,7 +3555,10 @@ if (sugerido != null) {
       )}
 
       {/* Tabla principal */}
-      <div style={{ width: '100%', overflowX: 'auto' }}>
+      {/* Alto acotado para que la tabla haga su propio scroll interno: así la
+          barra horizontal queda siempre a la vista, sin tener que bajar hasta
+          el final de la página para encontrarla. */}
+      <div style={{ width: '100%', height: 'calc(100vh - 420px)', minHeight: 360 }}>
         <DataGrid
           rows={visibleRows}
           getRowId={(row) =>
@@ -3344,12 +3574,19 @@ if (sugerido != null) {
             sorting: { sortModel: [{ field: 'numeroControl', sort: 'desc' }] }
           }}
           disableRowSelectionOnClick
+          getRowClassName={(params) =>
+            params?.row?.foliosCancelados?.cancelado ? 'row-folios-cancelados' : ''
+          }
           onRowDoubleClick={(params) => {
             setEstatusRow(params?.row || null);
             setEstatusOpen(true);
           }}
           sx={{
             border: '1px solid #eee',
+            // Folios cancelados: todo el renglón en rojo
+            '& .row-folios-cancelados': { backgroundColor: '#fdecea' },
+            '& .row-folios-cancelados:hover': { backgroundColor: '#fbd5d1' },
+            '& .row-folios-cancelados .MuiDataGrid-cell': { color: '#b71c1c', fontWeight: 600 },
             '& .MuiDataGrid-columnHeaders': { backgroundColor: '#f5f5f5' },
             '& .MuiDataGrid-cell': { py: 0.5, alignItems: 'stretch' },
             '& .MuiDataGrid-row': { maxHeight: 'unset' },
@@ -3590,6 +3827,60 @@ if (sugerido != null) {
             disabled={!justifyText?.trim() || soloLectura}
           >
             Guardar justificante
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={Boolean(cancelFoliosRow)}
+        onClose={() => !cancelFoliosSaving && setCancelFoliosRow(null)}
+        fullWidth
+        maxWidth="sm"
+      >
+        <DialogTitle>Cancelar folios</DialogTitle>
+        <DialogContent dividers>
+          <div style={{ display: 'grid', gap: 12 }}>
+            <div><b># Control:</b> {cancelFoliosRow?.numeroControl ?? '—'}</div>
+            <div>
+              <b>Volumen / Folios:</b> {cancelFoliosRow?.volumen ?? '—'} · {cancelFoliosRow?.folioDesde ?? '—'} a{' '}
+              {cancelFoliosRow?.folioHasta ?? '—'}
+            </div>
+            <div style={{ fontSize: 13, color: '#666' }}>
+              Esto solo marca el renglón en rojo como cancelado; no libera folios ni cambia el volumen.
+              No se puede deshacer.
+            </div>
+            <TextField
+              label="Justificación (obligatoria)" size="small" multiline minRows={3} required
+              value={cancelFoliosText} onChange={(e) => setCancelFoliosText(e.target.value)}
+              placeholder="Ejemplo: Los folios se dañaron / se rompió la hoja / se tomó el número por error."
+            />
+          </div>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setCancelFoliosRow(null)} disabled={cancelFoliosSaving}>Volver</Button>
+          <Button
+            variant="contained"
+            color="error"
+            disabled={cancelFoliosText.trim().length < 5 || cancelFoliosSaving || soloLectura}
+            onClick={async () => {
+              if (bloqueadoPorSoloLectura()) return;
+              try {
+                setCancelFoliosSaving(true);
+                await axios.post(`${API}/escrituras/${cancelFoliosRow._id}/cancelar-folios`, {
+                  justificacion: cancelFoliosText.trim(),
+                });
+                setMsg({ type: 'ok', text: `Folios de la escritura #${cancelFoliosRow.numeroControl} cancelados.` });
+                setCancelFoliosRow(null);
+                setCancelFoliosText('');
+                await fetchData();
+              } catch (e) {
+                setMsg({ type: 'error', text: e?.response?.data?.mensaje || 'No se pudieron cancelar los folios' });
+              } finally {
+                setCancelFoliosSaving(false);
+              }
+            }}
+          >
+            {cancelFoliosSaving ? 'Cancelando…' : 'Cancelar folios'}
           </Button>
         </DialogActions>
       </Dialog>

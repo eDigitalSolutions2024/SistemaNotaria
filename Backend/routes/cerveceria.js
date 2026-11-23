@@ -7,11 +7,14 @@ const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
 const ExcelJS = require('exceljs');
+const archiver = require('archiver');
 
 const CerveceriaTramite = require('../models/CerveceriaTramite');
 const CerveceriaFactura = require('../models/CerveceriaFactura');
 const GestionEspecialModulo = require('../models/GestionEspecialModulo');
+const Abogado = require('../models/Abogado');
 const auth = require('../middleware/auth');
+const { registrar } = require('../utils/bitacora');
 
 function esAdmin(req) {
   const role = String(req.user?.role || req.user?.rol || '').toUpperCase();
@@ -20,6 +23,19 @@ function esAdmin(req) {
 function puedeFacturar(req) {
   const role = String(req.user?.role || req.user?.rol || '').toUpperCase();
   return ['ADMIN', 'RECEPCION'].includes(role);
+}
+
+// Verifica contra la contraseña real de cualquier cuenta ADMIN (nunca una
+// contraseña fija en el código) — usada para el candado de "editar factura
+// ya guardada", que exige clave de administrador sin importar quién tenga
+// la sesión abierta.
+async function verificarPasswordAdmin(password) {
+  if (!password) return false;
+  const admins = await Abogado.find({ role: 'ADMIN' }).select('+passwordHash');
+  for (const admin of admins) {
+    if (await admin.validatePassword(password)) return true;
+  }
+  return false;
 }
 
 // La lista de empresas válidas ya no es fija en el código — es el catálogo
@@ -116,13 +132,74 @@ router.get('/', auth, async (req, res) => {
       q.facturaId = null;
     }
     const rows = await CerveceriaTramite.find(q)
-      .populate('facturaId', 'numeroFactura fecha')
+      .populate('facturaId', 'numeroFactura fecha pedido entrada')
       .sort({ fecha: -1, createdAt: -1 })
       .lean();
     res.json(rows);
   } catch (e) {
     console.error('GET /cerveceria ERROR:', e);
     res.status(500).json({ mensaje: 'No se pudo cargar la lista.' });
+  }
+});
+
+// POST /cerveceria/zip-soportes  { ids: [...] }
+// Arma un .zip con el SOPORTE de cada entrega (el documento único que se
+// sube en "Nueva entrega" — no el documento propio de cada fila) de los
+// trámites indicados, para bajarlos todos juntos al armar una factura.
+router.post('/zip-soportes', auth, async (req, res) => {
+  try {
+    const ids = Array.isArray(req.body?.ids) ? req.body.ids.filter(Boolean) : [];
+    if (!ids.length) return res.status(400).json({ mensaje: 'Selecciona al menos un documento.' });
+
+    const tramites = await CerveceriaTramite.find({ _id: { $in: ids } }).lean();
+    if (!tramites.length) return res.status(404).json({ mensaje: 'No se encontraron documentos.' });
+    if (!tramites.some((t) => t.archivoGeneralPath)) {
+      return res.status(404).json({ mensaje: 'Ninguno de los documentos seleccionados tiene un soporte subido.' });
+    }
+
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', 'attachment; filename="soportes.zip"');
+
+    const archive = archiver('zip', { zlib: { level: 9 } });
+    archive.on('error', (err) => {
+      console.error('ZIP soportes ERROR:', err);
+      if (!res.headersSent) res.status(500).json({ mensaje: 'No se pudo generar el zip.' });
+      else res.end();
+    });
+    archive.pipe(res);
+
+    const usados = new Set();
+    const nombreUnico = (base) => {
+      const ext = (base.match(/\.[^.]+$/) || [''])[0];
+      const raiz = ext ? base.slice(0, -ext.length) : base;
+      let nombre = base;
+      let n = 1;
+      while (usados.has(nombre)) { nombre = `${raiz}_${n}${ext}`; n++; }
+      usados.add(nombre);
+      return nombre;
+    };
+
+    // El SOPORTE es un mismo archivo compartido por varias filas de una
+    // misma entrega — se agrega una sola vez al zip aunque varios documentos
+    // seleccionados lo compartan (deduplicado por archivoGeneralPath). Es el
+    // único archivo que arma este zip; el documento propio de cada fila no
+    // entra aquí.
+    const soportesVistos = new Set();
+    let contadorSoporte = 1;
+    for (const t of tramites) {
+      if (!t.archivoGeneralPath || soportesVistos.has(t.archivoGeneralPath)) continue;
+      const full = path.join(ADJUNTOS_DIR, t.archivoGeneralPath);
+      if (!fs.existsSync(full)) continue;
+      soportesVistos.add(t.archivoGeneralPath);
+      const ext = path.extname(t.archivoGeneralNombre || t.archivoGeneralPath) || '';
+      archive.file(full, { name: nombreUnico(`Soporte_${contadorSoporte}${ext}`) });
+      contadorSoporte++;
+    }
+
+    await archive.finalize();
+  } catch (e) {
+    console.error('POST /cerveceria/zip-soportes ERROR:', e);
+    if (!res.headersSent) res.status(500).json({ mensaje: 'No se pudo generar el zip.' });
   }
 });
 
@@ -167,7 +244,7 @@ router.post('/facturas', auth, async (req, res) => {
     if (!puedeFacturar(req)) return res.status(403).json({ mensaje: 'Solo Recepción o un administrador pueden crear facturas.' });
     const empresa = await validarEmpresa(req, res);
     if (!empresa) return;
-    const { numeroFactura, fecha, tramiteIds } = req.body || {};
+    const { numeroFactura, fecha, tramiteIds, pedido, entrada } = req.body || {};
     if (!numeroFactura || !String(numeroFactura).trim()) {
       return res.status(400).json({ mensaje: 'El número de factura es obligatorio.' });
     }
@@ -197,6 +274,8 @@ router.post('/facturas', auth, async (req, res) => {
       numeroFactura: String(numeroFactura).trim(),
       fecha: toDateOrNull(fecha),
       total,
+      pedido: String(pedido || '').trim(),
+      entrada: String(entrada || '').trim(),
       creadoPorId: req.user?.id ?? null,
       creadoPorNombre: req.user?.nombre || '',
     });
@@ -210,6 +289,135 @@ router.post('/facturas', auth, async (req, res) => {
   }
 });
 
+// PATCH /cerveceria/facturas/:id  { numeroFactura?, fecha?, total?, pedido?, entrada?, adminPassword? }
+// Pedido/Entrada se capturan libremente la primera vez (normalmente llegan
+// 1-2 semanas después de crear la factura) por Recepción o un administrador.
+// Una vez que ya tienen un valor, o para tocar número/fecha/total, la
+// edición es exclusiva de un administrador: debe tener la sesión abierta
+// con rol ADMIN y además escribir la contraseña de administrador.
+router.patch('/facturas/:id', auth, async (req, res) => {
+  try {
+    if (!puedeFacturar(req)) return res.status(403).json({ mensaje: 'Solo Recepción o un administrador pueden editar facturas.' });
+    const factura = await CerveceriaFactura.findById(req.params.id);
+    if (!factura) return res.status(404).json({ mensaje: 'Factura no encontrada.' });
+
+    const { numeroFactura, fecha, total, pedido, entrada, adminPassword } = req.body || {};
+    const tocaCore = numeroFactura !== undefined || fecha !== undefined || total !== undefined;
+    const sobrescribePedido = pedido !== undefined && !!factura.pedido;
+    const sobrescribeEntrada = entrada !== undefined && !!factura.entrada;
+    if (tocaCore || sobrescribePedido || sobrescribeEntrada) {
+      if (!esAdmin(req)) return res.status(403).json({ mensaje: 'Solo un administrador puede editar una factura ya guardada.' });
+      const okAdmin = await verificarPasswordAdmin(adminPassword);
+      if (!okAdmin) return res.status(401).json({ mensaje: 'Contraseña de administrador incorrecta.' });
+    }
+
+    const cambios = {};
+    if (numeroFactura !== undefined) {
+      if (!String(numeroFactura).trim()) return res.status(400).json({ mensaje: 'El número de factura es obligatorio.' });
+      cambios.numeroFactura = String(numeroFactura).trim();
+    }
+    if (fecha !== undefined) cambios.fecha = toDateOrNull(fecha);
+    if (total !== undefined) cambios.total = toNumberOrNull(total);
+    if (pedido !== undefined) cambios.pedido = String(pedido || '').trim();
+    if (entrada !== undefined) cambios.entrada = String(entrada || '').trim();
+    if (!Object.keys(cambios).length) {
+      return res.status(400).json({ mensaje: 'Nada que actualizar.' });
+    }
+    Object.assign(factura, cambios);
+    await factura.save();
+    await registrar(req, {
+      accion: 'EDITAR_FACTURA',
+      entidad: 'CerveceriaFactura',
+      entidadId: factura._id,
+      detalle: `Factura ${factura.numeroFactura} (${factura.empresa}) editada — ${Object.keys(cambios).join(', ')}`,
+    });
+    res.json(factura);
+  } catch (e) {
+    console.error('PATCH /cerveceria/facturas/:id ERROR:', e);
+    res.status(500).json({ mensaje: 'No se pudo actualizar la factura.' });
+  }
+});
+
+// POST /cerveceria/facturas/:id/acuse  (multipart: acuse=archivo, adminPassword? si ya había uno)
+// Sube el acuse del SAT de que esa factura ya se subió al portal. La
+// primera vez cualquiera con permiso de facturar lo puede subir; reemplazar
+// uno que ya existe es exclusivo de un administrador (rol + contraseña).
+router.post('/facturas/:id/acuse', auth, upload.single('acuse'), async (req, res) => {
+  try {
+    if (!puedeFacturar(req)) return res.status(403).json({ mensaje: 'Solo Recepción o un administrador pueden subir el acuse.' });
+    if (!req.file) return res.status(400).json({ mensaje: 'Sube un archivo.' });
+    const factura = await CerveceriaFactura.findById(req.params.id);
+    if (!factura) return res.status(404).json({ mensaje: 'Factura no encontrada.' });
+
+    if (factura.acusePath) {
+      if (!esAdmin(req)) return res.status(403).json({ mensaje: 'Solo un administrador puede reemplazar el acuse.' });
+      const okAdmin = await verificarPasswordAdmin(req.body?.adminPassword);
+      if (!okAdmin) return res.status(401).json({ mensaje: 'Contraseña de administrador incorrecta.' });
+    }
+
+    const anterior = factura.acusePath;
+    const archivo = guardarArchivoSubido(req.file, factura._id, 'CerveceriaAcuse');
+    factura.acuseNombre = archivo.archivoNombre;
+    factura.acusePath = archivo.archivoPath;
+    await factura.save();
+    if (anterior && anterior !== archivo.archivoPath) {
+      const full = path.join(ADJUNTOS_DIR, anterior);
+      try { if (fs.existsSync(full)) fs.unlinkSync(full); } catch { /* best effort */ }
+    }
+
+    await registrar(req, {
+      accion: 'SUBIR_ACUSE_FACTURA',
+      entidad: 'CerveceriaFactura',
+      entidadId: factura._id,
+      detalle: `Acuse SAT subido para factura ${factura.numeroFactura} (${factura.empresa})`,
+    });
+    res.json(factura);
+  } catch (e) {
+    console.error('POST /cerveceria/facturas/:id/acuse ERROR:', e);
+    res.status(500).json({ mensaje: 'No se pudo subir el acuse.' });
+  } finally {
+    if (req.file?.path) { try { fs.unlinkSync(req.file.path); } catch { /* ya movido o no existe */ } }
+  }
+});
+
+// GET /cerveceria/facturas/:id/acuse — sin auth: se usa con window.location.href
+// (no puede mandar el header Authorization), mismo patrón que /:id/documento.
+// ?modo=inline sirve el archivo sin forzar descarga (vista previa).
+router.get('/facturas/:id/acuse', async (req, res) => {
+  try {
+    const factura = await CerveceriaFactura.findById(req.params.id).lean();
+    if (!factura) return res.status(404).json({ mensaje: 'Factura no encontrada.' });
+    if (!factura.acusePath) return res.status(404).json({ mensaje: 'No hay acuse adjunto.' });
+    const full = path.join(ADJUNTOS_DIR, factura.acusePath);
+    if (!fs.existsSync(full)) return res.status(404).json({ mensaje: 'El archivo ya no existe en el servidor.' });
+    if (req.query.modo === 'inline') return res.sendFile(full);
+    res.download(full, factura.acuseNombre || factura.acusePath);
+  } catch (e) {
+    console.error('GET /cerveceria/facturas/:id/acuse ERROR:', e);
+    res.status(500).json({ mensaje: 'No se pudo descargar el acuse.' });
+  }
+});
+
+// DELETE /cerveceria/facturas/:id/acuse — quita el acuse (por si se subió por error)
+router.delete('/facturas/:id/acuse', auth, async (req, res) => {
+  try {
+    if (!esAdmin(req)) return res.status(403).json({ mensaje: 'Solo un administrador puede quitar el acuse.' });
+    const factura = await CerveceriaFactura.findById(req.params.id);
+    if (!factura) return res.status(404).json({ mensaje: 'Factura no encontrada.' });
+    if (factura.acusePath) {
+      const full = path.join(ADJUNTOS_DIR, factura.acusePath);
+      try { if (fs.existsSync(full)) fs.unlinkSync(full); } catch { /* best effort */ }
+    }
+    factura.acuseNombre = '';
+    factura.acusePath = '';
+    await factura.save();
+    res.json(factura);
+  } catch (e) {
+    console.error('DELETE /cerveceria/facturas/:id/acuse ERROR:', e);
+    res.status(500).json({ mensaje: 'No se pudo quitar el acuse.' });
+  }
+});
+
 // DELETE /cerveceria/facturas/:id — libera (des-factura) sus documentos también
 router.delete('/facturas/:id', auth, async (req, res) => {
   try {
@@ -217,6 +425,10 @@ router.delete('/facturas/:id', auth, async (req, res) => {
     const factura = await CerveceriaFactura.findByIdAndDelete(req.params.id);
     if (!factura) return res.status(404).json({ mensaje: 'Factura no encontrada.' });
     await CerveceriaTramite.updateMany({ facturaId: factura._id }, { $set: { facturaId: null } });
+    if (factura.acusePath) {
+      const full = path.join(ADJUNTOS_DIR, factura.acusePath);
+      try { if (fs.existsSync(full)) fs.unlinkSync(full); } catch { /* best effort */ }
+    }
     res.json({ ok: true });
   } catch (e) {
     console.error('DELETE /cerveceria/facturas/:id ERROR:', e);

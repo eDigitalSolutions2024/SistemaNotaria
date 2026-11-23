@@ -12,7 +12,7 @@
 // varias filas de documentos (cada una con su propio archivo) en el mismo
 // lote — como las entregas del Excel original, que agrupaban varios tipos
 // de documento bajo un mismo nombre/fecha.
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import axios from 'axios';
 import { Button, TextField, Dialog, DialogTitle, DialogContent, DialogActions } from '@mui/material';
 import SportsBarIcon from '@mui/icons-material/SportsBar';
@@ -392,6 +392,32 @@ export default function ControlCerveceria({ empresa }) {
     .filter((c) => facturaSeleccionados.includes(c._id))
     .reduce((acc, c) => acc + (Number(c.costo) || 0), 0);
 
+  const [descargandoSoportes, setDescargandoSoportes] = useState(false);
+
+  const descargarSoportesSeleccionados = async () => {
+    if (!facturaSeleccionados.length) return;
+    setDescargandoSoportes(true);
+    try {
+      const res = await axios.post(
+        `${API}/cerveceria/zip-soportes`,
+        { ids: facturaSeleccionados },
+        { responseType: 'blob' }
+      );
+      const url = URL.createObjectURL(res.data);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'soportes.zip';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setMsg({ type: 'error', text: 'No se pudieron descargar los soportes.' });
+    } finally {
+      setDescargandoSoportes(false);
+    }
+  };
+
   const crearFactura = async () => {
     if (!facturaNumero.trim()) {
       setMsg({ type: 'warn', text: 'El número de factura es obligatorio.' });
@@ -462,6 +488,184 @@ export default function ControlCerveceria({ empresa }) {
       cargar();
     } catch (e) {
       setMsg({ type: 'error', text: e?.response?.data?.mensaje || 'No se pudo eliminar la factura.' });
+    }
+  };
+
+  // ── Primera captura de Pedido/Entrada: casi nunca se saben al crear la
+  // factura (llegan 1-2 semanas después) — se pueden escribir libremente
+  // mientras sigan vacíos; una vez capturados, solo se tocan desde "Editar"
+  // con la contraseña de administrador.
+  const [primeraCaptura, setPrimeraCaptura] = useState({});
+  const [guardandoCapturaId, setGuardandoCapturaId] = useState(null);
+
+  const draftPrimeraCaptura = (f) => primeraCaptura[f._id] ?? { pedido: '', entrada: '' };
+
+  const editarPrimeraCaptura = (f, campo, valor) => {
+    setPrimeraCaptura((prev) => ({ ...prev, [f._id]: { ...draftPrimeraCaptura(f), [campo]: valor } }));
+  };
+
+  const guardarPrimeraCaptura = async (f, campo) => {
+    const valor = draftPrimeraCaptura(f)[campo];
+    if (!valor) return;
+    setGuardandoCapturaId(f._id);
+    try {
+      const { data } = await axios.patch(`${API}/cerveceria/facturas/${f._id}`, { [campo]: valor });
+      setFacturasList((prev) => prev.map((x) => (x._id === data._id ? { ...x, ...data } : x)));
+      if (facturaDetalle?._id === data._id) setFacturaDetalle((prev) => ({ ...prev, ...data }));
+      setPrimeraCaptura((prev) => {
+        const next = { ...prev };
+        if (next[f._id]) next[f._id] = { ...next[f._id], [campo]: '' };
+        return next;
+      });
+    } catch (e) {
+      setMsg({ type: 'error', text: e?.response?.data?.mensaje || 'No se pudo guardar.' });
+    } finally {
+      setGuardandoCapturaId(null);
+    }
+  };
+
+  // ── Editar factura ya guardada: una vez creada (Pedido/Entrada incluidos),
+  // solo se puede modificar con la contraseña de un administrador — sin
+  // importar el rol de quien tenga la sesión abierta.
+  const [facturaEditando, setFacturaEditando] = useState(null);
+  const [facturaEditForm, setFacturaEditForm] = useState(null);
+  const [facturaEditGuardando, setFacturaEditGuardando] = useState(false);
+  const [facturaEditError, setFacturaEditError] = useState('');
+
+  const toInputDate = (d) => {
+    if (!d) return '';
+    const dt = new Date(d);
+    if (Number.isNaN(dt.getTime())) return '';
+    return dt.toISOString().slice(0, 10);
+  };
+
+  const abrirEditarFactura = (f) => {
+    setFacturaEditando(f);
+    setFacturaEditForm({
+      numeroFactura: f.numeroFactura || '',
+      fecha: toInputDate(f.fecha),
+      total: f.total ?? '',
+      pedido: f.pedido || '',
+      entrada: f.entrada || '',
+      adminPassword: '',
+    });
+    setFacturaEditError('');
+  };
+
+  const cerrarEditarFactura = () => {
+    setFacturaEditando(null);
+    setFacturaEditForm(null);
+    setFacturaEditError('');
+  };
+
+  // ── Acuse del SAT: un documento por factura, que confirma que ya se subió
+  // al portal. La primera vez se sube libre; para reemplazar uno que ya
+  // existe, el backend exige la contraseña de administrador (se manda desde
+  // el modal "Editar", el único lugar donde se puede reemplazar).
+  const acuseInputRef = useRef(null);
+  const [acuseTargetId, setAcuseTargetId] = useState(null);
+  const [acuseRequierePassword, setAcuseRequierePassword] = useState(false);
+  const [subiendoAcuseId, setSubiendoAcuseId] = useState(null);
+
+  const pedirAcuse = (f) => {
+    if (f.acuseNombre && !facturaEditForm?.adminPassword) {
+      setFacturaEditError('Ingresa la contraseña de administrador para reemplazar el acuse.');
+      return;
+    }
+    setAcuseTargetId(f._id);
+    setAcuseRequierePassword(!!f.acuseNombre);
+    acuseInputRef.current?.click();
+  };
+
+  const onAcuseSeleccionado = async (e) => {
+    const file = e.target.files?.[0];
+    const facturaId = acuseTargetId;
+    const requierePassword = acuseRequierePassword;
+    e.target.value = '';
+    if (!file || !facturaId) return;
+    setSubiendoAcuseId(facturaId);
+    try {
+      const fd = new FormData();
+      fd.append('acuse', file);
+      if (requierePassword) fd.append('adminPassword', facturaEditForm?.adminPassword || '');
+      const { data } = await axios.post(`${API}/cerveceria/facturas/${facturaId}/acuse`, fd);
+      setFacturasList((prev) => prev.map((x) => (x._id === data._id ? { ...x, ...data } : x)));
+      if (facturaDetalle?._id === data._id) setFacturaDetalle((prev) => ({ ...prev, ...data }));
+      setFacturaEditando((prev) => (prev?._id === data._id ? { ...prev, ...data } : prev));
+    } catch (e2) {
+      const texto = e2?.response?.data?.mensaje || 'No se pudo subir el acuse.';
+      if (requierePassword) setFacturaEditError(texto);
+      else setMsg({ type: 'error', text: texto });
+    } finally {
+      setSubiendoAcuseId(null);
+      setAcuseTargetId(null);
+    }
+  };
+
+  // ── Vista previa del acuse (mismo patrón que la vista previa de documentos).
+  const [previewAcuseFactura, setPreviewAcuseFactura] = useState(null);
+  const [previewAcuseBlobUrl, setPreviewAcuseBlobUrl] = useState(null);
+  const [previewAcuseLoading, setPreviewAcuseLoading] = useState(false);
+  const [previewAcuseError, setPreviewAcuseError] = useState('');
+
+  const abrirPreviewAcuse = (f) => setPreviewAcuseFactura(f);
+
+  const acuseExt = (previewAcuseFactura?.acuseNombre || previewAcuseFactura?.acusePath || '').split('.').pop()?.toLowerCase() || '';
+  const acuseEsImagen = ['png', 'jpg', 'jpeg', 'gif', 'webp'].includes(acuseExt);
+  const acuseEsPdf = acuseExt === 'pdf';
+
+  useEffect(() => {
+    if (!previewAcuseFactura || !acuseEsPdf) { setPreviewAcuseBlobUrl(null); return undefined; }
+    let objectUrl = null;
+    let cancelado = false;
+    setPreviewAcuseLoading(true);
+    setPreviewAcuseError('');
+    axios.get(`${API}/cerveceria/facturas/${previewAcuseFactura._id}/acuse?modo=inline`, { responseType: 'blob' })
+      .then((res) => {
+        if (cancelado) return;
+        objectUrl = URL.createObjectURL(res.data);
+        setPreviewAcuseBlobUrl(objectUrl);
+      })
+      .catch(() => { if (!cancelado) setPreviewAcuseError('No se pudo cargar la vista previa.'); })
+      .finally(() => { if (!cancelado) setPreviewAcuseLoading(false); });
+    return () => {
+      cancelado = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [previewAcuseFactura, acuseEsPdf]);
+
+  const previewAcuseImgUrl = previewAcuseFactura && acuseEsImagen
+    ? `${API}/cerveceria/facturas/${previewAcuseFactura._id}/acuse?modo=inline`
+    : '';
+
+  const descargarAcuse = (facturaId) => {
+    window.location.href = `${API}/cerveceria/facturas/${facturaId}/acuse`;
+  };
+
+  const guardarEdicionFactura = async () => {
+    if (!facturaEditando || !facturaEditForm) return;
+    if (!facturaEditForm.adminPassword) {
+      setFacturaEditError('Ingresa la contraseña de administrador.');
+      return;
+    }
+    setFacturaEditGuardando(true);
+    setFacturaEditError('');
+    try {
+      const { data } = await axios.patch(`${API}/cerveceria/facturas/${facturaEditando._id}`, {
+        numeroFactura: facturaEditForm.numeroFactura,
+        fecha: facturaEditForm.fecha || null,
+        total: facturaEditForm.total === '' ? null : facturaEditForm.total,
+        pedido: facturaEditForm.pedido,
+        entrada: facturaEditForm.entrada,
+        adminPassword: facturaEditForm.adminPassword,
+      });
+      setFacturasList((prev) => prev.map((x) => (x._id === data._id ? { ...x, ...data } : x)));
+      if (facturaDetalle?._id === data._id) setFacturaDetalle((prev) => ({ ...prev, ...data }));
+      cerrarEditarFactura();
+    } catch (e) {
+      setFacturaEditError(e?.response?.data?.mensaje || 'No se pudo guardar.');
+    } finally {
+      setFacturaEditGuardando(false);
     }
   };
 
@@ -760,13 +964,22 @@ export default function ControlCerveceria({ empresa }) {
                   <td style={{ padding: '9px 12px', whiteSpace: 'nowrap' }}>{fmtCosto(row.costo)}</td>
                   <td style={{ padding: '9px 12px', whiteSpace: 'nowrap' }}>
                     {row.facturaId?.numeroFactura ? (
-                      <span style={{
-                        fontSize: 11.5, fontWeight: 700, color: '#1a7f37',
-                        background: '#e9f9ee', border: '1px solid #bfe6c9',
-                        borderRadius: 6, padding: '3px 8px',
-                      }}>
-                        Fact. {row.facturaId.numeroFactura}
-                      </span>
+                      <div>
+                        <span style={{
+                          fontSize: 11.5, fontWeight: 700, color: '#1a7f37',
+                          background: '#e9f9ee', border: '1px solid #bfe6c9',
+                          borderRadius: 6, padding: '3px 8px',
+                        }}>
+                          Fact. {row.facturaId.numeroFactura}
+                        </span>
+                        {(row.facturaId.pedido || row.facturaId.entrada) && (
+                          <div style={{ fontSize: 11, color: '#667085', marginTop: 3 }}>
+                            {row.facturaId.pedido ? `Pedido: ${row.facturaId.pedido}` : ''}
+                            {row.facturaId.pedido && row.facturaId.entrada ? ' · ' : ''}
+                            {row.facturaId.entrada ? `Entrada: ${row.facturaId.entrada}` : ''}
+                          </div>
+                        )}
+                      </div>
                     ) : (
                       <span style={{ color: '#c2c8d4', fontSize: 12 }}>Sin facturar</span>
                     )}
@@ -870,6 +1083,45 @@ export default function ControlCerveceria({ empresa }) {
         </DialogActions>
       </Dialog>
 
+      {/* ── Vista previa del acuse SAT ── */}
+      <Dialog open={!!previewAcuseFactura} onClose={() => setPreviewAcuseFactura(null)} maxWidth="md" fullWidth
+        PaperProps={{ style: { height: '85vh' } }}>
+        <DialogTitle>Acuse SAT — Factura {previewAcuseFactura?.numeroFactura}</DialogTitle>
+        <DialogContent dividers style={{ display: 'flex', padding: 0 }}>
+          {acuseEsPdf && previewAcuseLoading && (
+            <div style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#667085', fontSize: 14 }}>
+              Cargando vista previa…
+            </div>
+          )}
+          {acuseEsPdf && !previewAcuseLoading && previewAcuseError && (
+            <div style={{ width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 10, color: '#9a2a2a', fontSize: 14 }}>
+              <span>{previewAcuseError}</span>
+              <span>Descárgalo para abrirlo.</span>
+            </div>
+          )}
+          {acuseEsPdf && !previewAcuseLoading && !previewAcuseError && previewAcuseBlobUrl && (
+            <iframe src={previewAcuseBlobUrl} title="Vista previa del acuse" style={{ width: '100%', height: '100%', border: 'none' }} />
+          )}
+          {acuseEsImagen && (
+            <div style={{ width: '100%', display: 'flex', justifyContent: 'center', alignItems: 'center', padding: 16 }}>
+              <img src={previewAcuseImgUrl} alt="Acuse SAT" style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} />
+            </div>
+          )}
+          {!acuseEsPdf && !acuseEsImagen && (
+            <div style={{ width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 10, color: '#667085', fontSize: 14 }}>
+              <span>No hay vista previa disponible para este tipo de archivo.</span>
+              <span>Descárgalo para abrirlo.</span>
+            </div>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setPreviewAcuseFactura(null)}>Cerrar</Button>
+          <Button variant="contained" startIcon={<DownloadIcon />} onClick={() => descargarAcuse(previewAcuseFactura._id)}>
+            Descargar
+          </Button>
+        </DialogActions>
+      </Dialog>
+
       {/* ── Nueva factura ── */}
       <Dialog open={facturaModalOpen} onClose={() => setFacturaModalOpen(false)} maxWidth="md" fullWidth>
         <DialogTitle>Nueva factura — {empresa}</DialogTitle>
@@ -897,6 +1149,24 @@ export default function ControlCerveceria({ empresa }) {
               </div>
             ) : (
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                <thead>
+                  <tr style={{ borderBottom: '1px solid #e3e7ee', background: '#f8fafc' }}>
+                    <td style={{ padding: '8px 10px', width: 30 }}>
+                      <input
+                        type="checkbox"
+                        checked={facturaCandidatos.length > 0 && facturaSeleccionados.length === facturaCandidatos.length}
+                        onChange={() =>
+                          setFacturaSeleccionados((prev) =>
+                            prev.length === facturaCandidatos.length ? [] : facturaCandidatos.map((c) => c._id)
+                          )
+                        }
+                      />
+                    </td>
+                    <td colSpan={4} style={{ padding: '8px 10px', fontWeight: 700, color: '#475569' }}>
+                      Seleccionar todos ({facturaCandidatos.length})
+                    </td>
+                  </tr>
+                </thead>
                 <tbody>
                   {facturaCandidatos.map((c) => (
                     <tr key={c._id} style={{ borderBottom: '1px solid #f1f5f9' }}>
@@ -918,8 +1188,21 @@ export default function ControlCerveceria({ empresa }) {
             )}
           </div>
 
-          <div style={{ marginTop: 10, fontSize: 13, fontWeight: 700, color: '#1a2233' }}>
-            {facturaSeleccionados.length} seleccionado(s) — total: {fmtCosto(totalSeleccionadosFactura)}
+          <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 13, fontWeight: 700, color: '#1a2233' }}>
+              {facturaSeleccionados.length} seleccionado(s) — total: {fmtCosto(totalSeleccionadosFactura)}
+            </span>
+            {facturaSeleccionados.length > 0 && (
+              <Button
+                size="small"
+                variant="outlined"
+                startIcon={<DownloadIcon />}
+                disabled={descargandoSoportes}
+                onClick={descargarSoportesSeleccionados}
+              >
+                {descargandoSoportes ? 'Descargando…' : 'Descargar soportes seleccionados'}
+              </Button>
+            )}
           </div>
 
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 18 }}>
@@ -940,7 +1223,14 @@ export default function ControlCerveceria({ empresa }) {
       </Dialog>
 
       {/* ── Lista de facturas ── */}
-      <Dialog open={facturasListOpen} onClose={() => setFacturasListOpen(false)} maxWidth="md" fullWidth>
+      <input
+        type="file"
+        ref={acuseInputRef}
+        style={{ display: 'none' }}
+        onChange={onAcuseSeleccionado}
+        accept=".pdf,.jpg,.jpeg,.png,.xml"
+      />
+      <Dialog open={facturasListOpen} onClose={() => setFacturasListOpen(false)} maxWidth="lg" fullWidth>
         <DialogTitle>
           {facturaDetalle ? `Factura ${facturaDetalle.numeroFactura}` : `Facturas — ${empresa}`}
         </DialogTitle>
@@ -957,7 +1247,7 @@ export default function ControlCerveceria({ empresa }) {
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                   <thead>
                     <tr style={{ background: '#f8fafc', textAlign: 'left' }}>
-                      {['Número', 'Fecha', 'Documentos', 'Total', ''].map((h) => (
+                      {['Número', 'Fecha', 'Documentos', 'Total', 'Pedido', 'Entrada', 'Acuse SAT', ''].map((h) => (
                         <th key={h} style={{ padding: '8px 10px', fontWeight: 700, color: '#475569', borderBottom: '1px solid #e3e7ee' }}>{h}</th>
                       ))}
                     </tr>
@@ -969,7 +1259,54 @@ export default function ControlCerveceria({ empresa }) {
                         <td style={{ padding: '8px 10px', whiteSpace: 'nowrap' }}>{fmtFecha(f.fecha)}</td>
                         <td style={{ padding: '8px 10px' }}>{f.cantidadDocumentos}</td>
                         <td style={{ padding: '8px 10px', whiteSpace: 'nowrap' }}>{fmtCosto(f.total)}</td>
+                        {['pedido', 'entrada'].map((campo) => (
+                          <td key={campo} style={{ padding: '8px 10px', whiteSpace: 'nowrap' }}>
+                            {f[campo] ? (
+                              f[campo]
+                            ) : puedeFacturar ? (
+                              <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                                <input
+                                  style={{ width: 80, padding: '4px 6px', fontSize: 12.5, border: '1px solid #dde2ea', borderRadius: 6 }}
+                                  value={draftPrimeraCaptura(f)[campo]}
+                                  placeholder="—"
+                                  onChange={(e) => editarPrimeraCaptura(f, campo, e.target.value)}
+                                  onKeyDown={(e) => { if (e.key === 'Enter') guardarPrimeraCaptura(f, campo); }}
+                                />
+                                {draftPrimeraCaptura(f)[campo] && (
+                                  <Button
+                                    size="small"
+                                    disabled={guardandoCapturaId === f._id}
+                                    onClick={() => guardarPrimeraCaptura(f, campo)}
+                                  >
+                                    {guardandoCapturaId === f._id ? '…' : 'Guardar'}
+                                  </Button>
+                                )}
+                              </div>
+                            ) : '—'}
+                          </td>
+                        ))}
                         <td style={{ padding: '8px 10px', whiteSpace: 'nowrap' }}>
+                          {f.acuseNombre ? (
+                            <Button size="small" onClick={() => abrirPreviewAcuse(f)}>Ver acuse</Button>
+                          ) : puedeFacturar ? (
+                            <Button
+                              size="small"
+                              variant="outlined"
+                              disabled={subiendoAcuseId === f._id}
+                              onClick={() => pedirAcuse(f)}
+                            >
+                              {subiendoAcuseId === f._id ? 'Subiendo…' : 'Subir acuse'}
+                            </Button>
+                          ) : (
+                            <span style={{ color: '#98a1b3' }}>Sin acuse</span>
+                          )}
+                        </td>
+                        <td style={{ padding: '8px 10px', whiteSpace: 'nowrap' }}>
+                          {esAdmin && (
+                            <Button size="small" onClick={() => abrirEditarFactura(f)} style={{ marginRight: 6 }}>
+                              Editar
+                            </Button>
+                          )}
                           <Button size="small" onClick={() => verDetalleFactura(f._id)}>Ver</Button>
                           {esAdmin && (
                             <Button size="small" color="error" onClick={() => eliminarFactura(f._id)}>Eliminar</Button>
@@ -994,6 +1331,11 @@ export default function ControlCerveceria({ empresa }) {
                 <>
                   <div style={{ fontSize: 13, color: '#44506b', marginBottom: 14 }}>
                     Fecha: {fmtFecha(facturaDetalle.fecha) || '—'} · Total: {fmtCosto(facturaDetalle.total)}
+                    {facturaDetalle.pedido ? ` · Pedido: ${facturaDetalle.pedido}` : ''}
+                    {facturaDetalle.entrada ? ` · Entrada: ${facturaDetalle.entrada}` : ''}
+                    {facturaDetalle.acuseNombre ? (
+                      <> · Acuse: <Button size="small" onClick={() => abrirPreviewAcuse(facturaDetalle)}>Ver acuse</Button></>
+                    ) : ' · Sin acuse'}
                   </div>
                   <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                     <thead>
@@ -1021,6 +1363,61 @@ export default function ControlCerveceria({ empresa }) {
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setFacturasListOpen(false)}>Cerrar</Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* ── Editar factura (requiere clave de administrador) ── */}
+      <Dialog open={!!facturaEditando} onClose={cerrarEditarFactura} maxWidth="xs" fullWidth>
+        <DialogTitle>Editar factura {facturaEditando?.numeroFactura}</DialogTitle>
+        <DialogContent dividers>
+          {facturaEditForm && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 6 }}>
+              <TextField label="Número de factura" size="small" value={facturaEditForm.numeroFactura}
+                onChange={(e) => setFacturaEditForm((p) => ({ ...p, numeroFactura: e.target.value }))} />
+              <TextField label="Fecha de factura" type="date" size="small" value={facturaEditForm.fecha}
+                onChange={(e) => setFacturaEditForm((p) => ({ ...p, fecha: e.target.value }))}
+                InputLabelProps={{ shrink: true }} />
+              <TextField label="Total" type="number" size="small" value={facturaEditForm.total}
+                onChange={(e) => setFacturaEditForm((p) => ({ ...p, total: e.target.value }))} />
+              <TextField label="Pedido" size="small" value={facturaEditForm.pedido}
+                onChange={(e) => setFacturaEditForm((p) => ({ ...p, pedido: e.target.value }))} />
+              <TextField label="Entrada" size="small" value={facturaEditForm.entrada}
+                onChange={(e) => setFacturaEditForm((p) => ({ ...p, entrada: e.target.value }))} />
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 0', borderTop: '1px solid #eef1f6', borderBottom: '1px solid #eef1f6' }}>
+                <span style={{ fontSize: 13, color: '#44506b', flex: 1 }}>
+                  Acuse SAT: {facturaEditando?.acuseNombre ? facturaEditando.acuseNombre : 'sin subir'}
+                </span>
+                {facturaEditando?.acuseNombre && (
+                  <Button size="small" onClick={() => abrirPreviewAcuse(facturaEditando)}>Ver</Button>
+                )}
+                <Button
+                  size="small"
+                  variant="outlined"
+                  disabled={subiendoAcuseId === facturaEditando?._id}
+                  onClick={() => pedirAcuse(facturaEditando)}
+                >
+                  {subiendoAcuseId === facturaEditando?._id ? 'Subiendo…' : facturaEditando?.acuseNombre ? 'Reemplazar' : 'Subir acuse'}
+                </Button>
+              </div>
+
+              <TextField
+                label="Contraseña de administrador" type="password" size="small"
+                value={facturaEditForm.adminPassword}
+                onChange={(e) => setFacturaEditForm((p) => ({ ...p, adminPassword: e.target.value }))}
+                onKeyDown={(e) => { if (e.key === 'Enter' && !facturaEditGuardando) guardarEdicionFactura(); }}
+              />
+              {facturaEditError && (
+                <div style={{ color: '#c0392b', fontSize: 12.5 }}>{facturaEditError}</div>
+              )}
+            </div>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={cerrarEditarFactura}>Cancelar</Button>
+          <Button variant="contained" onClick={guardarEdicionFactura} disabled={facturaEditGuardando}>
+            {facturaEditGuardando ? 'Guardando…' : 'Guardar'}
+          </Button>
         </DialogActions>
       </Dialog>
     </div>

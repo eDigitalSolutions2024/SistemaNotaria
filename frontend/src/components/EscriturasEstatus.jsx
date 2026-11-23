@@ -471,6 +471,9 @@ export default function EscrituraEstatus({ escrituraId, onClose }) {
         fechaEnvioNTD: row.fechaEnvioNTD || null,
       });
       await load();
+    } catch (error) {
+      console.error('Error al guardar estatus de escritura:', error);
+      alert('❌ No se pudo guardar. Intenta de nuevo.');
     } finally {
       setSaving(false);
     }

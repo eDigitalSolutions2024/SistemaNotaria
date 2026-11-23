@@ -10,6 +10,12 @@ const INACTIVITY_MS = 60 * 60 * 1000; // 1 hora
 const LS_TOKEN_KEY = 'token';
 const LS_USER_KEY = 'user';
 const LS_LAST_ACTIVITY = 'lastActivity';
+// "Vista simulada": le permite a una cuenta ADMIN ver el sistema como lo
+// vería otro rol (solo cambia qué se muestra en el frontend — el token real
+// que se manda al backend en cada request sigue siendo el de ADMIN, así que
+// esto no es una sandbox de permisos, es nada más una vista de desarrollo).
+const LS_VISTA_SIMULADA = 'vistaSimulada';
+const ROLES_SIMULABLES = ['ADMIN', 'RECEPCION', 'ABOGADO', 'ASISTENTE', 'PROTOCOLITO'];
 
 // ====== Helpers ======
 function b64urlDecode(str) {
@@ -32,9 +38,16 @@ function getJwtExpMs(token) {
 export function AuthProvider({ children }) {
   const [token, setToken] = useState(null);
   const [user,  setUser]  = useState(null);
+  const [vistaSimulada, setVistaSimuladaState] = useState(null);
 
   const isAuthenticated = !!token;
-  const role = user?.role || 'user';
+  const realRole = user?.role || 'user';
+  const esAdminReal = String(realRole).toUpperCase() === 'ADMIN';
+  // Mientras la cuenta real sea ADMIN y haya una vista simulada activa, todo
+  // lo que lee `role` o `user.role` (en este archivo y en cualquier
+  // componente) ve el rol simulado en vez del real.
+  const role = (esAdminReal && vistaSimulada) ? vistaSimulada : realRole;
+  const effectiveUser = user ? { ...user, role } : user;
 
   // refs para timers / limpieza
   const idleTimerRef = useRef(null);
@@ -145,7 +158,17 @@ export function AuthProvider({ children }) {
       attachAxios401Interceptor();
     }
     if (u) {
-      try { setUser(JSON.parse(u)); } catch {}
+      try {
+        const parsedUser = JSON.parse(u);
+        setUser(parsedUser);
+        const esAdmin = String(parsedUser?.role || '').toUpperCase() === 'ADMIN';
+        const vs = localStorage.getItem(LS_VISTA_SIMULADA);
+        if (esAdmin && vs && ROLES_SIMULABLES.includes(vs)) {
+          setVistaSimuladaState(vs);
+        } else {
+          localStorage.removeItem(LS_VISTA_SIMULADA);
+        }
+      } catch {}
     }
   }, []);
 
@@ -183,13 +206,30 @@ export function AuthProvider({ children }) {
     markActivity(); // resetea inactividad al iniciar sesión
   };
 
+  // Cambia la vista simulada (o la apaga si se pasa null / el rol real).
+  // Solo tiene efecto si la cuenta real detrás del token es ADMIN — una
+  // cuenta RECEPCION/ABOGADO no puede activarla ni aunque la llame a mano.
+  const cambiarVistaSimulada = (nuevaVista) => {
+    if (!esAdminReal) return;
+    if (!nuevaVista || nuevaVista === realRole) {
+      setVistaSimuladaState(null);
+      localStorage.removeItem(LS_VISTA_SIMULADA);
+      return;
+    }
+    if (!ROLES_SIMULABLES.includes(nuevaVista)) return;
+    setVistaSimuladaState(nuevaVista);
+    localStorage.setItem(LS_VISTA_SIMULADA, nuevaVista);
+  };
+
   const logout = () => {
     // opcional: avisar backend
     // axios.post('/api/auth/logout').catch(() => {});
     setToken(null);
     setUser(null);
+    setVistaSimuladaState(null);
     localStorage.removeItem(LS_TOKEN_KEY);
     localStorage.removeItem(LS_USER_KEY);
+    localStorage.removeItem(LS_VISTA_SIMULADA);
     delete axios.defaults.headers.common['Authorization'];
 
     removeActivityListeners();
@@ -208,7 +248,24 @@ export function AuthProvider({ children }) {
   });
 
   return (
-    <AuthContext.Provider value={{ isAuthenticated, token, user, role, login, logout }}>
+    <AuthContext.Provider
+      value={{
+        isAuthenticated,
+        token,
+        user: effectiveUser,
+        role,
+        // Identidad real detrás del token (ignora la vista simulada) — la usa
+        // el botón de "vista de administrador" para saber si debe mostrarse
+        // y qué vista está realmente activa.
+        realUser: user,
+        realRole,
+        esAdminReal,
+        vistaSimulada,
+        cambiarVistaSimulada,
+        login,
+        logout,
+      }}
+    >
       {children}
     </AuthContext.Provider>
   );

@@ -3,6 +3,8 @@ const router = express.Router();
 const Sala = require('../models/Sala');
 const Abogado = require('../models/Abogado');
 const mongoose = require('mongoose');
+const auth = require('../middleware/auth');
+const { registrar } = require('../utils/bitacora');
 // GET /salas-disponibles
 
 router.get('/', async (req, res) => {
@@ -17,7 +19,7 @@ router.get('/', async (req, res) => {
 
 
 
-router.put('/asignar', async (req, res) => {
+router.put('/asignar', auth, async (req, res) => {
   try {
      console.log("📥 Body recibido:", req.body);
     const { abogadoId, salaId } = req.body;
@@ -27,7 +29,7 @@ router.put('/asignar', async (req, res) => {
 
     console.log("🧠 Sala encontrada:", sala);
     console.log("🧠 Abogado encontrado:", abogado);
-    
+
     if (!sala || !abogado) {
       return res.status(404).json({ mensaje: 'Sala o abogado no encontrados' });
     }
@@ -47,6 +49,14 @@ router.put('/asignar', async (req, res) => {
 
     const io = req.app.get('io');
   io.emit('Sala Actualizada');
+
+    await registrar(req, {
+      accion: 'ASIGNAR_SALA',
+      entidad: 'Sala',
+      entidadId: sala._id,
+      detalle: `Sala "${sala.nombre}" asignada a "${abogado.nombre}"`,
+    });
+
     res.json({ mensaje: `✅ Sala '${sala.nombre}' asignada al abogado '${abogado.nombre}'` });
   } catch (error) {
     console.error('❌ Error al asignar sala manualmente:', error);
@@ -55,7 +65,7 @@ router.put('/asignar', async (req, res) => {
 });
 
 
-router.put('/liberar/:salaId', async (req, res) => {
+router.put('/liberar/:salaId', auth, async (req, res) => {
   try {
     const sala = await Sala.findById(req.params.salaId);
 
@@ -74,6 +84,13 @@ router.put('/liberar/:salaId', async (req, res) => {
         await abogado.save();
       }
     }
+
+    await registrar(req, {
+      accion: 'LIBERAR_SALA',
+      entidad: 'Sala',
+      entidadId: sala._id,
+      detalle: `Sala "${sala.nombre}" liberada`,
+    });
 
     res.json({ mensaje: '✅ Sala liberada correctamente' });
   } catch (err) {

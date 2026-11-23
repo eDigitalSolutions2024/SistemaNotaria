@@ -6,6 +6,8 @@ const ClienteGeneral = require('../models/ClienteGeneral');
 
 const puppeteer = require('puppeteer');
 const generarHTMLDatosGenerales = require('../pdf-templates/generarHTMLDatosGenerales');
+const auth = require('../middleware/auth');
+const { registrar } = require('../utils/bitacora');
 
 // 🔹 Crear uno o varios registros de datos generales
 // Espera en el body:
@@ -52,7 +54,7 @@ function sanitizeEstadoCivilFields(p = {}) {
 }
 
 
-router.post('/', async (req, res) => {
+router.post('/', auth, async (req, res) => {
   try {
     console.log('BODY /api/clientes-generales =>', req.body);
     const { clienteId, personas } = req.body;
@@ -94,6 +96,13 @@ router.post('/', async (req, res) => {
 
 
     const creados = await ClienteGeneral.insertMany(docs);
+
+    await registrar(req, {
+      accion: 'CREAR_DATOS_GENERALES',
+      entidad: 'ClienteGeneral',
+      entidadId: clienteId,
+      detalle: `Datos generales creados para cliente #${clienteId} (${creados.length} persona${creados.length === 1 ? '' : 's'})`,
+    });
 
     res.status(201).json(creados);
   } catch (error) {
@@ -365,7 +374,7 @@ router.get('/:id', async (req, res) => {
 
 // 🔹 Actualizar un registro específico de datos generales
 // PUT /api/clientes-generales/645f...
-router.put('/:id', async (req, res) => {
+router.put('/:id', auth, async (req, res) => {
   try {
     const body = { ...req.body };
 
@@ -409,6 +418,13 @@ router.put('/:id', async (req, res) => {
       return res.status(404).json({ message: 'Registro no encontrado.' });
     }
 
+    await registrar(req, {
+      accion: 'EDITAR_DATOS_GENERALES',
+      entidad: 'ClienteGeneral',
+      entidadId: actualizado._id,
+      detalle: `Datos generales editados: "${actualizado.nombre_completo || '—'}" (cliente #${actualizado.clienteId})`,
+    });
+
     res.json(actualizado);
   } catch (error) {
     console.error('Error al actualizar datos generales:', error);
@@ -420,13 +436,20 @@ router.put('/:id', async (req, res) => {
 
 // 🔹 (Opcional) Eliminar un registro de datos generales
 // DELETE /api/clientes-generales/645f...
-router.delete('/:id', async (req, res) => {
+router.delete('/:id', auth, async (req, res) => {
   try {
     const eliminado = await ClienteGeneral.findByIdAndDelete(req.params.id);
 
     if (!eliminado) {
       return res.status(404).json({ message: 'Registro no encontrado.' });
     }
+
+    await registrar(req, {
+      accion: 'ELIMINAR_DATOS_GENERALES',
+      entidad: 'ClienteGeneral',
+      entidadId: eliminado._id,
+      detalle: `Datos generales eliminados: "${eliminado.nombre_completo || '—'}" (cliente #${eliminado.clienteId})`,
+    });
 
     res.json({ message: 'Registro eliminado correctamente.' });
   } catch (error) {

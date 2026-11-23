@@ -26,7 +26,10 @@ export default function FormCliente({ onCreado }) {
   useEffect(() => {
     const obtenerAbogados = async () => {
       try {
-        const res = await fetch(`${API_URL}/abogados`);
+        const token = localStorage.getItem('token');
+        const res = await fetch(`${API_URL}/abogados`, {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        });
         const data = await res.json();
         setAbogados(Array.isArray(data) ? data : []);
       } catch (error) {

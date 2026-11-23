@@ -10,6 +10,7 @@ const {
   getAbogadoNameTokenSets,
 } = require('../utils/clientNameValidation');
 const auth = require('../middleware/auth');
+const { registrar } = require('../utils/bitacora');
 
 function getRole(req) {
   return String(req.user?.role || req.user?.rol || '').toUpperCase();
@@ -111,6 +112,13 @@ if (String(tipoServicio).toLowerCase() === 'presupuesto') {
   const io = req.app.get('io');
   io.emit('clienteActualizado');
 
+  await registrar(req, {
+    accion: 'CREAR_CLIENTE',
+    entidad: 'Cliente',
+    entidadId: nuevoCliente._id,
+    detalle: `Cliente "${nuevoCliente.nombre}" registrado (PRESUPUESTO)`,
+  });
+
   return res.status(200).json({
     mensaje: 'Cliente registrado como PRESUPUESTO (no ocupa abogado)',
     cliente: nuevoCliente,
@@ -154,6 +162,14 @@ if (String(tipoServicio).toLowerCase() === 'presupuesto') {
 
         await nuevoCliente.save();
         const abogadoNombre = await Abogado.findOne({ _id: abogadoPreferido });
+
+        await registrar(req, {
+          accion: 'CREAR_CLIENTE',
+          entidad: 'Cliente',
+          entidadId: nuevoCliente._id,
+          detalle: `Cliente "${nuevoCliente.nombre}" en espera (abogado preferido ocupado)`,
+        });
+
         return res.status(200).json({
           mensaje: `Cliente registrado en espera con el abogado ${abogadoNombre?.nombre || 'desconocido'}, que actualmente está ocupado.`,
           cliente: nuevoCliente,
@@ -191,6 +207,14 @@ if (String(tipoServicio).toLowerCase() === 'presupuesto') {
 
     const io = req.app.get('io');
     io.emit('clienteActualizado');
+
+    await registrar(req, {
+      accion: 'CREAR_CLIENTE',
+      entidad: 'Cliente',
+      entidadId: nuevoCliente._id,
+      detalle: `Cliente "${nuevoCliente.nombre}" registrado — ${abogadoAsignado ? `asignado a "${abogadoAsignado.nombre}"` : 'en espera'}`,
+    });
+
     res.status(200).json({
       mensaje: abogadoAsignado
         ? 'Cliente registrado y abogado asignado'
@@ -249,28 +273,6 @@ router.get('/', async (req, res) => {
   }
 });
 
-
-
-
-router.put('/api/clientes/accion/:id', async (req, res) => {
-  const clienteId = parseInt(req.params.id);
-  const { accion, motivo } = req.body;
-
-  try {
-    const cliente = await db.collection('clientes').findOne({ id: clienteId });
-    if (!cliente) return res.status(404).json({ mensaje: 'Cliente no encontrado' });
-
-    await db.collection('clientes').updateOne(
-      { id: clienteId },
-      { $set: { accion, motivo } }
-    );
-
-    res.json({ mensaje: 'Acción y motivo actualizados correctamente' });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ mensaje: 'Error interno del servidor' });
-  }
-});
 
 
 

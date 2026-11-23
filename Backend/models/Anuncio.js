@@ -37,6 +37,17 @@ const AutomaticoSchema = new Schema(
   { _id: false }
 );
 
+// Capturas de pantalla adjuntas (archivo en disco: Backend/AnunciosAdjuntos).
+const ImagenSchema = new Schema(
+  {
+    archivo: { type: String, required: true }, // nombre en disco (aleatorio)
+    mime: { type: String, required: true },
+    nombre: { type: String, default: '' }, // nombre original, solo informativo
+    size: { type: Number, default: 0 },
+  },
+  { _id: false }
+);
+
 const AnuncioSchema = new Schema(
   {
     tipo: { type: String, enum: ['MANUAL', 'AUTOMATICO'], default: 'MANUAL', required: true, index: true },
@@ -46,6 +57,9 @@ const AnuncioSchema = new Schema(
     // NORMAL => toast no bloqueante; URGENTE => modal bloqueante que exige
     // clic en "Entendido" antes de dejar seguir usando el sistema.
     urgencia: { type: String, enum: ['NORMAL', 'URGENTE'], default: 'NORMAL', required: true },
+
+    // Capturas de pantalla para que los destinatarios vean a qué se refiere.
+    imagenes: { type: [ImagenSchema], default: [] },
 
     // Reproduce un sonido de alerta al llegar (además del efecto visual).
     sonido: { type: Boolean, default: false },

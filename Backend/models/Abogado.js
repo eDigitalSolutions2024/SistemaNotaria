@@ -28,6 +28,15 @@ const abogadoSchema = new mongoose.Schema({
     ref: 'Abogado',
     default: null,
     index: true
+  },
+
+  // 🔒 Candados/permisos especiales gestionables desde el Panel de
+  // administrador — reemplaza excepciones que antes vivían hardcodeadas
+  // en el código (por nombre o por _id).
+  permisosEspeciales: {
+    recibosMontoBajo: { type: Boolean, default: false },     // puede generar recibos < $100
+    escriturasVistaTotal: { type: Boolean, default: false }, // ve/exporta todas las escrituras, sin poder entregar
+    cancelarFolios: { type: Boolean, default: false },       // puede cancelar folios de una escritura (además de ADMIN)
   }
 }, {
   timestamps: true,

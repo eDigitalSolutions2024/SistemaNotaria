@@ -1,0 +1,39 @@
+Capturas de pantalla para el Manual de Usuario del Sistema (todo el sistema,
+no el módulo PLD — ese manual tiene su propia carpeta: pdf-templates/asstes/manual/).
+
+Cómo funciona: mientras un archivo de esta lista no exista aquí, el manual
+muestra un recuadro de "Captura pendiente" en su lugar — el texto de esa
+sección sigue completo igual. En cuanto sueltas el archivo con el nombre
+exacto de abajo en esta misma carpeta, aparece automáticamente la próxima
+vez que se genere el manual (PDF o vista previa). No hace falta tocar
+ningún código.
+
+Formato: .jpg o .png, nombre EXACTO (minúsculas, con los números y guiones
+tal cual). Recomendado: capturas a ancho completo de navegador (no recortes
+muy pequeños), para que se vean nítidas en el PDF.
+
+01-registrar-cliente.png      Pantalla de Registrar Cliente completa (recepción) [LISTA]
+02-registrar-generales.png    Formulario de Registrar Generales [LISTA]
+03-consultar-generales.png    Consultar Generales, con resultados de búsqueda [LISTA, datos de cliente tapados por privacidad]
+05-protocolito-tabla.png      Tabla de Protocolito [LISTA, nombres de clientes tapados por privacidad]
+06-protocolito-nuevo.png      Modal de nuevo trámite de Protocolito con selector de plantilla [LISTA, nombres de clientes tapados por privacidad]
+07-escrituras-tabla.png       Tabla de Escrituras [LISTA, nombres de otorgantes tapados por privacidad]
+09-ia-resultado.png           Resultado de la revisión de IA (porcentaje, resumen, sugerencias) [LISTA, nombres tapados por privacidad]
+10-ia-comparacion.jpg         Comparación de datos campo por campo (IA vs. Generales)
+11-estatus-escritura.jpg      Checklist de estatus de entrega/firma de una Escritura
+12-pld-dashboard.jpg          Dashboard de un expediente PLD
+13-pld-pasos.jpg              Stepper de los 7 pasos del expediente PLD
+14-custodia-entrega.png       Entrega/confirmación de custodia de un expediente [LISTA, nombres tapados por privacidad]
+15-custodia-banner.jpg        Banner de pendientes de custodia
+16-presupuesto-form.png       Formulario de presupuesto con desglose de conceptos [LISTA]
+17-recibo-form.png            Formulario de generación de recibo [LISTA]
+18-recibo-bloqueo.jpg         Mensaje de bloqueo por monto menor al mínimo
+19-gestiones-tabla.png        Tabla de documentos de Cervecería/Controladora [LISTA]
+20-gestiones-entrega.jpg      Modal "Nueva entrega" con el campo SOPORTE
+21-gestiones-factura.jpg      Modal "Nueva factura" con selección múltiple
+22-gestiones-facturas-lista.jpg  Lista de facturas (Pedido, Entrada, Acuse SAT)
+23-calendario.jpg             Vista mensual del Calendario
+24-anuncios.jpg                Un anuncio tal como lo ve un usuario normal
+(08 se saltó a propósito al reordenar: no hay 08-*. 25 y 26 ya no existen — el
+capítulo "Panel de administrador" se quitó del manual por ser exclusivo de la
+cuenta de administrador.)

@@ -10,6 +10,7 @@ const PDFDocument = require('pdfkit');
 const xlsx = require('xlsx');
 
 const Escritura = require('../models/Escritura');
+const Abogado = require('../models/Abogado');
 const Presupuesto = require('../models/Presupuesto');
 const Recibo = require('../models/Recibo');
 const EscrituraConfig = require('../models/EscrituraConfig');
@@ -18,6 +19,7 @@ const VolumenSkip = require('../models/VolumenSkip');
 const ReciboLink = require('../models/ReciboLink');
 
 const auth = require('../middleware/auth');
+const { registrar } = require('../utils/bitacora');
 
 // (Opcional) si tienes modelo Cliente; si no, no pasa nada
 let Cliente = null;
@@ -26,45 +28,9 @@ try { Cliente = require('../models/Cliente'); } catch { /* opcional */ }
 const ClienteGeneral = require('../models/ClienteGeneral');
 
 const pldService = require('../pld/pldService');
-const { inspeccionarPoder } = require('../services/poderInspeccionService');
+const { inspeccionarPoder, esTramitePoder, buildPoderContexto } = require('../services/poderInspeccionService');
 
 const PODERES_DIR = path.join(__dirname, '..', 'PoderesAdjuntos');
-function esTramitePoder(tipo) {
-  return /poder/i.test(String(tipo || ''));
-}
-function getSubtipoPoder(tipo) {
-  const t = String(tipo || '').toLowerCase();
-  if (t.includes('irrevocable')) return 'Irrevocable';
-  if (t.includes('revocable')) return 'Revocable';
-  return '';
-}
-
-// Arma el contexto (datos ya capturados del cliente + subtipo) que se le
-// pasa a la IA para comparar contra el documento del Poder. Si no hay
-// clienteId o no hay ClienteGeneral capturados, regresa un contexto "vacío"
-// — la inspección sigue funcionando igual, solo sin esa comparativa.
-async function buildPoderContexto(clienteId, tipoTramite) {
-  const subtipo = getSubtipoPoder(tipoTramite);
-  let personas = [];
-  if (clienteId) {
-    const num = Number(clienteId);
-    if (Number.isFinite(num)) {
-      try {
-        const docs = await ClienteGeneral.find({ clienteId: num }).lean();
-        personas = docs.map(d => ({
-          nombre_completo: d.nombre_completo || '',
-          rol: d.rol || '',
-          curp: d.curp || '',
-          rfc: d.rfc || '',
-          domicilio: d.domicilio || '',
-        }));
-      } catch (e) {
-        console.error('buildPoderContexto ClienteGeneral ERROR:', e.message);
-      }
-    }
-  }
-  return { subtipo, personas };
-}
 
 
 
@@ -223,6 +189,8 @@ router.patch('/config', auth, async (req, res) => {
  *
  * Criterio "pendiente":
  *   - estatus_recibo NO está en ['CON_RECIBO', 'JUSTIFICADO']  (o no existe)
+ *   - y los folios NO están cancelados: una escritura con folios cancelados
+ *     ya no necesita recibo, así que no cuenta para el candado.
  */
 async function countEscriturasSinReciboPorAbogado(nombreAbogado) {
   if (!nombreAbogado) return 0;
@@ -231,6 +199,7 @@ async function countEscriturasSinReciboPorAbogado(nombreAbogado) {
 
   const filter = {
     abogado: { $regex: `^${escapeRegex(nombreAbogado)}$`, $options: 'i' },
+    'foliosCancelados.cancelado': { $ne: true },
 
     $or: [
       { estatus_recibo: { $exists: false } },
@@ -352,8 +321,17 @@ const TRAMITES_CON_MONTOS_PATTERNS = [
   /\badjudicacion\b/,
 ];
 
+// Tipo de sociedad que el frontend agrega al final de "SOCIEDAD": su "CV"
+// chocaba con el patrón /\bcv\b/ (compraventa) y pedía presupuesto.
+const RX_TIPO_SOCIEDAD = /\s+(SA DE CV|SRL DE CV|SA|AC)$/i;
+
 function isTramiteConMontos(tipo) {
-  const t = normText(tipo)
+  const tipoStr = String(tipo || '');
+  const sinSociedad = /sociedad/i.test(tipoStr)
+    ? tipoStr.replace(RX_TIPO_SOCIEDAD, '')
+    : tipoStr;
+
+  const t = normText(sinSociedad)
     .replace(/[./-]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
@@ -1480,7 +1458,7 @@ router.post('/brincar-volumen', auth, async (req, res) => {
 });
 
 // POST /escrituras
-router.post('/', bloquearSiDeshabilitado, upload.single('documento'), async (req, res) => {
+router.post('/', auth, bloquearSiDeshabilitado, upload.single('documento'), async (req, res) => {
   let base = null;
   try {
     // 🔐 Candado: máximo 5 escrituras sin recibo por abogado
@@ -1824,6 +1802,13 @@ await pldService.processEscritura(created._id, getUserNameFromReq(req));
 // contador de folios al instante (mismo patrón que Protocolito).
 req.app.get('io')?.emit('escrituras:folio', await computeFolioActual());
 
+await registrar(req, {
+  accion: 'CREAR_ESCRITURA',
+  entidad: 'Escritura',
+  entidadId: created.numeroControl,
+  detalle: `Escritura #${created.numeroControl} — ${created.tipoTramite || '—'} — ${created.cliente || '—'}`,
+});
+
 res.status(201).json(created);
 
   } catch (e) {
@@ -1981,7 +1966,7 @@ router.get('/:id', async (req, res) => {
 });
 
 // PUT /escrituras/:id
-router.put('/:id', bloquearSiDeshabilitado, async (req, res) => {
+router.put('/:id', auth, bloquearSiDeshabilitado, async (req, res) => {
   try {
     const MAX_FOLIOS_POR_VOLUMEN = 300;
 
@@ -2376,6 +2361,14 @@ console.log('PUT merged.fecha:', merged.fecha);
 
     const updated = await Escritura.findById(req.params.id).lean();
     await pldService.processEscritura(updated._id, getUserNameFromReq(req));
+
+    await registrar(req, {
+      accion: 'EDITAR_ESCRITURA',
+      entidad: 'Escritura',
+      entidadId: updated.numeroControl,
+      detalle: `Escritura #${updated.numeroControl} editada — ${updated.tipoTramite || '—'} — ${updated.cliente || '—'}`,
+    });
+
     return res.json(updated);
   } catch (e) {
     return res.status(500).json({ mensaje: 'Error actualizando escritura', detalle: e.message });
@@ -2498,12 +2491,20 @@ router.patch('/:id/presupuesto', auth, async (req, res) => {
 });
 
 // DELETE /escrituras/:id
-router.delete('/:id', bloquearSiDeshabilitado, async (req, res) => {
+router.delete('/:id', auth, bloquearSiDeshabilitado, async (req, res) => {
   try {
     const it = await Escritura.findById(req.params.id);
     if (!it) return res.status(404).json({ mensaje: 'No encontrado' });
     await Escritura.deleteOne({ _id: req.params.id });
     await pldService.cancelByEscritura(it._id, getUserNameFromReq(req));
+
+    await registrar(req, {
+      accion: 'ELIMINAR_ESCRITURA',
+      entidad: 'Escritura',
+      entidadId: it.numeroControl,
+      detalle: `Escritura #${it.numeroControl} eliminada — ${it.tipoTramite || '—'} — ${it.cliente || '—'}`,
+    });
+
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ mensaje: 'Error eliminando escritura', detalle: e.message });
@@ -2593,6 +2594,65 @@ router.post('/:id/justificante', bloquearSiDeshabilitado, async (req, res) => {
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ mensaje: 'Error guardando justificante', detalle: e.message });
+  }
+});
+
+// POST /escrituras/:id/cancelar-folios
+// Marca los folios de la escritura como cancelados (inutilizables). Solo es
+// una marca visual + auditoría: no libera folios ni toca el volumen.
+// Solo ADMIN, o quien tenga el permiso especial `cancelarFolios` (Panel de
+// administrador). Requiere justificación obligatoria.
+router.post('/:id/cancelar-folios', auth, bloquearSiDeshabilitado, async (req, res) => {
+  try {
+    const justificacion = String(req.body?.justificacion || '').trim();
+    if (justificacion.length < 5) {
+      return res.status(400).json({ mensaje: 'La justificación es obligatoria (mínimo 5 caracteres)' });
+    }
+
+    const it = await Escritura.findById(req.params.id);
+    if (!it) return res.status(404).json({ mensaje: 'No encontrado' });
+
+    const role = String(req.user?.role || req.user?.rol || '').toUpperCase();
+    const userName = getUserNameFromReq(req);
+    let autorizado = role === 'ADMIN';
+    if (!autorizado) {
+      // Se consulta la BD (no el token) para que quitar/dar el permiso en el
+      // panel surta efecto de inmediato.
+      const u = await Abogado.findById(req.user?.id).select('permisosEspeciales').lean();
+      autorizado = u?.permisosEspeciales?.cancelarFolios === true;
+    }
+    if (!autorizado) {
+      return res.status(403).json({ mensaje: 'No tienes permiso para cancelar folios' });
+    }
+
+    if (it.foliosCancelados?.cancelado) {
+      return res.status(409).json({ mensaje: 'Los folios de esta escritura ya están cancelados' });
+    }
+
+    await Escritura.updateOne(
+      { _id: it._id },
+      {
+        $set: {
+          foliosCancelados: {
+            cancelado: true,
+            justificacion,
+            por: userName || 'sistema',
+            fecha: new Date(),
+          },
+        },
+      }
+    );
+
+    await registrar(req, {
+      accion: 'CANCELAR_FOLIOS_ESCRITURA',
+      entidad: 'Escritura',
+      entidadId: it.numeroControl,
+      detalle: `Folios cancelados en Escritura #${it.numeroControl} (vol ${it.volumen || '—'}, folios ${it.folioDesde ?? '—'} a ${it.folioHasta ?? '—'}) — ${justificacion}`,
+    });
+
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ mensaje: 'Error cancelando folios', detalle: e.message });
   }
 });
 
